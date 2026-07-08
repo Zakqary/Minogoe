@@ -3,6 +3,7 @@ const BOARD_SIZE = 12;
 const CELL_PX = 40; // 12 * 40 = 480px board
 const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
 const HANDICAP_P2 = 1; // player 2 moves second, so they start with a 1-point head start
+const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
 
 // ---------- Base shapes (row, col), keyed and prefixed by piece size ----------
 const BASE_SHAPES = {
@@ -92,6 +93,7 @@ const state = {
   history: [],      // stack of snapshots for undo
   online: false,    // true once paired with a remote peer
   myPlayer: null,   // 1 or 2 when online; null in local hotseat mode
+  connecting: false, // true from the moment Connect is clicked until paired (or given up)
 };
 
 function snapshotState() {
@@ -126,6 +128,8 @@ function drawHand() {
 
 function newGame(remoteHand) {
   const isRemote = remoteHand !== undefined;
+
+  if (state.connecting && !isRemote) return;
 
   if (state.online && !Net.isHost && !isRemote) {
     log('Only the host can start a new game - ask them to click New Game.');
@@ -263,6 +267,7 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
 }
 
 function undoTurn(fromRemote = false) {
+  if (state.connecting && !fromRemote) return;
   if (state.history.length === 0) return;
   const snap = state.history.pop();
   state.board = snap.board;
@@ -303,7 +308,7 @@ function endGame(p1Stuck, p2Stuck) {
 
 // ---------- Selection / hover ----------
 function selectShape(shapeName) {
-  if (state.gameOver) return;
+  if (state.gameOver || state.connecting) return;
   if (state.online && state.myPlayer !== state.turn) return;
   state.selected = { shapeName, orientationIndex: 0 };
   recomputeHover();
@@ -399,7 +404,9 @@ function render() {
 
   canvas.classList.toggle('placing', !!state.selected && !state.gameOver);
 
-  document.getElementById('undoBtn').disabled = state.history.length === 0;
+  document.getElementById('rotateBtn').disabled = state.connecting;
+  document.getElementById('newGameBtn').disabled = state.connecting;
+  document.getElementById('undoBtn').disabled = state.connecting || state.history.length === 0;
 }
 
 function updateSelectionInfo() {
@@ -434,7 +441,7 @@ function renderHand(elId, hand, player) {
   el.innerHTML = '';
 
   const container = el.closest('.hand');
-  const isActive = player === state.turn && !state.gameOver && (!state.online || player === state.myPlayer);
+  const isActive = player === state.turn && !state.gameOver && !state.connecting && (!state.online || player === state.myPlayer);
   container.classList.toggle('inactive', !isActive);
 
   const names = Object.keys(counts).sort();
@@ -493,7 +500,7 @@ canvas.addEventListener('mouseleave', () => {
 });
 
 canvas.addEventListener('click', () => {
-  if (state.gameOver || !state.selected || !state.hover || !state.hover.valid) return;
+  if (state.gameOver || state.connecting || !state.selected || !state.hover || !state.hover.valid) return;
   if (state.online && state.myPlayer !== state.turn) return;
   commitPlacement(state.selected.shapeName, state.selected.orientationIndex, state.hover.r0, state.hover.c0);
 });
@@ -519,9 +526,9 @@ function setLobbyStatus(text) {
 
 function handleNetReady() {
   state.online = true;
+  state.connecting = false;
   state.myPlayer = Net.isHost ? 1 : 2;
   document.getElementById('connectBtn').disabled = true;
-  document.getElementById('serverUrlInput').disabled = true;
   document.getElementById('roomInput').disabled = true;
   setLobbyStatus(`Connected! You are Player ${state.myPlayer}.`);
   log(`Connected to opponent. You are Player ${state.myPlayer}.`);
@@ -550,15 +557,16 @@ function handleNetPeerLeft() {
 }
 
 document.getElementById('connectBtn').addEventListener('click', () => {
-  const serverUrl = document.getElementById('serverUrlInput').value.trim();
   const room = document.getElementById('roomInput').value.trim();
-  if (!serverUrl || !room) {
-    setLobbyStatus('Enter both a signaling server URL and a room code.');
+  if (!room) {
+    setLobbyStatus('Enter a room code.');
     return;
   }
-  setLobbyStatus('Connecting...');
+  state.connecting = true;
+  render();
+  setLobbyStatus('Connecting... (if this seems stuck for a while, it is safe to click Connect again to retry)');
   Net.connect({
-    serverUrl,
+    serverUrl: SIGNALING_SERVER_URL,
     room,
     onStatus: setLobbyStatus,
     onReady: handleNetReady,

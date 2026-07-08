@@ -3,7 +3,18 @@
 // RTCPeerConnection's data channel opens, all game moves flow directly
 // between the two browsers - the signaling server never sees them.
 const Net = (() => {
-  const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+  // STUN alone only works when at least one side has an easily-traversable NAT.
+  // Behind stricter firewalls (corporate networks, some mobile carriers) a TURN
+  // relay is required as a fallback. These are the Open Relay Project's public
+  // test TURN credentials (https://www.metered.ca/tools/openrelay/) - fine for
+  // casual play; swap in your own TURN credentials if you need higher reliability.
+  const ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+  ];
+  const CONNECT_TIMEOUT_MS = 15000;
 
   let ws = null;
   let pc = null;
@@ -11,6 +22,7 @@ const Net = (() => {
   let isHost = false;
   let connected = false;
   let callbacks = {};
+  let connectTimeoutId = null;
 
   function setupPeerConnection() {
     pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
@@ -39,11 +51,21 @@ const Net = (() => {
         wireDataChannel();
       };
     }
+
+    clearTimeout(connectTimeoutId);
+    connectTimeoutId = setTimeout(() => {
+      if (!connected) {
+        callbacks.onStatus && callbacks.onStatus(
+          'Still trying to connect... this can take a while on restrictive networks/firewalls.'
+        );
+      }
+    }, CONNECT_TIMEOUT_MS);
   }
 
   function wireDataChannel() {
     dc.onopen = () => {
       connected = true;
+      clearTimeout(connectTimeoutId);
       callbacks.onStatus && callbacks.onStatus('Connected!');
       callbacks.onReady && callbacks.onReady();
     };

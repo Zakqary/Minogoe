@@ -23,8 +23,24 @@ const Net = (() => {
   let connected = false;
   let callbacks = {};
   let connectTimeoutId = null;
+  let remoteDescSet = false;
+  let pendingCandidates = [];
+
+  async function flushPendingCandidates() {
+    const queued = pendingCandidates;
+    pendingCandidates = [];
+    for (const candidate of queued) {
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch (err) {
+        console.error('Pentomino Net: failed to add queued ICE candidate', err);
+      }
+    }
+  }
 
   function setupPeerConnection() {
+    remoteDescSet = false;
+    pendingCandidates = [];
     pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
     pc.onicecandidate = (e) => {
@@ -34,12 +50,21 @@ const Net = (() => {
     };
 
     pc.onconnectionstatechange = () => {
+      console.log('Pentomino Net: connection state:', pc.connectionState);
       if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
         if (connected) {
           connected = false;
           callbacks.onPeerLeft && callbacks.onPeerLeft();
         }
       }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log('Pentomino Net: ICE connection state:', pc.iceConnectionState);
+    };
+
+    pc.onicegatheringstatechange = () => {
+      console.log('Pentomino Net: ICE gathering state:', pc.iceGatheringState);
     };
 
     if (isHost) {
@@ -110,6 +135,8 @@ const Net = (() => {
     if (msg.type === 'offer') {
       if (!pc) setupPeerConnection();
       await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      remoteDescSet = true;
+      await flushPendingCandidates();
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
@@ -118,12 +145,22 @@ const Net = (() => {
 
     if (msg.type === 'answer') {
       await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      remoteDescSet = true;
+      await flushPendingCandidates();
       return;
     }
 
     if (msg.type === 'ice') {
-      if (pc && msg.candidate) {
-        try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch { /* ignore */ }
+      if (!pc || !msg.candidate) return;
+      const candidate = new RTCIceCandidate(msg.candidate);
+      if (remoteDescSet) {
+        try {
+          await pc.addIceCandidate(candidate);
+        } catch (err) {
+          console.error('Pentomino Net: failed to add ICE candidate', err);
+        }
+      } else {
+        pendingCandidates.push(candidate);
       }
       return;
     }

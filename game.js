@@ -94,6 +94,8 @@ const state = {
   online: false,    // true once paired with a remote peer
   myPlayer: null,   // 1 or 2 when online; null in local hotseat mode
   connecting: false, // true from the moment Connect is clicked until paired (or given up)
+  opponentUserId: null, // the connected peer's Supabase user id, if they're logged in
+  gameStartedAt: null,
 };
 
 function snapshotState() {
@@ -148,6 +150,7 @@ function newGame(remoteHand) {
   state.mouseRC = null;
   state.hover = null;
   state.history = [];
+  state.gameStartedAt = new Date().toISOString();
   clearLog();
   log(`New game started. Both players drew the same hand. Player 2 starts with a ${HANDICAP_P2}-point handicap.`);
   checkGameEnd();
@@ -304,6 +307,32 @@ function endGame(p1Stuck, p2Stuck) {
   else if (state.score2 > state.score1) result = 'Player 2 wins!';
   else result = "It's a tie!";
   log(`Game over — ${reason} Final score - P1: ${state.score1}, P2: ${state.score2}, Undecided: ${undecided}. ${result}`);
+
+  recordGameResult();
+}
+
+async function recordGameResult() {
+  if (!state.online || !Net.isHost) return; // only the host records, and only for online games
+  const me = Auth.getUser();
+  if (!me || !state.opponentUserId) return; // both sides must be logged in
+
+  const winner = state.score1 > state.score2 ? 1 : state.score2 > state.score1 ? 2 : null;
+  const { error } = await supabaseClient.from('games').insert({
+    mode: 'private',
+    player1_id: me.id,
+    player2_id: state.opponentUserId,
+    score1: state.score1,
+    score2: state.score2,
+    winner,
+    board_size: BOARD_SIZE,
+    started_at: state.gameStartedAt,
+  });
+
+  if (error) {
+    log('Could not save game result: ' + error.message);
+  } else {
+    log('Game result saved to your match history.');
+  }
 }
 
 // ---------- Selection / hover ----------
@@ -528,10 +557,13 @@ function handleNetReady() {
   state.online = true;
   state.connecting = false;
   state.myPlayer = Net.isHost ? 1 : 2;
+  state.opponentUserId = null;
   document.getElementById('connectBtn').disabled = true;
   document.getElementById('roomInput').disabled = true;
   setLobbyStatus(`Connected! You are Player ${state.myPlayer}.`);
   log(`Connected to opponent. You are Player ${state.myPlayer}.`);
+
+  Net.send({ type: 'identify', userId: Auth.getUser()?.id ?? null });
 
   if (Net.isHost) {
     newGame();
@@ -547,6 +579,8 @@ function handleNetData(msg) {
     commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true);
   } else if (msg.type === 'undo') {
     undoTurn(true);
+  } else if (msg.type === 'identify') {
+    state.opponentUserId = msg.userId;
   }
 }
 

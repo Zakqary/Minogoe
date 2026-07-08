@@ -116,6 +116,67 @@ body {
   min-height: 14px;
 }
 
+.auth-username {
+  color: #e6e8eb;
+  text-decoration: none;
+}
+
+.auth-username:hover {
+  text-decoration: underline;
+}
+
+.profile-page {
+  max-width: 640px;
+  margin: 20px auto;
+  padding: 0 20px;
+}
+
+.profile-page h2 {
+  margin-bottom: 4px;
+}
+
+.profile-stats {
+  display: flex;
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+
+.stat {
+  flex: 1;
+  background: #2a2e37;
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.stat-label {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+
+.games-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.games-table th,
+.games-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid #2a2e37;
+}
+
+.games-table .result-win { color: #4ade80; }
+.games-table .result-loss { color: #f87171; }
+.games-table .result-tie { color: #d1d5db; }
+
 .app {
   display: flex;
   gap: 20px;

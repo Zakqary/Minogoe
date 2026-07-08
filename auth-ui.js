@@ -14,7 +14,7 @@ function renderAuthWidget() {
 
   if (user) {
     el.innerHTML = `
-      <span class="auth-username">${escapeHtml(profile ? profile.username : user.email)}</span>
+      <a href="profile.html" class="auth-username">${escapeHtml(profile ? profile.username : user.email)}</a>
       ${profile ? `<span class="auth-elo">ELO ${profile.elo_rating}</span>` : ''}
       <button id="signOutBtn">Log out</button>
     `;

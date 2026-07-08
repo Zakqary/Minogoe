@@ -7,6 +7,17 @@ body {
   color: #e6e8eb;
 }
 
+.site-header {
+  display: flex;
+  justify-content: center;
+  padding: 16px 20px 0;
+}
+
+.site-header .logo {
+  height: 56px;
+  width: auto;
+}
+
 .app {
   display: flex;
   gap: 20px;

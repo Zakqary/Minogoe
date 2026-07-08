@@ -39,6 +39,7 @@ async function renderProfilePage() {
       <td>${escapeHtml(oppName)}</td>
       <td>${myScore} - ${oppScore}</td>
       <td class="result-${resultText.toLowerCase()}">${resultText}</td>
+      <td><a href="replay.html?game=${encodeURIComponent(g.id)}">Replay</a></td>
     </tr>`;
   }).join('');
 
@@ -53,8 +54,8 @@ async function renderProfilePage() {
     </div>
     <h3>Recent Games</h3>
     <table class="games-table">
-      <thead><tr><th>Date</th><th>Mode</th><th>Opponent</th><th>Score</th><th>Result</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="5">No games recorded yet.</td></tr>'}</tbody>
+      <thead><tr><th>Date</th><th>Mode</th><th>Opponent</th><th>Score</th><th>Result</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6">No games recorded yet.</td></tr>'}</tbody>
     </table>
   `;
 }

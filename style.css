@@ -177,6 +177,47 @@ body {
 .games-table .result-loss { color: #f87171; }
 .games-table .result-tie { color: #d1d5db; }
 
+.replay-page {
+  max-width: 640px;
+  margin: 20px auto;
+  padding: 0 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.replay-meta {
+  width: 100%;
+  background: #2a2e37;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.replay-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.replay-controls button {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #3b4252;
+  color: #e6e8eb;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.replay-controls button:hover { background: #4b5568; }
+
+.step-info {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
 .app {
   display: flex;
   gap: 20px;

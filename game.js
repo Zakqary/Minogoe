@@ -96,6 +96,8 @@ const state = {
   connecting: false, // true from the moment Connect is clicked until paired (or given up)
   opponentUserId: null, // the connected peer's Supabase user id, if they're logged in
   gameStartedAt: null,
+  initialHand: [],  // the pristine drawn hand, for replay reconstruction
+  moveLog: [],      // ordered { player, shapeName, orientationIndex, r0, c0 } placements
 };
 
 function snapshotState() {
@@ -107,6 +109,7 @@ function snapshotState() {
     score2: state.score2,
     turn: state.turn,
     gameOver: state.gameOver,
+    moveLog: [...state.moveLog],
   };
 }
 
@@ -142,6 +145,8 @@ function newGame(remoteHand) {
   const hand = remoteHand || drawHand();
   state.hand1 = [...hand];
   state.hand2 = [...hand];
+  state.initialHand = [...hand];
+  state.moveLog = [];
   state.score1 = 0;
   state.score2 = HANDICAP_P2;
   state.turn = 1;
@@ -255,6 +260,7 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   }
   const hand = player === 1 ? state.hand1 : state.hand2;
   hand.splice(hand.indexOf(shapeName), 1);
+  state.moveLog.push({ player, shapeName, orientationIndex, r0, c0 });
   log(`Player ${player} placed ${shapeName}-pentomino. ${hand.length} piece(s) left.`);
 
   state.selected = null;
@@ -280,6 +286,7 @@ function undoTurn(fromRemote = false) {
   state.score2 = snap.score2;
   state.turn = snap.turn;
   state.gameOver = snap.gameOver;
+  state.moveLog = snap.moveLog;
   state.selected = null;
   state.hover = null;
   log('Last move undone.');
@@ -324,6 +331,8 @@ async function recordGameResult() {
     score1: state.score1,
     score2: state.score2,
     winner,
+    initial_hand: state.initialHand,
+    move_log: state.moveLog,
     board_size: BOARD_SIZE,
     started_at: state.gameStartedAt,
   });

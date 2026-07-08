@@ -1,0 +1,12 @@
+{
+  "name": "pentomino-signaling-server",
+  "version": "1.0.0",
+  "description": "Minimal WebSocket signaling relay for pairing two Pentomino Territory players so their browsers can establish a direct WebRTC connection.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

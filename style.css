@@ -1,0 +1,249 @@
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+  background: #1b1e24;
+  color: #e6e8eb;
+}
+
+.app {
+  display: flex;
+  gap: 20px;
+  padding: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.board-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+#board {
+  background: #2a2e37;
+  border: 2px solid #444a57;
+  image-rendering: pixelated;
+}
+
+.turn-banner {
+  font-size: 18px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: #2a2e37;
+}
+
+.selection-info {
+  font-size: 13px;
+  opacity: 0.8;
+  background: #2a2e37;
+  padding: 5px 12px;
+  border-radius: 6px;
+}
+
+#board {
+  cursor: default;
+}
+
+#board.placing {
+  cursor: crosshair;
+}
+
+.side-panel {
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.online-panel {
+  background: #2a2e37;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.online-panel h3 { margin: 0 0 2px; font-size: 13px; opacity: 0.8; }
+
+.online-panel input {
+  background: #1b1e24;
+  border: 1px solid #3b4252;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #e6e8eb;
+  font-size: 13px;
+}
+
+.online-panel button {
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: #3b4252;
+  color: #e6e8eb;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.online-panel button:hover { background: #4b5568; }
+.online-panel button:disabled { opacity: 0.4; cursor: default; }
+
+.online-status {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.scoreboard {
+  display: flex;
+  gap: 10px;
+}
+
+.score {
+  flex: 1;
+  background: #2a2e37;
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+}
+
+.score.p1 { border-bottom: 3px solid #3b82f6; }
+.score.p2 { border-bottom: 3px solid #ef4444; }
+
+.score .label { font-size: 12px; opacity: 0.7; }
+.score .value { font-size: 28px; font-weight: 700; }
+
+.projected {
+  font-size: 12px;
+  opacity: 0.75;
+  background: #2a2e37;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+}
+
+.controls button {
+  flex: 1;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: #3b4252;
+  color: #e6e8eb;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.controls button:hover { background: #4b5568; }
+.controls button:disabled { opacity: 0.4; cursor: default; }
+
+.hands {
+  display: flex;
+  gap: 10px;
+}
+
+.hand {
+  flex: 1;
+  background: #2a2e37;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.hand h3 { margin: 0 0 6px; font-size: 13px; opacity: 0.8; }
+
+.hand.inactive {
+  opacity: 0.45;
+}
+
+.hand-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.piece-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: #3b4252;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.hand.inactive .piece-icon {
+  cursor: default;
+}
+
+.piece-icon:hover {
+  background: #4b5568;
+}
+
+.piece-icon.selected {
+  border-color: #fbbf24;
+  background: #4b5568;
+}
+
+.piece-icon .count {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.log-panel {
+  background: #2a2e37;
+  border-radius: 8px;
+  padding: 8px 10px;
+  flex: 1;
+  min-height: 200px;
+  max-height: 340px;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-panel h3 { margin: 0 0 6px; font-size: 13px; opacity: 0.8; }
+
+.log {
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  flex: 1;
+}
+
+.log div { padding: 1px 0; border-bottom: 1px solid #333844; }
+
+.rules-panel {
+  width: 240px;
+  background: linear-gradient(160deg, #2a2e37, #262b3a);
+  border: 1px solid #3b4252;
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+
+.rules-panel h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.rules-panel ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rules-panel li {
+  font-size: 12.5px;
+  line-height: 1.5;
+  opacity: 0.9;
+}
+

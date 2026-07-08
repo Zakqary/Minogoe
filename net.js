@@ -42,10 +42,22 @@ const Net = (() => {
     remoteDescSet = false;
     pendingCandidates = [];
     pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    window.__pentominoPC = pc;
+    window.__pentominoDebug = () => ({
+      connectionState: pc.connectionState,
+      iceConnectionState: pc.iceConnectionState,
+      iceGatheringState: pc.iceGatheringState,
+      signalingState: pc.signalingState,
+    });
+    console.log('Pentomino Net: peer connection created. isHost =', isHost,
+      '- run __pentominoDebug() anytime to see live state.');
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
+        console.log('Pentomino Net: local ICE candidate gathered - type:', e.candidate.type, 'protocol:', e.candidate.protocol, 'address:', e.candidate.address);
         ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate }));
+      } else {
+        console.log('Pentomino Net: ICE candidate gathering finished.');
       }
     };
 
@@ -65,6 +77,10 @@ const Net = (() => {
 
     pc.onicegatheringstatechange = () => {
       console.log('Pentomino Net: ICE gathering state:', pc.iceGatheringState);
+    };
+
+    pc.onicecandidateerror = (e) => {
+      console.error('Pentomino Net: ICE candidate error - url:', e.url, 'errorCode:', e.errorCode, 'errorText:', e.errorText);
     };
 
     if (isHost) {

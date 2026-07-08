@@ -28,8 +28,13 @@
 
       <div class="online-panel">
         <h3>🌐 Play Online</h3>
+        <div class="mode-buttons">
+          <button id="casualQueueBtn">Casual Queue</button>
+          <button id="rankedQueueBtn">Ranked Queue</button>
+        </div>
         <input id="roomInput" type="text" placeholder="Room code (e.g. ABCD)">
-        <button id="connectBtn">Connect</button>
+        <button id="connectBtn">Connect (Private Room)</button>
+        <button id="cancelConnectBtn" style="display:none;">Cancel</button>
         <div class="online-status" id="onlineStatus">Not connected &mdash; playing local hotseat.</div>
       </div>
 

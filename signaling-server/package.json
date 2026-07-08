@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Minimal WebSocket signaling relay for pairing two Minogoe players so their browsers can establish a direct WebRTC connection.",
   "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js"
   },

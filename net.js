@@ -25,6 +25,7 @@ const Net = (() => {
   let connectTimeoutId = null;
   let remoteDescSet = false;
   let pendingCandidates = [];
+  let matchedMode = 'private';
 
   async function flushPendingCandidates() {
     const queued = pendingCandidates;
@@ -137,7 +138,13 @@ const Net = (() => {
       return;
     }
 
+    if (msg.type === 'queue-error') {
+      callbacks.onStatus && callbacks.onStatus(msg.message || 'Could not join the queue.');
+      return;
+    }
+
     if (msg.type === 'ready') {
+      matchedMode = msg.mode || 'private';
       callbacks.onStatus && callbacks.onStatus('Opponent found - establishing direct connection...');
       setupPeerConnection();
       if (isHost) {
@@ -191,10 +198,11 @@ const Net = (() => {
     }
   }
 
-  function connect({ serverUrl, room, onStatus, onReady, onData, onPeerLeft }) {
+  function connect({ serverUrl, joinMessage, onStatus, onReady, onData, onPeerLeft }) {
     callbacks = { onStatus, onReady, onData, onPeerLeft };
     isHost = false;
     connected = false;
+    matchedMode = 'private';
 
     try {
       ws = new WebSocket(serverUrl);
@@ -204,8 +212,8 @@ const Net = (() => {
     }
 
     ws.onopen = () => {
-      callbacks.onStatus && callbacks.onStatus('Connected to signaling server, joining room...');
-      ws.send(JSON.stringify({ type: 'join', room }));
+      callbacks.onStatus && callbacks.onStatus('Connected to signaling server...');
+      ws.send(JSON.stringify(joinMessage));
     };
     ws.onmessage = (e) => {
       let msg;
@@ -222,6 +230,13 @@ const Net = (() => {
     };
   }
 
+  function cancelQueue() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'unqueue' }));
+      ws.close();
+    }
+  }
+
   function send(obj) {
     if (dc && dc.readyState === 'open') {
       dc.send(JSON.stringify(obj));
@@ -231,7 +246,9 @@ const Net = (() => {
   return {
     connect,
     send,
+    cancelQueue,
     get isHost() { return isHost; },
     get connected() { return connected; },
+    get matchedMode() { return matchedMode; },
   };
 })();

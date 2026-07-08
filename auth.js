@@ -9,6 +9,7 @@ const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const Auth = (() => {
   let currentUser = null;
   let currentProfile = null;
+  let currentSession = null;
   let initialized = false;
   let onChangeCallback = null;
 
@@ -26,6 +27,7 @@ const Auth = (() => {
   }
 
   supabaseClient.auth.onAuthStateChange(async (_event, session) => {
+    currentSession = session;
     currentUser = session?.user ?? null;
     await refreshProfile();
     initialized = true;
@@ -60,5 +62,6 @@ const Auth = (() => {
     onAuthChange,
     getUser: () => currentUser,
     getProfile: () => currentProfile,
+    getAccessToken: () => currentSession?.access_token ?? null,
   };
 })();

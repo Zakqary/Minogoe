@@ -99,6 +99,7 @@ const state = {
   initialHand: [],  // the pristine drawn hand, for replay reconstruction
   moveLog: [],      // ordered { player, shapeName, orientationIndex, r0, c0 } placements
   vsBot: false,     // true when player 2 is controlled by the local bot AI
+  gameMode: 'private', // 'private' | 'casual' | 'ranked', set from Net.matchedMode once paired
 };
 
 function snapshotState() {
@@ -416,7 +417,7 @@ async function recordGameResult() {
     const me = Auth.getUser();
     if (!me || !state.opponentUserId) return; // both sides must be logged in
     row = {
-      mode: 'private',
+      mode: state.gameMode,
       player1_id: me.id,
       player2_id: state.opponentUserId,
       score1: state.score1,
@@ -541,8 +542,12 @@ function render() {
 
   document.getElementById('hotseatBtn').classList.toggle('active', !state.vsBot);
   document.getElementById('vsBotBtn').classList.toggle('active', state.vsBot);
-  document.getElementById('hotseatBtn').disabled = state.online;
-  document.getElementById('vsBotBtn').disabled = state.online;
+  document.getElementById('hotseatBtn').disabled = state.online || state.connecting;
+  document.getElementById('vsBotBtn').disabled = state.online || state.connecting;
+
+  document.getElementById('casualQueueBtn').disabled = state.online || state.connecting;
+  document.getElementById('rankedQueueBtn').disabled = state.online || state.connecting;
+  document.getElementById('cancelConnectBtn').style.display = state.connecting ? '' : 'none';
 }
 
 function updateSelectionInfo() {
@@ -678,12 +683,13 @@ function handleNetReady() {
   state.online = true;
   state.connecting = false;
   state.vsBot = false;
+  state.gameMode = Net.matchedMode;
   state.myPlayer = Net.isHost ? 1 : 2;
   state.opponentUserId = null;
   document.getElementById('connectBtn').disabled = true;
   document.getElementById('roomInput').disabled = true;
-  setLobbyStatus(`Connected! You are Player ${state.myPlayer}.`);
-  log(`Connected to opponent. You are Player ${state.myPlayer}.`);
+  setLobbyStatus(`Connected! You are Player ${state.myPlayer}. (${state.gameMode})`);
+  log(`Connected to opponent. You are Player ${state.myPlayer}. Mode: ${state.gameMode}.`);
 
   Net.send({ type: 'identify', userId: Auth.getUser()?.id ?? null });
 
@@ -723,12 +729,45 @@ document.getElementById('connectBtn').addEventListener('click', () => {
   setLobbyStatus('Connecting... (if this seems stuck for a while, it is safe to click Connect again to retry)');
   Net.connect({
     serverUrl: SIGNALING_SERVER_URL,
-    room,
+    joinMessage: { type: 'join', room },
     onStatus: setLobbyStatus,
     onReady: handleNetReady,
     onData: handleNetData,
     onPeerLeft: handleNetPeerLeft,
   });
+});
+
+function startQueue(queueType) {
+  const user = Auth.getUser();
+  if (!user) {
+    setLobbyStatus('Sign in (top right) first to use casual/ranked queues.');
+    return;
+  }
+  const profile = Auth.getProfile();
+  const eloRating = profile ? profile.elo_rating : 1200;
+  const accessToken = Auth.getAccessToken();
+
+  state.connecting = true;
+  render();
+  setLobbyStatus(`Searching for a ${queueType} opponent...`);
+  Net.connect({
+    serverUrl: SIGNALING_SERVER_URL,
+    joinMessage: { type: 'queue', queueType, userId: user.id, eloRating, accessToken },
+    onStatus: setLobbyStatus,
+    onReady: handleNetReady,
+    onData: handleNetData,
+    onPeerLeft: handleNetPeerLeft,
+  });
+}
+
+document.getElementById('casualQueueBtn').addEventListener('click', () => startQueue('casual'));
+document.getElementById('rankedQueueBtn').addEventListener('click', () => startQueue('ranked'));
+
+document.getElementById('cancelConnectBtn').addEventListener('click', () => {
+  Net.cancelQueue();
+  state.connecting = false;
+  setLobbyStatus('Cancelled.');
+  render();
 });
 
 // ---------- Init ----------

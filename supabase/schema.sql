@@ -111,3 +111,48 @@ drop trigger if exists on_game_recorded on public.games;
 create trigger on_game_recorded
   after insert on public.games
   for each row execute function public.handle_game_recorded();
+
+-- ---------- Phase 5: ranked ELO ----------
+
+-- Standard ELO update (K=32), applied only to mode = 'ranked' games between
+-- two real accounts. Runs as a separate trigger from the W/L/T counter one
+-- above so ELO logic stays isolated and easy to reason about on its own.
+create or replace function public.handle_ranked_game()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p1_elo integer;
+  p2_elo integer;
+  expected_p1 numeric;
+  actual_p1 numeric;
+  k constant integer := 32;
+  delta_p1 integer;
+  delta_p2 integer;
+begin
+  if new.mode <> 'ranked' or new.player1_id is null or new.player2_id is null then
+    return new;
+  end if;
+
+  select elo_rating into p1_elo from public.profiles where id = new.player1_id;
+  select elo_rating into p2_elo from public.profiles where id = new.player2_id;
+
+  expected_p1 := 1.0 / (1.0 + power(10, (p2_elo - p1_elo) / 400.0));
+  actual_p1 := case when new.winner = 1 then 1 when new.winner = 2 then 0 else 0.5 end;
+
+  delta_p1 := round(k * (actual_p1 - expected_p1));
+  delta_p2 := -delta_p1;
+
+  update public.profiles set elo_rating = elo_rating + delta_p1 where id = new.player1_id;
+  update public.profiles set elo_rating = elo_rating + delta_p2 where id = new.player2_id;
+  update public.games set elo_delta_p1 = delta_p1, elo_delta_p2 = delta_p2 where id = new.id;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_ranked_game_recorded on public.games;
+create trigger on_ranked_game_recorded
+  after insert on public.games
+  for each row execute function public.handle_ranked_game();

@@ -98,6 +98,7 @@ const state = {
   gameStartedAt: null,
   initialHand: [],  // the pristine drawn hand, for replay reconstruction
   moveLog: [],      // ordered { player, shapeName, orientationIndex, r0, c0 } placements
+  vsBot: false,     // true when player 2 is controlled by the local bot AI
 };
 
 function snapshotState() {
@@ -197,6 +198,67 @@ function hasAnyLegalMove(hand, board) {
   return false;
 }
 
+// ---------- Bot AI (local "vs Bot" mode only) ----------
+function enumerateLegalPlacements(hand, board) {
+  const distinct = new Set(hand);
+  const placements = [];
+  for (const shapeName of distinct) {
+    for (let orientationIndex = 0; orientationIndex < ORIENTATIONS[shapeName].length; orientationIndex++) {
+      const orientation = ORIENTATIONS[shapeName][orientationIndex];
+      const maxDr = Math.max(...orientation.map(p => p[0]));
+      const maxDc = Math.max(...orientation.map(p => p[1]));
+      for (let r0 = 0; r0 <= BOARD_SIZE - 1 - maxDr; r0++) {
+        for (let c0 = 0; c0 <= BOARD_SIZE - 1 - maxDc; c0++) {
+          let ok = true;
+          for (const [dr, dc] of orientation) {
+            if (board[idx(r0 + dr, c0 + dc)] !== 0) { ok = false; break; }
+          }
+          if (ok) placements.push({ shapeName, orientationIndex, r0, c0 });
+        }
+      }
+    }
+  }
+  return placements;
+}
+
+function scoreBotCandidate(candidate, board, player) {
+  const opponent = player === 1 ? 2 : 1;
+  const orientation = ORIENTATIONS[candidate.shapeName][candidate.orientationIndex];
+  let ownAdj = 0, oppAdj = 0;
+  for (const [dr, dc] of orientation) {
+    const r = candidate.r0 + dr, c = candidate.c0 + dc;
+    for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+      if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+      const val = board[idx(nr, nc)];
+      if (val === player) ownAdj++;
+      else if (val === opponent) oppAdj++;
+    }
+  }
+  return ownAdj * 2 - oppAdj + Math.random() * 0.5;
+}
+
+function pickBotPlacement(hand, board, player) {
+  const placements = enumerateLegalPlacements(hand, board);
+  if (placements.length === 0) return null;
+  let best = null, bestScore = -Infinity;
+  for (const cand of placements) {
+    const s = scoreBotCandidate(cand, board, player);
+    if (s > bestScore) { bestScore = s; best = cand; }
+  }
+  return best;
+}
+
+function scheduleBotMove() {
+  if (!state.vsBot || state.gameOver || state.turn !== 2) return;
+  setTimeout(() => {
+    if (!state.vsBot || state.gameOver || state.turn !== 2) return;
+    const best = pickBotPlacement(state.hand2, state.board, 2);
+    if (best) {
+      commitPlacement(best.shapeName, best.orientationIndex, best.r0, best.c0);
+    }
+  }, 500);
+}
+
 // ---------- Final scoring ----------
 function computeFinalScores(board) {
   const visited = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
@@ -273,12 +335,11 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   if (state.online && !fromRemote) {
     Net.send({ type: 'move', shapeName, orientationIndex, r0, c0 });
   }
+
+  scheduleBotMove();
 }
 
-function undoTurn(fromRemote = false) {
-  if (state.connecting && !fromRemote) return;
-  if (state.history.length === 0) return;
-  const snap = state.history.pop();
+function applySnapshot(snap) {
   state.board = snap.board;
   state.hand1 = snap.hand1;
   state.hand2 = snap.hand2;
@@ -287,6 +348,19 @@ function undoTurn(fromRemote = false) {
   state.turn = snap.turn;
   state.gameOver = snap.gameOver;
   state.moveLog = snap.moveLog;
+}
+
+function undoTurn(fromRemote = false) {
+  if (state.connecting && !fromRemote) return;
+  if (state.history.length === 0) return;
+  applySnapshot(state.history.pop());
+
+  // In vs-bot mode, a single undo should always land back on the human's
+  // turn, so also undo the bot's reply if that's what we just landed on.
+  if (state.vsBot && !state.gameOver && state.turn === 2 && state.history.length > 0) {
+    applySnapshot(state.history.pop());
+  }
+
   state.selected = null;
   state.hover = null;
   log('Last move undone.');
@@ -319,24 +393,43 @@ function endGame(p1Stuck, p2Stuck) {
 }
 
 async function recordGameResult() {
-  if (!state.online || !Net.isHost) return; // only the host records, and only for online games
-  const me = Auth.getUser();
-  if (!me || !state.opponentUserId) return; // both sides must be logged in
-
   const winner = state.score1 > state.score2 ? 1 : state.score2 > state.score1 ? 2 : null;
-  const { error } = await supabaseClient.from('games').insert({
-    mode: 'private',
-    player1_id: me.id,
-    player2_id: state.opponentUserId,
-    score1: state.score1,
-    score2: state.score2,
-    winner,
-    initial_hand: state.initialHand,
-    move_log: state.moveLog,
-    board_size: BOARD_SIZE,
-    started_at: state.gameStartedAt,
-  });
 
+  let row = null;
+  if (state.vsBot) {
+    const me = Auth.getUser();
+    if (!me) return; // must be logged in to save a bot match
+    row = {
+      mode: 'bot',
+      player1_id: me.id,
+      player2_id: null,
+      score1: state.score1,
+      score2: state.score2,
+      winner,
+      initial_hand: state.initialHand,
+      move_log: state.moveLog,
+      board_size: BOARD_SIZE,
+      started_at: state.gameStartedAt,
+    };
+  } else {
+    if (!state.online || !Net.isHost) return; // only the host records, and only for online games
+    const me = Auth.getUser();
+    if (!me || !state.opponentUserId) return; // both sides must be logged in
+    row = {
+      mode: 'private',
+      player1_id: me.id,
+      player2_id: state.opponentUserId,
+      score1: state.score1,
+      score2: state.score2,
+      winner,
+      initial_hand: state.initialHand,
+      move_log: state.moveLog,
+      board_size: BOARD_SIZE,
+      started_at: state.gameStartedAt,
+    };
+  }
+
+  const { error } = await supabaseClient.from('games').insert(row);
   if (error) {
     log('Could not save game result: ' + error.message);
   } else {
@@ -445,6 +538,11 @@ function render() {
   document.getElementById('rotateBtn').disabled = state.connecting;
   document.getElementById('newGameBtn').disabled = state.connecting;
   document.getElementById('undoBtn').disabled = state.connecting || state.history.length === 0;
+
+  document.getElementById('hotseatBtn').classList.toggle('active', !state.vsBot);
+  document.getElementById('vsBotBtn').classList.toggle('active', state.vsBot);
+  document.getElementById('hotseatBtn').disabled = state.online;
+  document.getElementById('vsBotBtn').disabled = state.online;
 }
 
 function updateSelectionInfo() {
@@ -479,7 +577,9 @@ function renderHand(elId, hand, player) {
   el.innerHTML = '';
 
   const container = el.closest('.hand');
-  const isActive = player === state.turn && !state.gameOver && !state.connecting && (!state.online || player === state.myPlayer);
+  const isActive = player === state.turn && !state.gameOver && !state.connecting
+    && (!state.online || player === state.myPlayer)
+    && !(state.vsBot && player === 2);
   container.classList.toggle('inactive', !isActive);
 
   const names = Object.keys(counts).sort();
@@ -557,6 +657,18 @@ document.getElementById('newGameBtn').addEventListener('click', () => {
   newGame();
 });
 
+document.getElementById('hotseatBtn').addEventListener('click', () => {
+  if (state.online) return;
+  state.vsBot = false;
+  newGame();
+});
+
+document.getElementById('vsBotBtn').addEventListener('click', () => {
+  if (state.online) return;
+  state.vsBot = true;
+  newGame();
+});
+
 // ---------- Online play ----------
 function setLobbyStatus(text) {
   document.getElementById('onlineStatus').textContent = text;
@@ -565,6 +677,7 @@ function setLobbyStatus(text) {
 function handleNetReady() {
   state.online = true;
   state.connecting = false;
+  state.vsBot = false;
   state.myPlayer = Net.isHost ? 1 : 2;
   state.opponentUserId = null;
   document.getElementById('connectBtn').disabled = true;

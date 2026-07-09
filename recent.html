@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Minogoe - Replay</title>
+<title>Minogoe - Recent Games</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -21,16 +21,9 @@
     <a href="recent.html">Recent Games</a>
   </nav>
 
-  <div class="replay-page">
-    <div id="replayMeta" class="replay-meta">Loading...</div>
-    <canvas id="board"></canvas>
-    <div class="replay-controls">
-      <button id="restartBtn">Restart</button>
-      <button id="stepBackBtn">&laquo; Step</button>
-      <button id="playBtn">Play</button>
-      <button id="stepFwdBtn">Step &raquo;</button>
-    </div>
-    <div id="stepInfo" class="step-info">Move 0 / 0</div>
+  <div class="profile-page">
+    <h2>Recent Games</h2>
+    <div id="recentGamesContent">Loading...</div>
   </div>
 
   <footer class="site-footer">
@@ -41,6 +34,6 @@
 <script src="auth.js"></script>
 <script src="auth-ui.js"></script>
 <script src="presence.js"></script>
-<script src="replay.js"></script>
+<script src="recent.js"></script>
 </body>
 </html>

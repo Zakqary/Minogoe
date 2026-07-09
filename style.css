@@ -832,7 +832,6 @@ h2, h3 {
   }
 
   .board-panel {
-    position: relative;
     order: 1;
   }
 
@@ -844,10 +843,16 @@ h2, h3 {
     order: 3;
   }
 
+  .board-wrapper {
+    position: relative;
+    max-width: 100%;
+  }
+
   #board {
     max-width: 100%;
     height: auto;
     touch-action: none;
+    display: block;
   }
 
   .mobile-rotate-btn {
@@ -856,7 +861,7 @@ h2, h3 {
     justify-content: center;
     position: absolute;
     right: 10px;
-    bottom: 46px;
+    bottom: 10px;
     width: 52px;
     height: 52px;
     border-radius: 50%;
@@ -876,5 +881,34 @@ h2, h3 {
 
   .controls button {
     flex: 1 1 calc(50% - 8px);
+  }
+
+  .site-header {
+    padding: 10px 12px 0;
+    gap: 6px;
+  }
+
+  .site-header .logo {
+    height: 40px;
+  }
+
+  .online-count {
+    font-size: 11px;
+  }
+
+  .auth-widget {
+    font-size: 12px;
+    gap: 6px;
+  }
+
+  .auth-widget button {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .site-nav {
+    gap: 14px;
+    padding: 8px 12px 0;
+    flex-wrap: wrap;
   }
 }

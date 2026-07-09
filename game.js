@@ -390,6 +390,15 @@ function switchTurn() {
   state.plyCount += 1;
 }
 
+const MIN_VOLUNTARY_PASS_TURN = 9;
+
+// Which turn (1st, 2nd, ...) the current turn holder is on, counting every
+// turn they've taken so far including passes. Used to stop players from
+// voluntarily passing their early turns to play with full board information later.
+function currentTurnNumber() {
+  return Math.floor(state.plyCount / 2) + 1;
+}
+
 // Auto-passes the current turn holder for as long as they have no legal
 // move at all (empty hand, or nothing fits) - ending the game once that
 // makes two forced/voluntary passes in a row.
@@ -442,6 +451,7 @@ function requestPass() {
   if (state.gameOver || state.connecting || !state.gameStarted) return;
   if (state.online && state.myPlayer !== state.turn) return;
   if (state.vsBot && state.turn === 2) return; // it's the bot's turn, not yours
+  if (currentTurnNumber() < MIN_VOLUNTARY_PASS_TURN) return;
   manualPass(false);
 }
 
@@ -826,9 +836,14 @@ function render() {
   document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted;
   document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted
     || state.history.length === 0 || state.pendingUndoRequest;
+  const tooEarlyToPass = state.gameStarted && !state.gameOver && currentTurnNumber() < MIN_VOLUNTARY_PASS_TURN;
   document.getElementById('passBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
     || (state.online && state.myPlayer !== state.turn)
-    || (state.vsBot && state.turn === 2);
+    || (state.vsBot && state.turn === 2)
+    || tooEarlyToPass;
+  document.getElementById('passBtn').title = tooEarlyToPass
+    ? `Pass unlocks on your ${MIN_VOLUNTARY_PASS_TURN}th turn`
+    : '';
   document.getElementById('forfeitBtn').disabled = state.connecting || !state.gameStarted || state.gameOver;
 
   document.getElementById('undoRequestBanner').style.display = state.incomingUndoRequest ? 'flex' : 'none';

@@ -245,11 +245,16 @@ body {
 
 .app {
   display: flex;
+  justify-content: center;
   gap: 20px;
   padding: 20px;
   align-items: flex-start;
   flex-wrap: wrap;
 }
+
+.side-panel { order: 1; }
+.board-panel { order: 2; }
+.right-panel { order: 3; }
 
 .board-panel {
   display: flex;

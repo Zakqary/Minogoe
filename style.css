@@ -772,3 +772,25 @@ h2, h3 {
   font-style: normal;
   font-weight: 700;
 }
+
+.site-footer {
+  display: flex;
+  justify-content: center;
+  padding: 28px 20px 32px;
+}
+
+.site-footer a {
+  color: var(--text-faint);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.site-footer a:hover {
+  color: var(--accent-hover);
+  border-color: var(--accent);
+}

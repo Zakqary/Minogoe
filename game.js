@@ -273,9 +273,28 @@ function enumerateLegalPlacements(hand, board) {
 function scoreBotCandidate(candidate, board, player) {
   const opponent = player === 1 ? 2 : 1;
   const orientation = ORIENTATIONS[candidate.shapeName][candidate.orientationIndex];
-  let ownAdj = 0, oppAdj = 0;
+
+  // Look ahead: simulate the placement and score the resulting position
+  // with the exact same final-tally function the game uses at game end.
+  // This lets the bot actually recognize and grab territory it can enclose
+  // right now, instead of only reacting to adjacency.
+  const simBoard = board.slice();
+  for (const [dr, dc] of orientation) {
+    simBoard[idx(candidate.r0 + dr, candidate.c0 + dc)] = player;
+  }
+  const { score1, score2 } = computeFinalScores(simBoard);
+  const myScore = player === 1 ? score1 : score2;
+  const oppScore = player === 1 ? score2 : score1;
+  const territoryDelta = myScore - oppScore;
+
+  // When no immediate territory swing is available (the common case early
+  // on), fall back to building toward future enclosures: cluster near your
+  // own pieces, avoid the opponent's, and hug the board edge (a free
+  // "wall" that makes enclosing cheaper).
+  let ownAdj = 0, oppAdj = 0, edgeTouches = 0;
   for (const [dr, dc] of orientation) {
     const r = candidate.r0 + dr, c = candidate.c0 + dc;
+    if (r === 0 || r === BOARD_SIZE - 1 || c === 0 || c === BOARD_SIZE - 1) edgeTouches++;
     for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
       if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
       const val = board[idx(nr, nc)];
@@ -283,7 +302,8 @@ function scoreBotCandidate(candidate, board, player) {
       else if (val === opponent) oppAdj++;
     }
   }
-  return ownAdj * 2 - oppAdj + Math.random() * 0.5;
+
+  return territoryDelta * 1000 + ownAdj * 2 - oppAdj * 1.5 + edgeTouches * 1.5 + Math.random() * 0.5;
 }
 
 function pickBotPlacement(hand, board, player) {

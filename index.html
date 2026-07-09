@@ -7,6 +7,7 @@
 </head>
 <body>
   <header class="site-header">
+    <span id="onlineCount" class="online-count">&nbsp;</span>
     <img src="Minogoe.png" alt="Minogoe" class="logo">
     <div id="authWidget" class="auth-widget"></div>
   </header>
@@ -18,7 +19,7 @@
   <div class="app">
     <div class="board-panel">
       <canvas id="board"></canvas>
-      <div class="turn-banner" id="turnBanner">Player 1's turn</div>
+      <div class="turn-banner" id="turnBanner">Choose a mode below to start playing</div>
       <div class="selection-info" id="selectionInfo">No piece selected &mdash; click a piece in your hand below.</div>
     </div>
 
@@ -26,21 +27,32 @@
       <div class="online-panel">
         <h3>🎮 Local Mode</h3>
         <div class="mode-buttons">
-          <button id="hotseatBtn" class="mode-btn active">2-Player Hotseat</button>
+          <button id="hotseatBtn" class="mode-btn">2-Player Hotseat</button>
           <button id="vsBotBtn" class="mode-btn">vs Bot</button>
         </div>
       </div>
 
       <div class="online-panel">
         <h3>🌐 Play Online</h3>
-        <div class="mode-buttons">
-          <button id="casualQueueBtn">Casual Queue</button>
-          <button id="rankedQueueBtn">Ranked Queue</button>
+
+        <div class="online-option">
+          <div class="online-option-label">Casual Queue</div>
+          <button id="casualQueueBtn">Find Match</button>
         </div>
-        <input id="roomInput" type="text" placeholder="Room code (e.g. ABCD)">
-        <button id="connectBtn">Connect (Private Room)</button>
+
+        <div class="online-option">
+          <div class="online-option-label">Ranked Queue</div>
+          <button id="rankedQueueBtn">Find Match</button>
+        </div>
+
+        <div class="online-option">
+          <div class="online-option-label">Private Room</div>
+          <input id="roomInput" type="text" placeholder="Room code (e.g. ABCD)">
+          <button id="connectBtn">Connect</button>
+        </div>
+
         <button id="cancelConnectBtn" style="display:none;">Cancel</button>
-        <div class="online-status" id="onlineStatus">Not connected &mdash; playing local hotseat.</div>
+        <div class="online-status" id="onlineStatus">Not connected.</div>
       </div>
 
       <div class="scoreboard">
@@ -71,26 +83,29 @@
           <div id="hand2" class="hand-list"></div>
         </div>
       </div>
+    </div>
+
+    <div class="right-panel">
+      <div class="rules-panel">
+        <h3>📜 How to Play</h3>
+        <ul>
+          <li>🟦🟥 Score points by completely surrounding an empty square (or group of squares) with only <em>your</em> color, the board edge, or both.</li>
+          <li>🏁 The game ends as soon as either player has no legal move left &mdash; no one is ever forced into a bad placement.</li>
+          <li>🎁 Player 2 moves second, so they start with a 1-point handicap.</li>
+        </ul>
+      </div>
 
       <div class="log-panel">
         <h3>Log</h3>
         <div id="log" class="log"></div>
       </div>
     </div>
-
-    <div class="rules-panel">
-      <h3>📜 How to Play</h3>
-      <ul>
-        <li>🟦🟥 Score points by completely surrounding an empty square (or group of squares) with only <em>your</em> color, the board edge, or both.</li>
-        <li>🏁 The game ends as soon as either player has no legal move left &mdash; no one is ever forced into a bad placement.</li>
-        <li>🎁 Player 2 moves second, so they start with a 1-point handicap.</li>
-      </ul>
-    </div>
   </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="auth.js"></script>
 <script src="auth-ui.js"></script>
+<script src="presence.js"></script>
 <script src="net.js"></script>
 <script src="game.js"></script>
 </body>

@@ -156,3 +156,11 @@ drop trigger if exists on_ranked_game_recorded on public.games;
 create trigger on_ranked_game_recorded
   after insert on public.games
   for each row execute function public.handle_ranked_game();
+
+-- ---------- Phase 7: presence ("players online" count) ----------
+
+alter table public.profiles add column if not exists last_seen timestamptz not null default now();
+
+-- No new RLS policy needed: "Users can update their own profile" already
+-- covers updating last_seen, and "Profiles are publicly readable" already
+-- covers counting how many rows are recently active.

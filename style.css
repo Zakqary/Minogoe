@@ -40,6 +40,13 @@ body {
   width: auto;
 }
 
+.online-count {
+  grid-column: 1;
+  justify-self: start;
+  font-size: 13px;
+  opacity: 0.8;
+}
+
 .auth-widget {
   grid-column: 3;
   justify-self: end;
@@ -326,6 +333,22 @@ body {
   opacity: 0.75;
 }
 
+.online-option {
+  background: #20242c;
+  border: 1px solid #333844;
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.online-option-label {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
 .mode-buttons {
   display: flex;
   gap: 8px;
@@ -458,13 +481,19 @@ body {
   opacity: 0.85;
 }
 
+.right-panel {
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
 .log-panel {
   background: #2a2e37;
   border-radius: 8px;
   padding: 8px 10px;
-  flex: 1;
   min-height: 200px;
-  max-height: 340px;
+  max-height: 420px;
   display: flex;
   flex-direction: column;
 }
@@ -481,7 +510,6 @@ body {
 .log div { padding: 1px 0; border-bottom: 1px solid #333844; }
 
 .rules-panel {
-  width: 240px;
   background: linear-gradient(160deg, #2a2e37, #262b3a);
   border: 1px solid #3b4252;
   border-radius: 12px;

@@ -1,6 +1,6 @@
 // ---------- Configuration ----------
 const BOARD_SIZE = 12;
-const CELL_PX = 40; // 12 * 40 = 480px board
+const CELL_PX = 52; // 12 * 52 = 624px board
 const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
 const HANDICAP_P2 = 1; // player 2 moves second, so they start with a 1-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
@@ -80,7 +80,8 @@ for (const name of Object.keys(BASE_SHAPES)) {
 
 // ---------- Game state ----------
 const state = {
-  board: null,      // Int8Array, 0 empty, 1 = P1, 2 = P2
+  gameStarted: false, // true once a hand has actually been drawn and a game is underway
+  board: new Int8Array(BOARD_SIZE * BOARD_SIZE),
   hand1: [],
   hand2: [],
   score1: 0,
@@ -143,6 +144,7 @@ function newGame(remoteHand) {
     return;
   }
 
+  state.gameStarted = true;
   state.board = new Int8Array(BOARD_SIZE * BOARD_SIZE);
   const hand = remoteHand || drawHand();
   state.hand1 = [...hand];
@@ -513,7 +515,9 @@ function render() {
   drawBoard();
 
   const banner = document.getElementById('turnBanner');
-  if (state.gameOver) {
+  if (!state.gameStarted) {
+    banner.textContent = 'Choose a mode below to start playing';
+  } else if (state.gameOver) {
     banner.textContent = 'Game over';
   } else if (state.online) {
     const you = state.myPlayer === state.turn ? ' (your turn)' : " (opponent's turn)";
@@ -525,9 +529,13 @@ function render() {
   document.getElementById('score1').textContent = state.score1;
   document.getElementById('score2').textContent = state.score2;
 
-  const proj = computeFinalScores(state.board);
-  document.getElementById('projected').innerHTML =
-    `Projected if game ended now: P1 ${proj.score1} &middot; P2 ${proj.score2 + HANDICAP_P2} &middot; Undecided ${proj.undecided}`;
+  if (state.gameStarted) {
+    const proj = computeFinalScores(state.board);
+    document.getElementById('projected').innerHTML =
+      `Projected if game ended now: P1 ${proj.score1} &middot; P2 ${proj.score2 + HANDICAP_P2} &middot; Undecided ${proj.undecided}`;
+  } else {
+    document.getElementById('projected').textContent = 'No game in progress yet.';
+  }
 
   renderHand('hand1', state.hand1, 1);
   renderHand('hand2', state.hand2, 2);
@@ -536,9 +544,9 @@ function render() {
 
   canvas.classList.toggle('placing', !!state.selected && !state.gameOver);
 
-  document.getElementById('rotateBtn').disabled = state.connecting;
-  document.getElementById('newGameBtn').disabled = state.connecting;
-  document.getElementById('undoBtn').disabled = state.connecting || state.history.length === 0;
+  document.getElementById('rotateBtn').disabled = state.connecting || !state.gameStarted;
+  document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted;
+  document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted || state.history.length === 0;
 
   document.getElementById('hotseatBtn').classList.toggle('active', !state.vsBot);
   document.getElementById('vsBotBtn').classList.toggle('active', state.vsBot);
@@ -552,7 +560,9 @@ function render() {
 
 function updateSelectionInfo() {
   const el = document.getElementById('selectionInfo');
-  if (state.gameOver) {
+  if (!state.gameStarted) {
+    el.textContent = 'No game in progress yet.';
+  } else if (state.gameOver) {
     el.textContent = 'Game over.';
   } else if (!state.selected) {
     el.textContent = `Player ${state.turn}: click a piece in your hand below to select it.`;
@@ -582,14 +592,14 @@ function renderHand(elId, hand, player) {
   el.innerHTML = '';
 
   const container = el.closest('.hand');
-  const isActive = player === state.turn && !state.gameOver && !state.connecting
+  const isActive = state.gameStarted && player === state.turn && !state.gameOver && !state.connecting
     && (!state.online || player === state.myPlayer)
     && !(state.vsBot && player === 2);
   container.classList.toggle('inactive', !isActive);
 
   const names = Object.keys(counts).sort();
   if (names.length === 0) {
-    el.innerHTML = '<span>empty</span>';
+    el.innerHTML = state.gameStarted ? '<span>empty</span>' : '<span>Waiting for a game to start&hellip;</span>';
     return;
   }
   for (const name of names) {
@@ -771,4 +781,4 @@ document.getElementById('cancelConnectBtn').addEventListener('click', () => {
 });
 
 // ---------- Init ----------
-newGame();
+render();

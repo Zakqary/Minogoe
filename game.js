@@ -701,7 +701,7 @@ function drawBoard() {
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
       const val = state.board[idx(r, c)];
-      ctx.fillStyle = val === 1 ? '#3b82f6' : val === 2 ? '#ef4444' : '#20242c';
+      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
     }
   }
@@ -733,7 +733,7 @@ function drawBoard() {
   if (state.selected && state.hover && !state.gameOver) {
     const orientation = ORIENTATIONS[state.selected.shapeName][state.selected.orientationIndex];
     const color = state.hover.valid
-      ? (state.turn === 1 ? 'rgba(59,130,246,0.55)' : 'rgba(239,68,68,0.55)')
+      ? (state.turn === 1 ? 'rgba(91,127,217,0.55)' : 'rgba(217,122,82,0.55)')
       : 'rgba(140,140,140,0.5)';
     ctx.fillStyle = color;
     for (const [dr, dc] of orientation) {
@@ -829,7 +829,7 @@ function drawShapeIcon(canvasEl, coords) {
   canvasEl.width = maxC * px;
   canvasEl.height = maxR * px;
   const cctx = canvasEl.getContext('2d');
-  cctx.fillStyle = '#d8dbe0';
+  cctx.fillStyle = '#ded6e3';
   for (const [r, c] of coords) {
     cctx.fillRect(c * px, r * px, px - 1, px - 1);
   }

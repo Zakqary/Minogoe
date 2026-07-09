@@ -84,7 +84,7 @@ function drawBoard() {
   for (let r = 0; r < boardSize; r++) {
     for (let c = 0; c < boardSize; c++) {
       const val = board[idxOf(r, c)];
-      ctx.fillStyle = val === 1 ? '#3b82f6' : val === 2 ? '#ef4444' : '#20242c';
+      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
     }
   }

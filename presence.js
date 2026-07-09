@@ -34,7 +34,7 @@ async function refreshOnlineCount() {
     .select('*', { count: 'exact', head: true })
     .gt('last_seen', cutoff);
   if (!error && count !== null) {
-    el.textContent = `\u{1F7E2} ${count} online`;
+    el.innerHTML = `<span class="online-dot"></span>${count} online`;
   }
 }
 

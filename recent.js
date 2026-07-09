@@ -18,7 +18,7 @@ async function renderRecentGames() {
 
   const { data, error } = await supabaseClient
     .from('games')
-    .select('*, player1:player1_id(username), player2:player2_id(username)')
+    .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
     .order('ended_at', { ascending: false })
     .limit(20);
 
@@ -30,8 +30,10 @@ async function renderRecentGames() {
   const rows = (data || []).map((g) => {
     const p1Name = g.player1 ? g.player1.username : 'Guest';
     const p2Name = g.player2 ? g.player2.username : (g.mode === 'bot' ? 'Bot' : 'Guest');
+    const p1Link = playerLink(g.player1 ? g.player1.id : null, p1Name);
+    const p2Link = playerLink(g.player2 ? g.player2.id : null, p2Name);
     return `<tr>
-      <td>${escapeHtml(p1Name)} vs ${escapeHtml(p2Name)}</td>
+      <td>${p1Link} vs ${p2Link}</td>
       <td>${g.score1} - ${g.score2}</td>
       <td>${escapeHtml(g.mode)}</td>
       <td>${timeAgo(g.ended_at)}</td>

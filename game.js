@@ -158,6 +158,23 @@ function playerLabel(playerNum) {
   return 'Player 2';
 }
 
+// The account id behind a given player slot, if it's a real (non-guest,
+// non-bot) account - used to link their name to their profile.
+function playerProfileId(playerNum) {
+  if (state.online) {
+    if (playerNum === state.myPlayer) {
+      const user = Auth.getUser();
+      return user ? user.id : null;
+    }
+    return state.opponentUserId || null;
+  }
+  if (playerNum === 1) {
+    const user = Auth.getUser();
+    return user ? user.id : null;
+  }
+  return null;
+}
+
 function pickRandom(names, count) {
   const picks = [];
   for (let i = 0; i < count; i++) {
@@ -779,13 +796,13 @@ function render() {
     banner.textContent = `${playerLabel(state.turn)}'s turn`;
   }
 
-  document.getElementById('scoreLabel1').textContent = playerLabel(1);
-  document.getElementById('scoreLabel2').textContent = playerLabel(2);
+  document.getElementById('scoreLabel1').innerHTML = playerLink(playerProfileId(1), playerLabel(1));
+  document.getElementById('scoreLabel2').innerHTML = playerLink(playerProfileId(2), playerLabel(2));
   document.getElementById('score1').textContent = state.score1;
   document.getElementById('score2').textContent = state.score2;
 
-  document.getElementById('handLabel1').textContent = `${playerLabel(1)}'s hand`;
-  document.getElementById('handLabel2').textContent = `${playerLabel(2)}'s hand`;
+  document.getElementById('handLabel1').innerHTML = `${playerLink(playerProfileId(1), playerLabel(1))}'s hand`;
+  document.getElementById('handLabel2').innerHTML = `${playerLink(playerProfileId(2), playerLabel(2))}'s hand`;
 
   if (state.gameStarted) {
     const proj = computeFinalScores(state.board);

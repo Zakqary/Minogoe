@@ -7,6 +7,14 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Renders a player's name as a link to their profile when we know their
+// account id (a real, non-deleted account), or as plain text otherwise
+// (guests, bots, or accounts that have since been deleted).
+function playerLink(id, name) {
+  if (!id) return escapeHtml(name);
+  return `<a href="profile.html?user=${encodeURIComponent(id)}">${escapeHtml(name)}</a>`;
+}
+
 function renderAuthWidget() {
   const el = document.getElementById('authWidget');
   const user = Auth.getUser();

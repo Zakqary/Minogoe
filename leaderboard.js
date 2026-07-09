@@ -3,7 +3,7 @@ async function renderLeaderboard() {
 
   const { data, error } = await supabaseClient
     .from('profiles')
-    .select('username, elo_rating, games_played, wins, losses, ties')
+    .select('id, username, elo_rating, games_played, wins, losses, ties')
     .order('elo_rating', { ascending: false })
     .limit(50);
 
@@ -15,7 +15,7 @@ async function renderLeaderboard() {
   const rows = (data || []).map((p, i) => `
     <tr>
       <td>${i + 1}</td>
-      <td>${escapeHtml(p.username)}</td>
+      <td><a href="profile.html?user=${encodeURIComponent(p.id)}">${escapeHtml(p.username)}</a></td>
       <td>${p.elo_rating}</td>
       <td>${p.games_played}</td>
       <td>${p.wins}</td>

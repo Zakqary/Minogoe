@@ -1,22 +1,40 @@
 async function renderProfilePage() {
   const container = document.getElementById('profileContent');
-  const user = Auth.getUser();
+  const params = new URLSearchParams(location.search);
+  const viewUserId = params.get('user');
 
-  if (!user) {
-    container.innerHTML = '<p>Sign in (top right) to see your profile.</p>';
-    return;
+  let profile;
+
+  if (viewUserId) {
+    const { data, error } = await supabaseClient
+      .from('profiles')
+      .select('*')
+      .eq('id', viewUserId)
+      .single();
+    if (error || !data) {
+      container.innerHTML = '<p>Could not find that player.</p>';
+      return;
+    }
+    profile = data;
+  } else {
+    const user = Auth.getUser();
+    if (!user) {
+      container.innerHTML = '<p>Sign in (top right) to see your profile.</p>';
+      return;
+    }
+    profile = Auth.getProfile();
+    if (!profile) {
+      container.innerHTML = '<p>Could not load your profile.</p>';
+      return;
+    }
   }
 
-  const profile = Auth.getProfile();
-  if (!profile) {
-    container.innerHTML = '<p>Could not load your profile.</p>';
-    return;
-  }
+  const userId = profile.id;
 
   const { data: games, error } = await supabaseClient
     .from('games')
-    .select('*, player1:player1_id(username), player2:player2_id(username)')
-    .or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`)
+    .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
+    .or(`player1_id.eq.${userId},player2_id.eq.${userId}`)
     .order('ended_at', { ascending: false })
     .limit(20);
 
@@ -26,17 +44,19 @@ async function renderProfilePage() {
   }
 
   const rows = (games || []).map((g) => {
-    const isP1 = g.player1_id === user.id;
+    const isP1 = g.player1_id === userId;
     const myScore = isP1 ? g.score1 : g.score2;
     const oppScore = isP1 ? g.score2 : g.score1;
-    const oppName = isP1 ? (g.player2 ? g.player2.username : 'Guest') : (g.player1 ? g.player1.username : 'Guest');
+    const opp = isP1 ? g.player2 : g.player1;
+    const oppName = opp ? opp.username : (g.mode === 'bot' ? 'Bot' : 'Guest');
+    const oppLink = playerLink(opp ? opp.id : null, oppName);
     const myPlayerNum = isP1 ? 1 : 2;
     const resultText = g.winner == null ? 'Tie' : (g.winner === myPlayerNum ? 'Win' : 'Loss');
     const date = new Date(g.ended_at).toLocaleString();
     return `<tr>
       <td>${date}</td>
       <td>${escapeHtml(g.mode)}</td>
-      <td>${escapeHtml(oppName)}</td>
+      <td>${oppLink}</td>
       <td>${myScore} - ${oppScore}</td>
       <td class="result-${resultText.toLowerCase()}">${resultText}</td>
       <td><a href="replay.html?game=${encodeURIComponent(g.id)}">Replay</a></td>

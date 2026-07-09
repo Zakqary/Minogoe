@@ -273,6 +273,19 @@ h2, h3 {
 .games-table .result-loss { color: var(--danger-hover); font-weight: 600; }
 .games-table .result-tie { color: var(--text-dim); }
 
+.games-table a,
+.score .label a,
+.hand h3 a {
+  color: var(--accent-hover);
+  text-decoration: none;
+}
+
+.games-table a:hover,
+.score .label a:hover,
+.hand h3 a:hover {
+  text-decoration: underline;
+}
+
 .replay-page {
   max-width: 640px;
   margin: 20px auto;

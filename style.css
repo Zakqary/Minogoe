@@ -15,6 +15,24 @@ body {
   gap: 12px;
 }
 
+.site-nav {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  padding: 8px 20px 0;
+}
+
+.site-nav a {
+  color: #9ca3af;
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.site-nav a:hover {
+  color: #e6e8eb;
+  text-decoration: underline;
+}
+
 .site-header .logo {
   grid-column: 2;
   justify-self: center;

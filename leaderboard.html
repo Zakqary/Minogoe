@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Minogoe - Replay</title>
+<title>Minogoe - Leaderboard</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -16,21 +16,14 @@
     <a href="leaderboard.html">Leaderboard</a>
   </nav>
 
-  <div class="replay-page">
-    <div id="replayMeta" class="replay-meta">Loading...</div>
-    <canvas id="board"></canvas>
-    <div class="replay-controls">
-      <button id="restartBtn">Restart</button>
-      <button id="stepBackBtn">&laquo; Step</button>
-      <button id="playBtn">Play</button>
-      <button id="stepFwdBtn">Step &raquo;</button>
-    </div>
-    <div id="stepInfo" class="step-info">Move 0 / 0</div>
+  <div class="profile-page">
+    <h2>🏆 Leaderboard</h2>
+    <div id="leaderboardContent">Loading...</div>
   </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="auth.js"></script>
 <script src="auth-ui.js"></script>
-<script src="replay.js"></script>
+<script src="leaderboard.js"></script>
 </body>
 </html>

@@ -4,6 +4,7 @@ const CELL_PX = 52; // 12 * 52 = 624px board
 const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
 const HANDICAP_P2 = 1; // player 2 moves second, so they start with a 1-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
+const TURN_TIME_LIMITS = { casual: 60, ranked: 30 }; // seconds; private/bot/hotseat are untimed
 
 // ---------- Base shapes (row, col), keyed and prefixed by piece size ----------
 const BASE_SHAPES = {
@@ -87,20 +88,27 @@ const state = {
   score1: 0,
   score2: 0,
   turn: 1,
+  plyCount: 0,        // increments every turn switch (placement or pass) - used to detect turn transitions
   gameOver: false,
-  selected: null,   // { shapeName, orientationIndex }
-  mouseRC: null,    // { row, col } raw hovered cell
-  hover: null,      // { r0, c0, valid }
-  history: [],      // stack of snapshots for undo
-  online: false,    // true once paired with a remote peer
-  myPlayer: null,   // 1 or 2 when online; null in local hotseat mode
-  connecting: false, // true from the moment Connect is clicked until paired (or given up)
-  opponentUserId: null, // the connected peer's Supabase user id, if they're logged in
+  selected: null,     // { shapeName, orientationIndex }
+  mouseRC: null,      // { row, col } raw hovered cell
+  hover: null,        // { r0, c0, valid }
+  history: [],        // stack of snapshots for undo
+  online: false,      // true once paired with a remote peer
+  myPlayer: null,     // 1 or 2 when online; null in local hotseat mode
+  connecting: false,  // true from the moment Connect is clicked until paired (or given up)
+  opponentUserId: null,   // the connected peer's Supabase user id, if they're logged in
+  opponentUsername: null, // the connected peer's username, if they're logged in
   gameStartedAt: null,
-  initialHand: [],  // the pristine drawn hand, for replay reconstruction
-  moveLog: [],      // ordered { player, shapeName, orientationIndex, r0, c0 } placements
-  vsBot: false,     // true when player 2 is controlled by the local bot AI
+  initialHand: [],    // the pristine drawn hand, for replay reconstruction
+  moveLog: [],        // ordered { player, shapeName, orientationIndex, r0, c0 } placements
+  lastMove: null,     // { shapeName, orientationIndex, r0, c0, player } - for the on-board highlight
+  vsBot: false,       // true when player 2 is controlled by the local bot AI
   gameMode: 'private', // 'private' | 'casual' | 'ranked', set from Net.matchedMode once paired
+  passStreak: 0,      // consecutive passes (forced or voluntary); 2 in a row ends the game
+  pendingUndoRequest: false,  // true once I've asked to undo and am waiting on my opponent
+  incomingUndoRequest: false, // true when my opponent has asked to undo and I need to respond
+  turnDeadline: null, // epoch ms when the current online turn times out (casual/ranked only)
 };
 
 function snapshotState() {
@@ -113,10 +121,42 @@ function snapshotState() {
     turn: state.turn,
     gameOver: state.gameOver,
     moveLog: [...state.moveLog],
+    lastMove: state.lastMove,
+    passStreak: state.passStreak,
   };
 }
 
+function applySnapshot(snap) {
+  state.board = snap.board;
+  state.hand1 = snap.hand1;
+  state.hand2 = snap.hand2;
+  state.score1 = snap.score1;
+  state.score2 = snap.score2;
+  state.turn = snap.turn;
+  state.gameOver = snap.gameOver;
+  state.moveLog = snap.moveLog;
+  state.lastMove = snap.lastMove;
+  state.passStreak = snap.passStreak;
+}
+
 function idx(r, c) { return r * BOARD_SIZE + c; }
+
+// ---------- Player display names ----------
+function playerLabel(playerNum) {
+  if (state.online) {
+    if (playerNum === state.myPlayer) {
+      const profile = Auth.getProfile();
+      return profile ? profile.username : `Player ${playerNum}`;
+    }
+    return state.opponentUsername || `Player ${playerNum}`;
+  }
+  if (state.vsBot && playerNum === 2) return 'Bot';
+  if (playerNum === 1) {
+    const profile = Auth.getProfile();
+    return profile ? profile.username : 'Player 1';
+  }
+  return 'Player 2';
+}
 
 function pickRandom(names, count) {
   const picks = [];
@@ -151,17 +191,23 @@ function newGame(remoteHand) {
   state.hand2 = [...hand];
   state.initialHand = [...hand];
   state.moveLog = [];
+  state.lastMove = null;
   state.score1 = 0;
   state.score2 = HANDICAP_P2;
   state.turn = 1;
+  state.plyCount = 0;
+  state.passStreak = 0;
   state.gameOver = false;
   state.selected = null;
   state.mouseRC = null;
   state.hover = null;
   state.history = [];
+  state.pendingUndoRequest = false;
+  state.incomingUndoRequest = false;
   state.gameStartedAt = new Date().toISOString();
+  lastObservedTurnKey = null;
   clearLog();
-  log(`New game started. Both players drew the same hand. Player 2 starts with a ${HANDICAP_P2}-point handicap.`);
+  log(`New game started. Both players drew the same hand. ${playerLabel(2)} starts with a ${HANDICAP_P2}-point handicap.`);
   checkGameEnd();
   render();
 
@@ -299,47 +345,65 @@ function computeFinalScores(board) {
   return { score1, score2, undecided };
 }
 
-// ---------- Turn logic ----------
+// ---------- Turn / pass / end-game logic ----------
 function switchTurn() {
   state.turn = state.turn === 1 ? 2 : 1;
+  state.plyCount += 1;
 }
 
+// Auto-passes the current turn holder for as long as they have no legal
+// move at all (empty hand, or nothing fits) - ending the game once that
+// makes two forced/voluntary passes in a row.
 function checkGameEnd() {
   if (state.gameOver) return;
+  while (!state.gameOver) {
+    const hand = state.turn === 1 ? state.hand1 : state.hand2;
+    if (hasAnyLegalMove(hand, state.board)) return;
 
-  const p1Empty = state.hand1.length === 0;
-  const p2Empty = state.hand2.length === 0;
-
-  if (p1Empty && p2Empty) {
-    endGame('Both players have used all their pieces.');
-    return;
-  }
-
-  // A player with pieces still in hand but nowhere legal to put them is a
-  // genuine blocking condition - end immediately so the other player can't
-  // keep unilaterally reshaping the board while they're stuck. Simply
-  // running out of pieces (hand empty) is NOT this - it just means that
-  // player is done, and the other player still deserves their own turns.
-  const p1Stuck = !p1Empty && !hasAnyLegalMove(state.hand1, state.board);
-  const p2Stuck = !p2Empty && !hasAnyLegalMove(state.hand2, state.board);
-  if (p1Stuck && p2Stuck) {
-    endGame('Neither player has a legal move left.');
-    return;
-  }
-  if (p1Stuck) {
-    endGame('Player 1 has pieces left but no legal move for them.');
-    return;
-  }
-  if (p2Stuck) {
-    endGame('Player 2 has pieces left but no legal move for them.');
-    return;
-  }
-
-  // Skip past a turn belonging to a player who's already used every piece -
-  // they're done, but the other player still gets to keep playing theirs.
-  while ((state.turn === 1 && p1Empty) || (state.turn === 2 && p2Empty)) {
+    const player = state.turn;
+    log(`${playerLabel(player)} has no legal move and passes.`);
+    state.passStreak += 1;
     switchTurn();
+
+    if (state.passStreak >= 2) {
+      endGame('Both players passed in a row.');
+      return;
+    }
   }
+}
+
+function manualPass(fromRemote = false) {
+  if (state.gameOver) return;
+  if (state.online && !fromRemote && state.myPlayer !== state.turn) return;
+
+  const player = state.turn;
+  state.history.push(snapshotState());
+  log(`${playerLabel(player)} passes their turn.`);
+  state.passStreak += 1;
+  switchTurn();
+  state.selected = null;
+  state.hover = null;
+
+  if (state.passStreak >= 2) {
+    endGame('Both players passed in a row.');
+    return;
+  }
+
+  render();
+
+  if (state.online && !fromRemote) {
+    Net.send({ type: 'pass' });
+  }
+
+  checkGameEnd();
+  scheduleBotMove();
+}
+
+function requestPass() {
+  if (state.gameOver || state.connecting || !state.gameStarted) return;
+  if (state.online && state.myPlayer !== state.turn) return;
+  if (state.vsBot && state.turn === 2) return; // it's the bot's turn, not yours
+  manualPass(false);
 }
 
 function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false) {
@@ -355,7 +419,9 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   const hand = player === 1 ? state.hand1 : state.hand2;
   hand.splice(hand.indexOf(shapeName), 1);
   state.moveLog.push({ player, shapeName, orientationIndex, r0, c0 });
-  log(`Player ${player} placed ${shapeName}-pentomino. ${hand.length} piece(s) left.`);
+  state.lastMove = { shapeName, orientationIndex, r0, c0, player };
+  state.passStreak = 0;
+  log(`${playerLabel(player)} placed ${shapeName}-pentomino. ${hand.length} piece(s) left.`);
 
   state.selected = null;
   state.hover = null;
@@ -371,19 +437,7 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   scheduleBotMove();
 }
 
-function applySnapshot(snap) {
-  state.board = snap.board;
-  state.hand1 = snap.hand1;
-  state.hand2 = snap.hand2;
-  state.score1 = snap.score1;
-  state.score2 = snap.score2;
-  state.turn = snap.turn;
-  state.gameOver = snap.gameOver;
-  state.moveLog = snap.moveLog;
-}
-
-function undoTurn(fromRemote = false) {
-  if (state.connecting && !fromRemote) return;
+function performUndo() {
   if (state.history.length === 0) return;
   applySnapshot(state.history.pop());
 
@@ -397,31 +451,78 @@ function undoTurn(fromRemote = false) {
   state.hover = null;
   log('Last move undone.');
   render();
-
-  if (state.online && !fromRemote) {
-    Net.send({ type: 'undo' });
-  }
 }
 
-function endGame(reason) {
+function requestUndo() {
+  if (state.connecting || !state.gameStarted || state.history.length === 0) return;
+
+  if (!state.online) {
+    performUndo();
+    return;
+  }
+
+  if (state.pendingUndoRequest) return;
+  state.pendingUndoRequest = true;
+  render();
+  setLobbyStatus("Undo request sent - waiting for your opponent's response...");
+  Net.send({ type: 'undo-request' });
+}
+
+function respondToUndoRequest(accept) {
+  state.incomingUndoRequest = false;
+  Net.send({ type: 'undo-response', accepted: accept });
+  if (accept) {
+    performUndo();
+  } else {
+    log('You declined the undo request.');
+  }
+  render();
+}
+
+function forfeitGame() {
+  if (!state.gameStarted || state.gameOver || state.connecting) return;
+  if (!window.confirm('Are you sure you want to forfeit this game?')) return;
+
+  const forfeitingPlayer = state.online ? state.myPlayer : (state.vsBot ? 1 : state.turn);
+  const winner = forfeitingPlayer === 1 ? 2 : 1;
+
+  if (state.online) {
+    Net.send({ type: 'forfeit', forfeitingPlayer });
+  }
+  endGame(`${playerLabel(forfeitingPlayer)} forfeited.`, winner);
+}
+
+function endGame(reason, forcedWinner) {
   if (state.gameOver) return;
   state.gameOver = true;
+  stopTurnTimer();
+
   const { score1, score2, undecided } = computeFinalScores(state.board);
   state.score1 = score1;
   state.score2 = score2 + HANDICAP_P2;
 
+  let winner;
   let result;
-  if (state.score1 > state.score2) result = 'Player 1 wins!';
-  else if (state.score2 > state.score1) result = 'Player 2 wins!';
-  else result = "It's a tie!";
-  log(`Game over — ${reason} Final score - P1: ${state.score1}, P2: ${state.score2}, Undecided: ${undecided}. ${result}`);
+  if (forcedWinner !== undefined) {
+    winner = forcedWinner;
+    result = `${playerLabel(winner)} wins!`;
+  } else if (state.score1 > state.score2) {
+    winner = 1;
+    result = `${playerLabel(1)} wins!`;
+  } else if (state.score2 > state.score1) {
+    winner = 2;
+    result = `${playerLabel(2)} wins!`;
+  } else {
+    winner = null;
+    result = "It's a tie!";
+  }
 
-  recordGameResult();
+  log(`Game over — ${reason} Final score - ${playerLabel(1)}: ${state.score1}, ${playerLabel(2)}: ${state.score2}, Undecided: ${undecided}. ${result}`);
+  recordGameResult(winner);
+  render();
 }
 
-async function recordGameResult() {
-  const winner = state.score1 > state.score2 ? 1 : state.score2 > state.score1 ? 2 : null;
-
+async function recordGameResult(winner) {
   let row = null;
   if (state.vsBot) {
     const me = Auth.getUser();
@@ -439,13 +540,23 @@ async function recordGameResult() {
       started_at: state.gameStartedAt,
     };
   } else {
-    if (!state.online || !Net.isHost) return; // only the host records, and only for online games
+    if (!state.online) return;
     const me = Auth.getUser();
-    if (!me || !state.opponentUserId) return; // both sides must be logged in
+    const amILoggedIn = !!me;
+    // Only one side should insert. Prefer the host; if the host isn't
+    // logged in but the joiner is, the joiner records instead, so a game
+    // against a guest host still lands in the logged-in joiner's history.
+    const hostIsLoggedIn = Net.isHost ? amILoggedIn : (state.opponentUserId !== null);
+    const iShouldRecord = Net.isHost ? amILoggedIn : (amILoggedIn && !hostIsLoggedIn);
+    if (!iShouldRecord) return;
+
+    const player1_id = state.myPlayer === 1 ? me.id : state.opponentUserId;
+    const player2_id = state.myPlayer === 2 ? me.id : state.opponentUserId;
+
     row = {
       mode: state.gameMode,
-      player1_id: me.id,
-      player2_id: state.opponentUserId,
+      player1_id,
+      player2_id,
       score1: state.score1,
       score2: state.score2,
       winner,
@@ -493,6 +604,92 @@ function recomputeHover() {
   state.hover = { r0, c0, valid: isValidPlacement(shapeName, orientationIndex, r0, c0, state.board) };
 }
 
+// ---------- Sound ----------
+let audioCtx = null;
+function playDing() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.12, audioCtx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.5);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.5);
+  } catch {
+    // audio unavailable/blocked - not critical, ignore
+  }
+}
+
+function maybeDingForTurn() {
+  const isMyTurn = state.online ? state.turn === state.myPlayer : (state.vsBot ? state.turn === 1 : true);
+  if (isMyTurn) playDing();
+}
+
+// ---------- Per-turn timer (online casual/ranked only) ----------
+let turnTimerInterval = null;
+
+function stopTurnTimer() {
+  if (turnTimerInterval) { clearInterval(turnTimerInterval); turnTimerInterval = null; }
+  state.turnDeadline = null;
+  const el = document.getElementById('turnTimer');
+  if (el) { el.textContent = ''; el.classList.remove('turn-timer-warning'); }
+}
+
+function tickTurnTimer() {
+  const el = document.getElementById('turnTimer');
+  if (!state.turnDeadline || state.gameOver) { stopTurnTimer(); return; }
+  const remainingMs = state.turnDeadline - Date.now();
+  if (remainingMs <= 0) {
+    el.textContent = "Time's up!";
+    if (state.turn === state.myPlayer) {
+      stopTurnTimer();
+      timeoutForfeit();
+    }
+    return;
+  }
+  const secs = Math.ceil(remainingMs / 1000);
+  el.textContent = `⏱ ${secs}s`;
+  el.classList.toggle('turn-timer-warning', secs <= 10);
+}
+
+function restartTurnTimerIfNeeded() {
+  stopTurnTimer();
+  if (state.gameOver || !state.online) return;
+  const limitSec = TURN_TIME_LIMITS[state.gameMode];
+  if (!limitSec) return;
+  state.turnDeadline = Date.now() + limitSec * 1000;
+  turnTimerInterval = setInterval(tickTurnTimer, 250);
+  tickTurnTimer();
+}
+
+function timeoutForfeit() {
+  if (state.gameOver) return;
+  const forfeitingPlayer = state.myPlayer;
+  const winner = forfeitingPlayer === 1 ? 2 : 1;
+  if (state.online) Net.send({ type: 'forfeit', forfeitingPlayer });
+  endGame(`${playerLabel(forfeitingPlayer)} ran out of time.`, winner);
+}
+
+// Fires exactly once per actual turn transition (placement or pass),
+// regardless of how many times render() gets called in between.
+let lastObservedTurnKey = null;
+function handleTurnTransition() {
+  if (!state.gameStarted) { lastObservedTurnKey = null; return; }
+  const key = `${state.turn}-${state.plyCount}-${state.gameOver}`;
+  if (key === lastObservedTurnKey) return;
+  lastObservedTurnKey = key;
+
+  if (!state.gameOver) {
+    maybeDingForTurn();
+  }
+  restartTurnTimerIfNeeded();
+}
+
 // ---------- Rendering ----------
 const canvas = document.getElementById('board');
 canvas.width = BOARD_SIZE * CELL_PX;
@@ -521,6 +718,18 @@ function drawBoard() {
     ctx.stroke();
   }
 
+  // Subtle highlight on the most recently placed piece, so it's easy to
+  // spot if you looked away while the opponent was moving.
+  if (state.lastMove) {
+    const orientation = ORIENTATIONS[state.lastMove.shapeName][state.lastMove.orientationIndex];
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 2;
+    for (const [dr, dc] of orientation) {
+      const r = state.lastMove.r0 + dr, c = state.lastMove.c0 + dc;
+      ctx.strokeRect(c * CELL_PX + 1.5, r * CELL_PX + 1.5, CELL_PX - 3, CELL_PX - 3);
+    }
+  }
+
   if (state.selected && state.hover && !state.gameOver) {
     const orientation = ORIENTATIONS[state.selected.shapeName][state.selected.orientationIndex];
     const color = state.hover.valid
@@ -545,18 +754,23 @@ function render() {
     banner.textContent = 'Game over';
   } else if (state.online) {
     const you = state.myPlayer === state.turn ? ' (your turn)' : " (opponent's turn)";
-    banner.textContent = `Player ${state.turn}'s turn${you}`;
+    banner.textContent = `${playerLabel(state.turn)}'s turn${you}`;
   } else {
-    banner.textContent = `Player ${state.turn}'s turn`;
+    banner.textContent = `${playerLabel(state.turn)}'s turn`;
   }
 
+  document.getElementById('scoreLabel1').textContent = playerLabel(1);
+  document.getElementById('scoreLabel2').textContent = playerLabel(2);
   document.getElementById('score1').textContent = state.score1;
   document.getElementById('score2').textContent = state.score2;
+
+  document.getElementById('handLabel1').textContent = `${playerLabel(1)}'s hand`;
+  document.getElementById('handLabel2').textContent = `${playerLabel(2)}'s hand`;
 
   if (state.gameStarted) {
     const proj = computeFinalScores(state.board);
     document.getElementById('projected').innerHTML =
-      `Projected if game ended now: P1 ${proj.score1} &middot; P2 ${proj.score2 + HANDICAP_P2} &middot; Undecided ${proj.undecided}`;
+      `Projected if game ended now: ${playerLabel(1)} ${proj.score1} &middot; ${playerLabel(2)} ${proj.score2 + HANDICAP_P2} &middot; Undecided ${proj.undecided}`;
   } else {
     document.getElementById('projected').textContent = 'No game in progress yet.';
   }
@@ -570,7 +784,14 @@ function render() {
 
   document.getElementById('rotateBtn').disabled = state.connecting || !state.gameStarted;
   document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted;
-  document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted || state.history.length === 0;
+  document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted
+    || state.history.length === 0 || state.pendingUndoRequest;
+  document.getElementById('passBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
+    || (state.online && state.myPlayer !== state.turn)
+    || (state.vsBot && state.turn === 2);
+  document.getElementById('forfeitBtn').disabled = state.connecting || !state.gameStarted || state.gameOver;
+
+  document.getElementById('undoRequestBanner').style.display = state.incomingUndoRequest ? 'flex' : 'none';
 
   document.getElementById('hotseatBtn').classList.toggle('active', !state.vsBot);
   document.getElementById('vsBotBtn').classList.toggle('active', state.vsBot);
@@ -580,6 +801,11 @@ function render() {
   document.getElementById('casualQueueBtn').disabled = state.online || state.connecting;
   document.getElementById('rankedQueueBtn').disabled = state.online || state.connecting;
   document.getElementById('cancelConnectBtn').style.display = state.connecting ? '' : 'none';
+
+  document.getElementById('chatInput').disabled = !state.online;
+  document.getElementById('chatSendBtn').disabled = !state.online;
+
+  handleTurnTransition();
 }
 
 function updateSelectionInfo() {
@@ -589,10 +815,10 @@ function updateSelectionInfo() {
   } else if (state.gameOver) {
     el.textContent = 'Game over.';
   } else if (!state.selected) {
-    el.textContent = `Player ${state.turn}: click a piece in your hand below to select it.`;
+    el.textContent = `${playerLabel(state.turn)}: click a piece in your hand below to select it.`;
   } else {
     const len = ORIENTATIONS[state.selected.shapeName].length;
-    el.textContent = `Placing ${state.selected.shapeName}-pentomino (orientation ${state.selected.orientationIndex + 1}/${len}). Click the board to place, or press R to rotate/flip.`;
+    el.textContent = `Placing ${state.selected.shapeName}-pentomino (orientation ${state.selected.orientationIndex + 1}/${len}). Click the board to place, or press R / scroll to rotate.`;
   }
 }
 
@@ -647,7 +873,7 @@ function renderHand(elId, hand, player) {
   }
 }
 
-// ---------- Log ----------
+// ---------- Log & chat ----------
 function log(msg) {
   const el = document.getElementById('log');
   const div = document.createElement('div');
@@ -658,6 +884,16 @@ function log(msg) {
 
 function clearLog() {
   document.getElementById('log').innerHTML = '';
+}
+
+function sendChat() {
+  if (!state.online) return;
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  log(`\u{1F4AC} ${playerLabel(state.myPlayer)}: ${text}`);
+  Net.send({ type: 'chat', text });
 }
 
 // ---------- Canvas interaction ----------
@@ -682,9 +918,20 @@ canvas.addEventListener('click', () => {
   commitPlacement(state.selected.shapeName, state.selected.orientationIndex, state.hover.r0, state.hover.c0);
 });
 
+canvas.addEventListener('wheel', (e) => {
+  if (!state.selected) return;
+  e.preventDefault();
+  rotateSelected();
+}, { passive: false });
+
 // ---------- Controls ----------
 document.getElementById('rotateBtn').addEventListener('click', rotateSelected);
-document.getElementById('undoBtn').addEventListener('click', () => undoTurn());
+document.getElementById('undoBtn').addEventListener('click', () => requestUndo());
+document.getElementById('passBtn').addEventListener('click', () => requestPass());
+document.getElementById('forfeitBtn').addEventListener('click', () => forfeitGame());
+
+document.getElementById('undoAcceptBtn').addEventListener('click', () => respondToUndoRequest(true));
+document.getElementById('undoDeclineBtn').addEventListener('click', () => respondToUndoRequest(false));
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'r' || e.key === 'R') {
@@ -708,6 +955,14 @@ document.getElementById('vsBotBtn').addEventListener('click', () => {
   newGame();
 });
 
+document.getElementById('chatSendBtn').addEventListener('click', sendChat);
+document.getElementById('chatInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    sendChat();
+  }
+});
+
 // ---------- Online play ----------
 function setLobbyStatus(text) {
   document.getElementById('onlineStatus').textContent = text;
@@ -720,12 +975,20 @@ function handleNetReady() {
   state.gameMode = Net.matchedMode;
   state.myPlayer = Net.isHost ? 1 : 2;
   state.opponentUserId = null;
+  state.opponentUsername = null;
+  state.pendingUndoRequest = false;
+  state.incomingUndoRequest = false;
   document.getElementById('connectBtn').disabled = true;
   document.getElementById('roomInput').disabled = true;
   setLobbyStatus(`Connected! You are Player ${state.myPlayer}. (${state.gameMode})`);
   log(`Connected to opponent. You are Player ${state.myPlayer}. Mode: ${state.gameMode}.`);
 
-  Net.send({ type: 'identify', userId: Auth.getUser()?.id ?? null });
+  const myProfile = Auth.getProfile();
+  Net.send({
+    type: 'identify',
+    userId: Auth.getUser()?.id ?? null,
+    username: myProfile ? myProfile.username : null,
+  });
 
   if (Net.isHost) {
     newGame();
@@ -739,16 +1002,37 @@ function handleNetData(msg) {
     newGame(msg.hand);
   } else if (msg.type === 'move') {
     commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true);
-  } else if (msg.type === 'undo') {
-    undoTurn(true);
+  } else if (msg.type === 'pass') {
+    manualPass(true);
+  } else if (msg.type === 'undo-request') {
+    state.incomingUndoRequest = true;
+    render();
+  } else if (msg.type === 'undo-response') {
+    state.pendingUndoRequest = false;
+    if (msg.accepted) {
+      performUndo();
+      log('Opponent accepted your undo request.');
+    } else {
+      log('Opponent declined your undo request.');
+    }
+    render();
+  } else if (msg.type === 'forfeit') {
+    const winner = msg.forfeitingPlayer === 1 ? 2 : 1;
+    endGame(`${playerLabel(msg.forfeitingPlayer)} forfeited.`, winner);
   } else if (msg.type === 'identify') {
     state.opponentUserId = msg.userId;
+    state.opponentUsername = msg.username;
+    render();
+  } else if (msg.type === 'chat') {
+    const opponentPlayerNum = state.myPlayer === 1 ? 2 : 1;
+    log(`\u{1F4AC} ${playerLabel(opponentPlayerNum)}: ${msg.text}`);
   }
 }
 
 function handleNetPeerLeft() {
   log('Your opponent disconnected.');
   setLobbyStatus('Opponent disconnected.');
+  stopTurnTimer();
   render();
 }
 

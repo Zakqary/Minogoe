@@ -264,6 +264,12 @@ body {
   image-rendering: pixelated;
 }
 
+.turn-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .turn-banner {
   font-size: 18px;
   font-weight: 600;
@@ -272,12 +278,60 @@ body {
   background: #2a2e37;
 }
 
+.turn-timer {
+  font-size: 15px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #2a2e37;
+  min-width: 20px;
+  text-align: center;
+}
+
+.turn-timer:empty {
+  padding: 0;
+}
+
+.turn-timer.turn-timer-warning {
+  color: #f87171;
+}
+
 .selection-info {
   font-size: 13px;
   opacity: 0.8;
   background: #2a2e37;
   padding: 5px 12px;
   border-radius: 6px;
+}
+
+.rotate-hint {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.undo-request-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #3b3220;
+  border: 1px solid #7c6a2f;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.undo-request-banner button {
+  padding: 5px 10px;
+  border: none;
+  border-radius: 6px;
+  background: #3b4252;
+  color: #e6e8eb;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.undo-request-banner button:hover {
+  background: #4b5568;
 }
 
 #board {
@@ -409,22 +463,31 @@ body {
 
 .controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .controls button {
-  flex: 1;
-  padding: 8px 10px;
+  flex: 1 1 calc(33% - 8px);
+  padding: 8px 6px;
   border: none;
   border-radius: 6px;
   background: #3b4252;
   color: #e6e8eb;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .controls button:hover { background: #4b5568; }
 .controls button:disabled { opacity: 0.4; cursor: default; }
+
+.danger-btn {
+  background: #4c2020 !important;
+}
+
+.danger-btn:hover:not(:disabled) {
+  background: #6b2b2b !important;
+}
 
 .hands {
   display: flex;
@@ -508,6 +571,42 @@ body {
 }
 
 .log div { padding: 1px 0; border-bottom: 1px solid #333844; }
+
+.chat-box {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chat-box input {
+  flex: 1;
+  background: #1b1e24;
+  border: 1px solid #3b4252;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #e6e8eb;
+  font-size: 12px;
+}
+
+.chat-box button {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #3b4252;
+  color: #e6e8eb;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.chat-box button:hover:not(:disabled) {
+  background: #4b5568;
+}
+
+.chat-box input:disabled,
+.chat-box button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 
 .rules-panel {
   background: linear-gradient(160deg, #2a2e37, #262b3a);

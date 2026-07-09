@@ -19,8 +19,18 @@
   <div class="app">
     <div class="board-panel">
       <canvas id="board"></canvas>
-      <div class="turn-banner" id="turnBanner">Choose a mode below to start playing</div>
+      <div class="turn-banner-row">
+        <div class="turn-banner" id="turnBanner">Choose a mode below to start playing</div>
+        <div class="turn-timer" id="turnTimer"></div>
+      </div>
       <div class="selection-info" id="selectionInfo">No piece selected &mdash; click a piece in your hand below.</div>
+      <div class="rotate-hint">Press <strong>R</strong> or scroll your mouse wheel over the board to rotate/flip the selected piece.</div>
+
+      <div id="undoRequestBanner" class="undo-request-banner" style="display:none;">
+        <span>Your opponent wants to undo the last move.</span>
+        <button id="undoAcceptBtn">Accept</button>
+        <button id="undoDeclineBtn">Decline</button>
+      </div>
     </div>
 
     <div class="side-panel">
@@ -57,11 +67,11 @@
 
       <div class="scoreboard">
         <div class="score p1">
-          <div class="label">Player 1</div>
+          <div class="label" id="scoreLabel1">Player 1</div>
           <div class="value" id="score1">0</div>
         </div>
         <div class="score p2">
-          <div class="label">Player 2</div>
+          <div class="label" id="scoreLabel2">Player 2</div>
           <div class="value" id="score2">0</div>
         </div>
       </div>
@@ -69,17 +79,19 @@
 
       <div class="controls">
         <button id="rotateBtn">Rotate / Flip</button>
+        <button id="passBtn">Pass</button>
         <button id="undoBtn">Undo</button>
         <button id="newGameBtn">New Game</button>
+        <button id="forfeitBtn" class="danger-btn">Forfeit</button>
       </div>
 
       <div class="hands">
         <div class="hand p1">
-          <h3>Player 1 hand</h3>
+          <h3 id="handLabel1">Player 1 hand</h3>
           <div id="hand1" class="hand-list"></div>
         </div>
         <div class="hand p2">
-          <h3>Player 2 hand</h3>
+          <h3 id="handLabel2">Player 2 hand</h3>
           <div id="hand2" class="hand-list"></div>
         </div>
       </div>
@@ -89,8 +101,10 @@
       <div class="rules-panel">
         <h3>📜 How to Play</h3>
         <ul>
+          <li>🧩 Each game, both players are dealt the exact same random hand of 10 pieces: 7 pentominoes (5 squares), 2 tetrominoes (4 squares), and 1 tromino (3 squares). Rotate/flip a piece before placing it however you like.</li>
           <li>🟦🟥 Score points by completely surrounding an empty square (or group of squares) with only <em>your</em> color, the board edge, or both.</li>
-          <li>🏁 The game ends as soon as either player has no legal move left &mdash; no one is ever forced into a bad placement.</li>
+          <li>🏆 Whoever has more points when the game ends wins.</li>
+          <li>🙋 If you don't want to (or can't) place a piece, you can Pass. The game ends once both players pass in a row.</li>
           <li>🎁 Player 2 moves second, so they start with a 1-point handicap.</li>
         </ul>
       </div>
@@ -98,6 +112,10 @@
       <div class="log-panel">
         <h3>Log</h3>
         <div id="log" class="log"></div>
+        <div class="chat-box">
+          <input id="chatInput" type="text" placeholder="Say something..." maxlength="200">
+          <button id="chatSendBtn">Send</button>
+        </div>
       </div>
     </div>
   </div>

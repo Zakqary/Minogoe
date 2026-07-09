@@ -164,3 +164,19 @@ alter table public.profiles add column if not exists last_seen timestamptz not n
 -- No new RLS policy needed: "Users can update their own profile" already
 -- covers updating last_seen, and "Profiles are publicly readable" already
 -- covers counting how many rows are recently active.
+
+-- ---------- Phase 8: allow deleting accounts ----------
+
+-- games.player1_id/player2_id originally had no ON DELETE rule, which
+-- defaults to blocking the delete entirely - so removing a user (which
+-- cascades to delete their profile) would fail with "Database error
+-- deleting user" the moment they'd played any recorded game. Switch to
+-- SET NULL so match history survives (the deleted account just shows up
+-- the same way a guest opponent already does).
+alter table public.games drop constraint if exists games_player1_id_fkey;
+alter table public.games add constraint games_player1_id_fkey
+  foreign key (player1_id) references public.profiles(id) on delete set null;
+
+alter table public.games drop constraint if exists games_player2_id_fkey;
+alter table public.games add constraint games_player2_id_fkey
+  foreign key (player2_id) references public.profiles(id) on delete set null;

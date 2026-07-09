@@ -109,6 +109,7 @@ const state = {
   pendingUndoRequest: false,  // true once I've asked to undo and am waiting on my opponent
   incomingUndoRequest: false, // true when my opponent has asked to undo and I need to respond
   turnDeadline: null, // epoch ms when the current online turn times out (casual/ranked only)
+  lastTapCell: null,  // touch only: last cell tapped on the board, for tap-to-preview/tap-again-to-confirm
 };
 
 function snapshotState() {
@@ -218,6 +219,7 @@ function newGame(remoteHand) {
   state.selected = null;
   state.mouseRC = null;
   state.hover = null;
+  state.lastTapCell = null;
   state.history = [];
   state.pendingUndoRequest = false;
   state.incomingUndoRequest = false;
@@ -617,6 +619,7 @@ function selectShape(shapeName) {
   if (state.gameOver || state.connecting) return;
   if (state.online && state.myPlayer !== state.turn) return;
   state.selected = { shapeName, orientationIndex: 0 };
+  state.lastTapCell = null;
   recomputeHover();
   render();
 }
@@ -934,11 +937,20 @@ function sendChat() {
 }
 
 // ---------- Canvas interaction ----------
-canvas.addEventListener('mousemove', (e) => {
+// Shared by mouse and touch: converts a raw client point into a board cell,
+// accounting for the canvas possibly being CSS-scaled (e.g. shrunk to fit a
+// narrow mobile screen) relative to its internal drawing resolution.
+function getBoardCell(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left, y = e.clientY - rect.top;
-  const col = Math.floor(x / CELL_PX), row = Math.floor(y / CELL_PX);
-  state.mouseRC = { row, col };
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const x = (clientX - rect.left) * scaleX;
+  const y = (clientY - rect.top) * scaleY;
+  return { row: Math.floor(y / CELL_PX), col: Math.floor(x / CELL_PX) };
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  state.mouseRC = getBoardCell(e.clientX, e.clientY);
   recomputeHover();
   drawBoard();
 });
@@ -955,6 +967,31 @@ canvas.addEventListener('click', () => {
   commitPlacement(state.selected.shapeName, state.selected.orientationIndex, state.hover.r0, state.hover.c0);
 });
 
+// Touch has no hover, so placement is two-step: tap once to preview a cell,
+// tap the same cell again to confirm. Tapping a different cell just moves
+// the preview there (like moving a mouse), and always overrides a stale
+// preview left over from selecting the piece with the mouse.
+canvas.addEventListener('touchstart', (e) => {
+  if (!state.selected || state.gameOver || state.connecting) return;
+  e.preventDefault();
+
+  const touch = e.touches[0];
+  const cell = getBoardCell(touch.clientX, touch.clientY);
+  const wasSameCell = state.lastTapCell && state.lastTapCell.row === cell.row && state.lastTapCell.col === cell.col;
+  state.lastTapCell = cell;
+
+  if (wasSameCell && state.hover && state.hover.valid) {
+    if (state.online && state.myPlayer !== state.turn) return;
+    commitPlacement(state.selected.shapeName, state.selected.orientationIndex, state.hover.r0, state.hover.c0);
+    state.lastTapCell = null;
+    return;
+  }
+
+  state.mouseRC = cell;
+  recomputeHover();
+  drawBoard();
+}, { passive: false });
+
 canvas.addEventListener('wheel', (e) => {
   if (!state.selected) return;
   e.preventDefault();
@@ -963,6 +1000,7 @@ canvas.addEventListener('wheel', (e) => {
 
 // ---------- Controls ----------
 document.getElementById('rotateBtn').addEventListener('click', rotateSelected);
+document.getElementById('mobileRotateBtn').addEventListener('click', rotateSelected);
 document.getElementById('undoBtn').addEventListener('click', () => requestUndo());
 document.getElementById('passBtn').addEventListener('click', () => requestPass());
 document.getElementById('forfeitBtn').addEventListener('click', () => forfeitGame());

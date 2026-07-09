@@ -23,12 +23,13 @@
   <div class="app">
     <div class="board-panel">
       <canvas id="board"></canvas>
+      <button id="mobileRotateBtn" class="mobile-rotate-btn" aria-label="Rotate piece" type="button">&#8635;</button>
       <div class="turn-banner-row">
         <div class="turn-banner" id="turnBanner">Choose a mode below to start playing</div>
         <div class="turn-timer" id="turnTimer"></div>
       </div>
       <div class="selection-info" id="selectionInfo">No piece selected &mdash; click a piece in your hand below.</div>
-      <div class="rotate-hint">Press <strong>R</strong> or scroll your mouse wheel over the board to rotate/flip the selected piece.</div>
+      <div class="rotate-hint">Press <strong>R</strong>, scroll, or use the rotate button to flip the selected piece. Tap the board once to preview, tap again to place.</div>
 
       <div id="undoRequestBanner" class="undo-request-banner" style="display:none;">
         <span>Your opponent wants to undo the last move.</span>

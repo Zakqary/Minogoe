@@ -807,3 +807,74 @@ h2, h3 {
   color: var(--accent-hover);
   border-color: var(--accent);
 }
+
+/* New element with no desktop-visible state of its own - hidden by default,
+   shown only inside the mobile media query below. */
+.mobile-rotate-btn {
+  display: none;
+}
+
+/* ---------- Mobile (<=900px): everything below is additive only. No rule
+   above this point is touched, so desktop is pixel-identical to before. ---------- */
+@media (max-width: 900px) {
+  .app {
+    flex-direction: column;
+    align-items: center;
+    padding: 12px;
+    gap: 16px;
+  }
+
+  .side-panel,
+  .board-panel,
+  .right-panel {
+    width: 100%;
+    max-width: 520px;
+  }
+
+  .board-panel {
+    position: relative;
+    order: 1;
+  }
+
+  .side-panel {
+    order: 2;
+  }
+
+  .right-panel {
+    order: 3;
+  }
+
+  #board {
+    max-width: 100%;
+    height: auto;
+    touch-action: none;
+  }
+
+  .mobile-rotate-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    right: 10px;
+    bottom: 46px;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    border: 1px solid var(--accent);
+    background: var(--surface);
+    color: var(--accent-hover);
+    font-size: 24px;
+    line-height: 1;
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+    z-index: 5;
+  }
+
+  .mobile-rotate-btn:active {
+    background: var(--accent-soft);
+  }
+
+  .controls button {
+    flex: 1 1 calc(50% - 8px);
+  }
+}

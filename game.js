@@ -306,10 +306,39 @@ function switchTurn() {
 
 function checkGameEnd() {
   if (state.gameOver) return;
-  const p1Stuck = !hasAnyLegalMove(state.hand1, state.board);
-  const p2Stuck = !hasAnyLegalMove(state.hand2, state.board);
-  if (p1Stuck || p2Stuck) {
-    endGame(p1Stuck, p2Stuck);
+
+  const p1Empty = state.hand1.length === 0;
+  const p2Empty = state.hand2.length === 0;
+
+  if (p1Empty && p2Empty) {
+    endGame('Both players have used all their pieces.');
+    return;
+  }
+
+  // A player with pieces still in hand but nowhere legal to put them is a
+  // genuine blocking condition - end immediately so the other player can't
+  // keep unilaterally reshaping the board while they're stuck. Simply
+  // running out of pieces (hand empty) is NOT this - it just means that
+  // player is done, and the other player still deserves their own turns.
+  const p1Stuck = !p1Empty && !hasAnyLegalMove(state.hand1, state.board);
+  const p2Stuck = !p2Empty && !hasAnyLegalMove(state.hand2, state.board);
+  if (p1Stuck && p2Stuck) {
+    endGame('Neither player has a legal move left.');
+    return;
+  }
+  if (p1Stuck) {
+    endGame('Player 1 has pieces left but no legal move for them.');
+    return;
+  }
+  if (p2Stuck) {
+    endGame('Player 2 has pieces left but no legal move for them.');
+    return;
+  }
+
+  // Skip past a turn belonging to a player who's already used every piece -
+  // they're done, but the other player still gets to keep playing theirs.
+  while ((state.turn === 1 && p1Empty) || (state.turn === 2 && p2Empty)) {
+    switchTurn();
   }
 }
 
@@ -374,17 +403,12 @@ function undoTurn(fromRemote = false) {
   }
 }
 
-function endGame(p1Stuck, p2Stuck) {
+function endGame(reason) {
   if (state.gameOver) return;
   state.gameOver = true;
   const { score1, score2, undecided } = computeFinalScores(state.board);
   state.score1 = score1;
   state.score2 = score2 + HANDICAP_P2;
-
-  let reason;
-  if (p1Stuck && p2Stuck) reason = 'Neither player has a legal move left.';
-  else if (p1Stuck) reason = 'Player 1 has no legal move left.';
-  else reason = 'Player 2 has no legal move left.';
 
   let result;
   if (state.score1 > state.score2) result = 'Player 1 wins!';

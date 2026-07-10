@@ -2,7 +2,7 @@
 const BOARD_SIZE = 12;
 const CELL_PX = 52; // 12 * 52 = 624px board
 const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
-const HANDICAP_P2 = 1; // player 2 moves second, so they start with a 1-point head start
+const HANDICAP_POINTS = 1; // whoever moves second gets a 1-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
 const TURN_TIME_LIMITS = { casual: 120, ranked: 60 }; // seconds; private/bot/hotseat are untimed
 const ACTIVE_MATCH_KEY = 'minogoe_activeMatch'; // localStorage key for reconnect-after-reload
@@ -89,6 +89,7 @@ const state = {
   score1: 0,
   score2: 0,
   turn: 1,
+  startingPlayer: 1,  // whoever moved first this game - always 1, except vs Bot where it's randomized
   plyCount: 0,        // increments every turn switch (placement or pass) - used to detect turn transitions
   gameOver: false,
   selected: null,     // { shapeName, orientationIndex }
@@ -196,6 +197,13 @@ function applyFullState(msg) {
 
 function idx(r, c) { return r * BOARD_SIZE + c; }
 
+// Whoever didn't move first gets the handicap point - always player 2 except
+// in vs Bot games, where the starting player (and so the handicap recipient)
+// is randomized.
+function handicapPlayer() {
+  return state.startingPlayer === 1 ? 2 : 1;
+}
+
 // ---------- Player display names ----------
 function playerLabel(playerNum) {
   if (state.online) {
@@ -264,9 +272,13 @@ function newGame(remoteHand) {
   state.initialHand = [...hand];
   state.moveLog = [];
   state.lastMove = null;
-  state.score1 = 0;
-  state.score2 = HANDICAP_P2;
-  state.turn = 1;
+  // Who goes first is always player 1, except vs Bot, where it's a coin
+  // flip each game - previously the human (always player 1) went first
+  // every single time.
+  state.startingPlayer = (state.vsBot && Math.random() < 0.5) ? 2 : 1;
+  state.turn = state.startingPlayer;
+  state.score1 = handicapPlayer() === 1 ? HANDICAP_POINTS : 0;
+  state.score2 = handicapPlayer() === 2 ? HANDICAP_POINTS : 0;
   state.plyCount = 0;
   state.passStreak = 0;
   state.gameOver = false;
@@ -285,7 +297,7 @@ function newGame(remoteHand) {
   state.gameStartedAt = new Date().toISOString();
   lastObservedTurnKey = null;
   clearLog();
-  log(`New game started. Both players drew the same hand. ${playerLabel(2)} starts with a ${HANDICAP_P2}-point handicap.`);
+  log(`New game started. Both players drew the same hand. ${playerLabel(handicapPlayer())} starts with a ${HANDICAP_POINTS}-point handicap.`);
   playGameStartChime();
   checkGameEnd();
   render();
@@ -293,6 +305,8 @@ function newGame(remoteHand) {
   if (state.online && Net.isHost && !isRemote) {
     Net.send({ type: 'newgame', hand });
   }
+
+  scheduleBotMove(); // no-op unless this is a vs Bot game where the bot won the coin flip to go first
 }
 
 // Casual/ranked matches require both players to agree before starting a
@@ -649,8 +663,8 @@ function endGame(reason, forcedWinner) {
   }
 
   const { score1, score2, undecided, scoringCells } = computeFinalScores(state.board);
-  state.score1 = score1;
-  state.score2 = score2 + HANDICAP_P2;
+  state.score1 = score1 + (handicapPlayer() === 1 ? HANDICAP_POINTS : 0);
+  state.score2 = score2 + (handicapPlayer() === 2 ? HANDICAP_POINTS : 0);
   state.scoringCells = scoringCells;
 
   let winner;
@@ -1033,8 +1047,10 @@ function render() {
 
   if (state.gameStarted) {
     const proj = computeFinalScores(state.board);
+    const proj1 = proj.score1 + (handicapPlayer() === 1 ? HANDICAP_POINTS : 0);
+    const proj2 = proj.score2 + (handicapPlayer() === 2 ? HANDICAP_POINTS : 0);
     document.getElementById('projected').innerHTML =
-      `Projected if game ended now: ${playerLabel(1)} ${proj.score1} &middot; ${playerLabel(2)} ${proj.score2 + HANDICAP_P2} &middot; Undecided ${proj.undecided}`;
+      `Projected if game ended now: ${playerLabel(1)} ${proj1} &middot; ${playerLabel(2)} ${proj2} &middot; Undecided ${proj.undecided}`;
   } else {
     document.getElementById('projected').textContent = 'No game in progress yet.';
   }

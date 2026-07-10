@@ -536,15 +536,29 @@ h2, h3 {
 .online-panel button:hover { border-color: var(--accent); color: var(--accent-hover); }
 .online-panel button:disabled { opacity: 0.4; cursor: default; border-color: var(--border); color: var(--text); }
 
-#connectBtn, #casualQueueBtn, #rankedQueueBtn, #newGameBtn {
+#connectBtn, #casualQueueBtn, #rankedQueueBtn, #newGameBtn, #spStartBtn {
   background: var(--accent);
   border-color: var(--accent);
   color: #211505;
   font-weight: 700;
 }
 
+.sp-current-piece {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.sp-current-piece canvas {
+  background: var(--surface-2);
+  border-radius: 5px;
+  padding: 3px;
+}
+
 #connectBtn:hover:not(:disabled), #casualQueueBtn:hover:not(:disabled),
-#rankedQueueBtn:hover:not(:disabled), #newGameBtn:hover:not(:disabled) {
+#rankedQueueBtn:hover:not(:disabled), #newGameBtn:hover:not(:disabled), #spStartBtn:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   color: #211505 !important;

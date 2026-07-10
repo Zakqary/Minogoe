@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Minogoe - Singleplayer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <span id="onlineCount" class="online-count">&nbsp;</span>
+    <a href="index.html"><img src="Minogoe.png" alt="Minogoe" class="logo"></a>
+    <div id="authWidget" class="auth-widget"></div>
+  </header>
+  <div class="top-announcement">
+    <span class="announcement-pill">$200 Minogoe tournament July 19th! Sign up in the Discord</span>
+  </div>
+  <nav class="site-nav">
+    <a href="index.html">Play</a>
+    <a href="singleplayer.html">Singleplayer</a>
+    <a href="profile.html">Profile</a>
+    <a href="leaderboard.html">Leaderboard</a>
+    <a href="recent.html">Recent Games</a>
+  </nav>
+  <div class="app">
+    <div class="board-panel">
+      <div class="board-wrapper">
+        <canvas id="board"></canvas>
+        <button id="mobileRotateBtn" class="mobile-rotate-btn" aria-label="Rotate piece" type="button">&#8635;</button>
+      </div>
+      <div class="turn-banner-row">
+        <div class="turn-banner" id="spBanner">Click Start to begin</div>
+        <div class="turn-timer" id="spTimer">0:00.00</div>
+      </div>
+      <div class="selection-info" id="spPieceInfo">You'll get one random piece at a time - place it anywhere it fits.</div>
+      <div class="rotate-hint">Press <strong>R</strong>, scroll, or use the rotate button to flip the current piece. Tap the board once to preview, tap again to place.</div>
+    </div>
+
+    <div class="side-panel">
+      <div class="online-panel">
+        <h3>Speedrun</h3>
+        <button id="spStartBtn">Start</button>
+        <div class="sp-current-piece">
+          <canvas id="spCurrentPieceIcon" style="display:none;"></canvas>
+          <span id="spCurrentPieceLabel">-</span>
+        </div>
+        <div class="online-status" id="spSaveStatus"></div>
+      </div>
+
+      <div class="rules-panel">
+        <h3>How to Play</h3>
+        <ul>
+          <li>You get one random piece at a time &mdash; 70% pentomino (5 squares), 20% tetromino (4), 10% tromino (3). Rotate/flip it however you like before placing.</li>
+          <li>Place it anywhere it legally fits on the board.</li>
+          <li>Fully enclose a pocket of <em>4 or fewer</em> empty squares and it's captured forever &mdash; the pieces that walled it in are cleared away, freeing that space back up. Bigger enclosures don't count, so you can't just wall off the whole board at once.</li>
+          <li>Clear every square on the board to finish your run &mdash; the timer stops and your time is saved if it's your best.</li>
+          <li>If your current piece has no legal placement anywhere, the run ends early. Fastest completed times appear on the leaderboard.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="right-panel">
+      <div class="log-panel">
+        <h3>Top Times</h3>
+        <div id="spLeaderboard">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <a href="https://discord.gg/y26Gm4wddj" target="_blank" rel="noopener noreferrer">Join the Minogoe Discord!</a>
+    <span class="footer-credit">Made by Zakqary Roy</span>
+  </footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="auth-ui.js"></script>
+<script src="presence.js"></script>
+<script src="singleplayer.js"></script>
+</body>
+</html>

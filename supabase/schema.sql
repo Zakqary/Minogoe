@@ -180,3 +180,33 @@ alter table public.games add constraint games_player1_id_fkey
 alter table public.games drop constraint if exists games_player2_id_fkey;
 alter table public.games add constraint games_player2_id_fkey
   foreign key (player2_id) references public.profiles(id) on delete set null;
+
+-- ---------- Phase 9: singleplayer speedrun leaderboard ----------
+
+-- One row per user - only their personal-best time is kept (the client
+-- checks the existing time before inserting/updating; see saveScoreIfBest()
+-- in singleplayer.js). Unlike games, there's no second player's row to keep
+-- in sync, so on delete cascade is fine here.
+create table if not exists public.singleplayer_runs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references public.profiles(id) on delete cascade,
+  time_ms integer not null,
+  completed_at timestamptz not null default now()
+);
+
+alter table public.singleplayer_runs enable row level security;
+
+drop policy if exists "Singleplayer runs are publicly readable" on public.singleplayer_runs;
+create policy "Singleplayer runs are publicly readable"
+  on public.singleplayer_runs for select
+  using (true);
+
+drop policy if exists "Users can insert their own singleplayer run" on public.singleplayer_runs;
+create policy "Users can insert their own singleplayer run"
+  on public.singleplayer_runs for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Users can update their own singleplayer run" on public.singleplayer_runs;
+create policy "Users can update their own singleplayer run"
+  on public.singleplayer_runs for update
+  using (auth.uid() = user_id);

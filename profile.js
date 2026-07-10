@@ -63,8 +63,13 @@ async function renderProfilePage() {
     </tr>`;
   }).join('');
 
+  const joinedText = profile.created_at
+    ? new Date(profile.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+    : null;
+
   container.innerHTML = `
     <h2>${escapeHtml(profile.username)}</h2>
+    ${joinedText ? `<div class="profile-joined">Account created on ${escapeHtml(joinedText)}</div>` : ''}
     <div class="profile-stats">
       <div class="stat"><div class="stat-value">${profile.elo_rating}</div><div class="stat-label">ELO</div></div>
       <div class="stat"><div class="stat-value">${profile.games_played}</div><div class="stat-label">Games</div></div>

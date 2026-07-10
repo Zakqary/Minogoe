@@ -53,11 +53,17 @@ async function renderProfilePage() {
     const myPlayerNum = isP1 ? 1 : 2;
     const resultText = g.winner == null ? 'Tie' : (g.winner === myPlayerNum ? 'Win' : 'Loss');
     const date = new Date(g.ended_at).toLocaleString();
+    // A forfeit/timeout win isn't decided by the board tally - show W/FF
+    // instead of a territory score that was never actually the deciding
+    // factor (and can even make the winner look like they had fewer points).
+    const scoreText = g.forfeit
+      ? (g.winner === myPlayerNum ? 'W - FF' : 'FF - W')
+      : `${myScore} - ${oppScore}`;
     return `<tr>
       <td>${date}</td>
       <td>${escapeHtml(g.mode)}</td>
       <td>${oppLink}</td>
-      <td>${myScore} - ${oppScore}</td>
+      <td>${scoreText}</td>
       <td class="result-${resultText.toLowerCase()}">${resultText}</td>
       <td><a href="replay.html?game=${encodeURIComponent(g.id)}">Replay</a></td>
     </tr>`;

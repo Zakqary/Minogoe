@@ -32,9 +32,15 @@ async function renderRecentGames() {
     const p2Name = g.player2 ? g.player2.username : (g.mode === 'bot' ? 'Bot' : 'Guest');
     const p1Link = playerLink(g.player1 ? g.player1.id : null, p1Name);
     const p2Link = playerLink(g.player2 ? g.player2.id : null, p2Name);
+    // A forfeit/timeout win isn't decided by the board tally - show W/FF
+    // instead of a territory score that was never actually the deciding
+    // factor for how the game ended.
+    const scoreText = g.forfeit
+      ? (g.winner === 1 ? 'W - FF' : 'FF - W')
+      : `${g.score1} - ${g.score2}`;
     return `<tr>
       <td>${p1Link} vs ${p2Link}</td>
-      <td>${g.score1} - ${g.score2}</td>
+      <td>${scoreText}</td>
       <td>${escapeHtml(g.mode)}</td>
       <td>${timeAgo(g.ended_at)}</td>
       <td><a href="replay.html?game=${encodeURIComponent(g.id)}">Replay</a></td>

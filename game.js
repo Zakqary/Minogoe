@@ -92,6 +92,8 @@ const state = {
   startingPlayer: 1,  // whoever moved first this game - always 1, except vs Bot where it's randomized
   plyCount: 0,        // increments every turn switch (placement or pass) - used to detect turn transitions
   gameOver: false,
+  winner: undefined,  // 1, 2, or null (tie) - set once gameOver
+  forfeit: false,     // true if the game ended by timeout/forfeit rather than territory
   selected: null,     // { shapeName, orientationIndex }
   mouseRC: null,      // { row, col } raw hovered cell
   hover: null,        // { r0, c0, valid }
@@ -282,6 +284,8 @@ function newGame(remoteHand) {
   state.plyCount = 0;
   state.passStreak = 0;
   state.gameOver = false;
+  state.winner = undefined;
+  state.forfeit = false;
   state.selected = null;
   state.mouseRC = null;
   state.hover = null;
@@ -885,16 +889,20 @@ function manualPass(fromRemote = false) {
   state.selected = null;
   state.hover = null;
 
+  // Sent before the game-over check below, not after - a pass that happens
+  // to be the second in a row (ending the game) still needs to reach the
+  // opponent, otherwise their client never learns the game ended and is
+  // left waiting on a turn that will never come.
+  if (state.online && !fromRemote) {
+    Net.send({ type: 'pass', seq: state.plyCount });
+  }
+
   if (state.passStreak >= 2) {
     endGame('Both players passed in a row.');
     return;
   }
 
   render();
-
-  if (state.online && !fromRemote) {
-    Net.send({ type: 'pass' });
-  }
 
   checkGameEnd();
   scheduleBotMove();
@@ -933,7 +941,7 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   render();
 
   if (state.online && !fromRemote) {
-    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t });
+    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq: state.plyCount });
   }
 
   scheduleBotMove();
@@ -1004,6 +1012,15 @@ function forfeitGame() {
 function endGame(reason, forcedWinner) {
   if (state.gameOver) return;
   state.gameOver = true;
+  // Every call site that passes forcedWinner does so specifically because
+  // the game ended by timeout/forfeit rather than by territory (see
+  // forfeitGame, timeoutForfeit, timeoutOpponentForfeit, the network
+  // 'forfeit' handler, and handleOpponentTimeout) - a natural end (both
+  // players passed) never provides one. This is what downstream displays
+  // (scoreboard, replays, profile/recent history) use to show "W - FF"
+  // instead of a territory tally that was never actually the deciding
+  // factor for how the game ended.
+  state.forfeit = forcedWinner !== undefined;
   stopTurnTimer();
   clearInterval(reconnectCountdownTimer);
   clearTimeout(resyncFallbackTimer);
@@ -1032,13 +1049,17 @@ function endGame(reason, forcedWinner) {
     winner = null;
     result = "It's a tie!";
   }
+  state.winner = winner;
 
-  log(`Game over — ${reason} Final score - ${playerLabel(1)}: ${state.score1}, ${playerLabel(2)}: ${state.score2}, Undecided: ${undecided}. ${result}`);
-  recordGameResult(winner);
+  const scoreLine = state.forfeit
+    ? `${playerLabel(1)}: ${winner === 1 ? 'W' : 'FF'}, ${playerLabel(2)}: ${winner === 2 ? 'W' : 'FF'}`
+    : `${playerLabel(1)}: ${state.score1}, ${playerLabel(2)}: ${state.score2}, Undecided: ${undecided}`;
+  log(`Game over — ${reason} Final score - ${scoreLine}. ${result}`);
+  recordGameResult(winner, state.forfeit);
   render();
 }
 
-async function recordGameResult(winner) {
+async function recordGameResult(winner, forfeit) {
   let row = null;
   if (state.vsBot) {
     const me = Auth.getUser();
@@ -1050,6 +1071,7 @@ async function recordGameResult(winner) {
       score1: state.score1,
       score2: state.score2,
       winner,
+      forfeit,
       initial_hand: state.initialHand,
       move_log: state.moveLog,
       board_size: BOARD_SIZE,
@@ -1076,6 +1098,7 @@ async function recordGameResult(winner) {
       score1: state.score1,
       score2: state.score2,
       winner,
+      forfeit,
       initial_hand: state.initialHand,
       move_log: state.moveLog,
       board_size: BOARD_SIZE,
@@ -1389,8 +1412,13 @@ function render() {
 
   document.getElementById('scoreLabel1').innerHTML = playerLink(playerProfileId(1), playerLabel(1));
   document.getElementById('scoreLabel2').innerHTML = playerLink(playerProfileId(2), playerLabel(2));
-  document.getElementById('score1').textContent = state.score1;
-  document.getElementById('score2').textContent = state.score2;
+  if (state.gameOver && state.forfeit) {
+    document.getElementById('score1').textContent = state.winner === 1 ? 'W' : 'FF';
+    document.getElementById('score2').textContent = state.winner === 2 ? 'W' : 'FF';
+  } else {
+    document.getElementById('score1').textContent = state.score1;
+    document.getElementById('score2').textContent = state.score2;
+  }
 
   document.getElementById('handLabel1').innerHTML = `${playerLink(playerProfileId(1), playerLabel(1))}'s hand`;
   document.getElementById('handLabel2').innerHTML = `${playerLink(playerProfileId(2), playerLabel(2))}'s hand`;
@@ -1650,7 +1678,33 @@ let reconnectCountdownTimer = null;
 let resyncFallbackTimer = null;
 let opponentDisconnectFallbackTimer = null;
 let rejoinTimeoutId = null;
+let resyncRequestTimeoutId = null;
 const REJOIN_TIMEOUT_MS = 15000;
+const RESYNC_REQUEST_TIMEOUT_MS = 5000;
+
+// Requests the opponent's canonical state after noticing a gap in the move
+// sequence - a lighter, faster fix than a full reconnect for the common
+// case of one dropped message on an otherwise-fine connection. Freezes the
+// board briefly while waiting; if the resync itself never arrives (the
+// connection is actually unhealthy, not just missing one message), escalate
+// to the heavier full-reconnect path instead of waiting forever.
+function requestResync() {
+  if (state.connecting) return; // already recovering some other way
+  state.connecting = true;
+  render();
+  setLobbyStatus('Game state out of sync - resyncing...');
+  Net.send({ type: 'resync-request' });
+
+  clearTimeout(resyncRequestTimeoutId);
+  resyncRequestTimeoutId = setTimeout(() => {
+    if (!state.connecting) return; // already resolved
+    // This attempt failed - reset connecting so handleConnectionStale()'s
+    // own guard doesn't just bounce off it, then let it start a fresh
+    // (heavier) recovery phase.
+    state.connecting = false;
+    handleConnectionStale();
+  }, RESYNC_REQUEST_TIMEOUT_MS);
+}
 
 function saveActiveMatch() {
   if (state.gameMode !== 'casual' && state.gameMode !== 'ranked') return;
@@ -1902,12 +1956,25 @@ function handleNetData(msg) {
   }
 }
 
+// A move/pass carries the sender's plyCount right after they applied it -
+// i.e. "this is action number seq." If it doesn't match exactly what we
+// expect next, either we missed an earlier message (a brief connectivity
+// blip too short to trip the data-channel staleness check, e.g. from
+// switching tabs back and forth repeatedly) or this one is a stale
+// duplicate - either way, applying it blindly would only compound the
+// drift. Request a full resync instead of guessing.
+function isExpectedNextAction(seq) {
+  return typeof seq !== 'number' || seq === state.plyCount + 1;
+}
+
 function handleNetDataInner(msg) {
   if (msg.type === 'newgame') {
     newGame(msg.hand);
   } else if (msg.type === 'move') {
+    if (!isExpectedNextAction(msg.seq)) { requestResync(); return; }
     commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true, msg.t);
   } else if (msg.type === 'pass') {
+    if (!isExpectedNextAction(msg.seq)) { requestResync(); return; }
     manualPass(true);
   } else if (msg.type === 'undo-request') {
     state.incomingUndoRequest = true;
@@ -1934,8 +2001,15 @@ function handleNetDataInner(msg) {
     playChatPing();
   } else if (msg.type === 'elo-result') {
     showEloResult(state.myPlayer === 1 ? msg.delta_p1 : msg.delta_p2);
+  } else if (msg.type === 'resync-request') {
+    // The peer noticed a gap/mismatch in the move sequence and wants our
+    // canonical state to catch up - same payload used for the post-rejoin
+    // resync, just triggered in-band instead of after a reconnect.
+    Net.send({ type: 'resync', ...serializeFullState() });
   } else if (msg.type === 'resync') {
     clearTimeout(resyncFallbackTimer);
+    clearTimeout(resyncRequestTimeoutId);
+    state.connecting = false;
     applyFullState(msg);
     log('Reconnected — game state restored.');
     setLobbyStatus(`Connected! You are Player ${state.myPlayer}. (${state.gameMode})`);

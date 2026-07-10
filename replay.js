@@ -318,11 +318,17 @@ async function loadReplay() {
   const p2Name = data.player2 ? data.player2.username : 'Guest';
   const resultText = data.winner == null
     ? 'Tie'
-    : `${data.winner === 1 ? p1Name : p2Name} won`;
+    : `${data.winner === 1 ? p1Name : p2Name} won${data.forfeit ? ' by forfeit' : ''}`;
+  // A forfeit/timeout win isn't decided by the board tally - show W/FF
+  // instead of a territory score that was never actually the deciding
+  // factor (and can even make the winner look like they had fewer points).
+  const scoreText = data.forfeit
+    ? (data.winner === 1 ? 'W - FF' : 'FF - W')
+    : `${data.score1} - ${data.score2}`;
 
   metaEl.innerHTML = `
     <div><strong>${escapeHtml(p1Name)}</strong> (Player 1, blue) vs <strong>${escapeHtml(p2Name)}</strong> (Player 2, red)</div>
-    <div>Mode: ${escapeHtml(data.mode)} &middot; Final score: ${data.score1} - ${data.score2} &middot; ${escapeHtml(resultText)}</div>
+    <div>Mode: ${escapeHtml(data.mode)} &middot; Final score: ${scoreText} &middot; ${escapeHtml(resultText)}</div>
     <div>${new Date(data.ended_at).toLocaleString()}</div>
   `;
 

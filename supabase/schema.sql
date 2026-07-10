@@ -296,3 +296,12 @@ from (
   group by player_id
 ) rs
 where p.id = rs.player_id;
+
+-- ---------- Phase 11: distinguish forfeit/timeout wins from territory wins ----------
+
+-- score1/score2 on a forfeited game are just whatever the board happened to
+-- look like at the moment someone ran out of time or quit - not what
+-- actually decided the outcome. Replays/profile/recent-games history use
+-- this flag to show "W - FF" instead of that (potentially misleading, e.g.
+-- the "loser" having more board territory than the forfeit winner) tally.
+alter table public.games add column if not exists forfeit boolean not null default false;

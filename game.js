@@ -1612,6 +1612,9 @@ function setLobbyStatus(text) {
 // ---------- Reconnect (casual/ranked only) ----------
 let reconnectCountdownTimer = null;
 let resyncFallbackTimer = null;
+let opponentDisconnectFallbackTimer = null;
+let rejoinTimeoutId = null;
+const REJOIN_TIMEOUT_MS = 15000;
 
 function saveActiveMatch() {
   if (state.gameMode !== 'casual' && state.gameMode !== 'ranked') return;
@@ -1641,10 +1644,24 @@ function handleOpponentDisconnected(graceMs) {
   clearInterval(reconnectCountdownTimer);
   tick();
   reconnectCountdownTimer = setInterval(tick, 1000);
+
+  // Safety net: this freeze is normally lifted by the server sending either
+  // a fresh 'ready' (opponent reconnected) or 'opponent-timeout' (grace
+  // period expired). If either message is ever lost - a server hiccup, or
+  // this client's own signaling socket having issues during the wait -
+  // there would otherwise be nothing to ever unfreeze the board again.
+  // Force a local resolution shortly after the server's own grace period
+  // should have ended if nothing else has by then.
+  clearTimeout(opponentDisconnectFallbackTimer);
+  opponentDisconnectFallbackTimer = setTimeout(() => {
+    if (!state.connecting || state.gameOver) return;
+    handleOpponentTimeout();
+  }, (graceMs || 30000) + 5000);
 }
 
 function handleOpponentTimeout() {
   clearInterval(reconnectCountdownTimer);
+  clearTimeout(opponentDisconnectFallbackTimer);
   state.connecting = false;
   if (state.gameOver || !state.gameStarted) return;
   endGame('Opponent did not reconnect in time.', state.myPlayer);
@@ -1652,6 +1669,8 @@ function handleOpponentTimeout() {
 
 function handleRejoinReady() {
   clearInterval(reconnectCountdownTimer);
+  clearTimeout(opponentDisconnectFallbackTimer);
+  clearTimeout(rejoinTimeoutId);
   state.online = true;
   state.connecting = false;
   state.vsBot = false;
@@ -1726,6 +1745,25 @@ function tryResumeActiveMatch(retriesLeft = 10) {
   render();
   updateResumeMatchBanner();
   setLobbyStatus('Reconnecting to your previous match...');
+
+  // Safety net: if the rejoin attempt never resolves either way - the
+  // signaling socket errors out, stalls, or closes before a 'ready' or
+  // 'rejoin-failed' message comes back - nothing else here would ever
+  // reset state.connecting, permanently hiding the resume banner (its
+  // visibility requires !state.connecting) with no way to retry. Unlike an
+  // explicit 'rejoin-failed' from the server, a bare timeout doesn't clear
+  // the saved match record, since this is more likely a transient network
+  // hiccup than a genuinely dead match - the banner reappears so the
+  // "Rejoin" button can just be tried again.
+  clearTimeout(rejoinTimeoutId);
+  rejoinTimeoutId = setTimeout(() => {
+    if (!state.connecting) return; // already resolved one way or another
+    state.connecting = false;
+    setLobbyStatus('Reconnect attempt timed out. Try again below.');
+    render();
+    updateResumeMatchBanner();
+  }, REJOIN_TIMEOUT_MS);
+
   Net.rejoin({
     serverUrl: SIGNALING_SERVER_URL,
     matchId: record.matchId,
@@ -1738,6 +1776,7 @@ function tryResumeActiveMatch(retriesLeft = 10) {
     onOpponentDisconnected: handleOpponentDisconnected,
     onOpponentTimeout: handleOpponentTimeout,
     onRejoinFailed: (reason) => {
+      clearTimeout(rejoinTimeoutId);
       clearActiveMatch();
       state.connecting = false;
       setLobbyStatus(reason || 'Could not reconnect to your previous match.');
@@ -1790,7 +1829,22 @@ function handleNetReady() {
   saveActiveMatch();
 }
 
+// Wrapped so a bad/unexpected message (e.g. arriving mid-reconnect, out of
+// the order a normal game would produce it) can never leave state changed
+// but the DOM stale - an uncaught exception here would otherwise abort
+// partway through a branch and skip its render() call, leaving click
+// handlers bound to whatever was last drawn instead of current reality.
 function handleNetData(msg) {
+  try {
+    handleNetDataInner(msg);
+  } catch (err) {
+    console.error('Pentomino: error handling network message', msg, err);
+  } finally {
+    render();
+  }
+}
+
+function handleNetDataInner(msg) {
   if (msg.type === 'newgame') {
     newGame(msg.hand);
   } else if (msg.type === 'move') {

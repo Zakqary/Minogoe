@@ -443,6 +443,90 @@ function boundedRegionSize(simBoard, startIdx, opponent, cap) {
   return { size: queue.length, touchesOpponent, capped: false };
 }
 
+// Every cell the opponent's remaining hand could still legally reach on the
+// given board, in any orientation. Used to tell a real, defensible capture
+// apart from a region that only "scores" per computeFinalScores because the
+// opponent simply hasn't placed anything near it yet - which describes most
+// of the board on the bot's very first move, and plenty of wide-open space
+// even well into a game. The opponent's hand only shrinks over a game (no
+// redraws), so this only needs recomputing once per bot turn, not per
+// candidate.
+function computeOpponentReachableCells(board, opponentHand) {
+  const reachable = new Set();
+  const distinctShapes = new Set(opponentHand);
+  for (const shapeName of distinctShapes) {
+    for (const orientation of ORIENTATIONS[shapeName]) {
+      const maxDr = Math.max(...orientation.map(p => p[0]));
+      const maxDc = Math.max(...orientation.map(p => p[1]));
+      for (let r0 = 0; r0 <= BOARD_SIZE - 1 - maxDr; r0++) {
+        for (let c0 = 0; c0 <= BOARD_SIZE - 1 - maxDc; c0++) {
+          let ok = true;
+          const cells = [];
+          for (const [dr, dc] of orientation) {
+            const cell = idx(r0 + dr, c0 + dc);
+            if (board[cell] !== 0) { ok = false; break; }
+            cells.push(cell);
+          }
+          if (ok) { for (const c of cells) reachable.add(c); }
+        }
+      }
+    }
+  }
+  return reachable;
+}
+
+// Bot-only variant of computeFinalScores(): a region only counts toward
+// this "trusted" tally if, on top of being fully mono-bordered, none of its
+// cells are reachable by the opponent's remaining hand. computeFinalScores
+// answers "who would this belong to if the game ended right now," which is
+// the right question for real end-of-game scoring but a poor one for move
+// selection - a mono-bordered region the opponent can still drop a piece
+// into isn't a secured advantage, it's just space they haven't gotten
+// around to contesting yet, and trusting it is exactly what leads the bot
+// to stake out large, undefended "captures" that get walked into and
+// nullified a turn or two later.
+function computeTrustedScores(board, opponentReachable) {
+  const visited = new Uint8Array(board.length);
+  let trusted1 = 0, trusted2 = 0;
+  for (let i = 0; i < board.length; i++) {
+    if (board[i] === 0 && !visited[i]) {
+      const regionCells = [i];
+      visited[i] = 1;
+      let qi = 0;
+      const borderOwners = new Set();
+      let reachable = opponentReachable.has(i);
+      while (qi < regionCells.length) {
+        const cur = regionCells[qi++];
+        const r = Math.floor(cur / BOARD_SIZE), c = cur % BOARD_SIZE;
+        for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+          if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+          const nidx = idx(nr, nc);
+          const val = board[nidx];
+          if (val === 0) {
+            if (!visited[nidx]) {
+              visited[nidx] = 1;
+              regionCells.push(nidx);
+              if (opponentReachable.has(nidx)) reachable = true;
+            }
+          } else {
+            borderOwners.add(val);
+          }
+        }
+      }
+      if (borderOwners.size === 1 && !reachable) {
+        const owner = [...borderOwners][0];
+        if (owner === 1) trusted1 += regionCells.length;
+        else trusted2 += regionCells.length;
+      }
+    }
+  }
+  return { trusted1, trusted2 };
+}
+
+// Recomputed once per bot turn in pickBotPlacement(), reused across every
+// candidate scored that turn.
+let opponentReachableCellsCache = null;
+
 function scoreBotCandidate(candidate, board, player) {
   const opponent = player === 1 ? 2 : 1;
   const orientation = ORIENTATIONS[candidate.shapeName][candidate.orientationIndex];
@@ -458,9 +542,9 @@ function scoreBotCandidate(candidate, board, player) {
     simBoard[cell] = player;
     cells.push(cell);
   }
-  const { score1, score2 } = computeFinalScores(simBoard);
-  const myScore = player === 1 ? score1 : score2;
-  const oppScore = player === 1 ? score2 : score1;
+  const { trusted1, trusted2 } = computeTrustedScores(simBoard, opponentReachableCellsCache);
+  const myScore = player === 1 ? trusted1 : trusted2;
+  const oppScore = player === 1 ? trusted2 : trusted1;
   const territoryDelta = myScore - oppScore;
 
   // When no immediate capture is available (the common case, especially
@@ -543,6 +627,9 @@ function blocksOpponent(candidate, board, opponent) {
 function pickBotPlacement(hand, board, player) {
   let placements = enumerateLegalPlacements(hand, board);
   if (placements.length === 0) return null;
+
+  const opponentHand = player === 1 ? state.hand2 : state.hand1;
+  opponentReachableCellsCache = computeOpponentReachableCells(board, opponentHand);
 
   if (state.plyCount < EARLY_GAME_PLY_LIMIT) {
     const opponent = player === 1 ? 2 : 1;

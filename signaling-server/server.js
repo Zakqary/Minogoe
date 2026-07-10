@@ -25,6 +25,16 @@ const socketRoom = new Map();  // socket -> roomCode
 const casualQueue = [];        // { socket, userId, eloRating }
 const rankedQueue = [];
 
+// A socket's 'queue'/'rejoin' handler awaits an async Supabase verification
+// before mutating any queue/room state. If the same socket's request gets
+// processed twice in close succession (double-click, client retry, a stray
+// duplicate send), both in-flight handlers can each add their own queue
+// entry / claim before either sees the other's - letting one socket end up
+// matched into two rooms at once, silently stealing its own signaling
+// routing out from under itself. Track in-flight requests per socket and
+// drop duplicates instead of racing.
+const pendingSocketRequests = new Set();
+
 // Plain HTTP endpoint (same port as the WebSocket server) so the client can
 // poll queue sizes before committing to actually joining one.
 const httpServer = http.createServer((req, res) => {
@@ -64,8 +74,9 @@ function pairSockets(entryA, entryB, mode) {
 
 function removeFromQueues(socket) {
   for (const q of [casualQueue, rankedQueue]) {
-    const idx = q.findIndex((e) => e.socket === socket);
-    if (idx !== -1) q.splice(idx, 1);
+    for (let i = q.length - 1; i >= 0; i--) {
+      if (q[i].socket === socket) q.splice(i, 1);
+    }
   }
 }
 
@@ -73,7 +84,8 @@ function tryMatchCasual() {
   while (casualQueue.length >= 2) {
     const a = casualQueue.shift();
     const b = casualQueue.shift();
-    if (a.socket.readyState !== WebSocket.OPEN) continue;
+    if (a.socket.readyState !== WebSocket.OPEN && b.socket.readyState !== WebSocket.OPEN) continue;
+    if (a.socket.readyState !== WebSocket.OPEN) { casualQueue.unshift(b); continue; }
     if (b.socket.readyState !== WebSocket.OPEN) { casualQueue.unshift(a); continue; }
     pairSockets(a, b, 'casual');
   }
@@ -193,66 +205,78 @@ wss.on('connection', (socket) => {
     }
 
     if (msg.type === 'rejoin') {
-      const room = rooms.get(msg.matchId);
-      if (!room) {
-        socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'That match is no longer available.' }));
-        return;
-      }
-
-      const user = await verifySupabaseUser(msg.accessToken);
-      if (!user || user.id !== msg.userId) {
-        socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'Could not verify your account. Please sign in again.' }));
-        return;
-      }
-
-      const slot = room.slots.find((s) => s.userId === user.id);
-      if (!slot) {
-        socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'You are not part of that match.' }));
-        return;
-      }
-      // A verified rejoin from the same user always supersedes whatever
-      // socket was previously in this slot - a real page reload's old
-      // connection may not have finished closing on our end yet (its
-      // 'close' event can lag slightly behind the browser tearing it down),
-      // and we don't want that race to block the one thing this feature
-      // exists for. Just close the stale one out from under it.
-      if (slot.socket && slot.socket !== socket && slot.socket.readyState === WebSocket.OPEN) {
-        slot.socket.close();
-      }
-
-      clearTimeout(slot.disconnectTimer);
-      slot.disconnectTimer = null;
-      slot.socket = socket;
-      socketRoom.set(socket, msg.matchId);
-
-      socket.send(JSON.stringify({ type: 'joined', isHost: slot.isHost, matchId: msg.matchId }));
-
-      // Both sides need a brand new RTCPeerConnection - the still-connected
-      // peer's old one died along with the departed browser tab/page.
-      for (const s of room.slots) {
-        if (s.socket && s.socket.readyState === WebSocket.OPEN) {
-          s.socket.send(JSON.stringify({ type: 'ready', mode: room.mode, isRejoin: true }));
+      if (pendingSocketRequests.has(socket)) return; // already processing a request for this socket
+      pendingSocketRequests.add(socket);
+      try {
+        const room = rooms.get(msg.matchId);
+        if (!room) {
+          socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'That match is no longer available.' }));
+          return;
         }
+
+        const user = await verifySupabaseUser(msg.accessToken);
+        if (!user || user.id !== msg.userId) {
+          socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'Could not verify your account. Please sign in again.' }));
+          return;
+        }
+
+        const slot = room.slots.find((s) => s.userId === user.id);
+        if (!slot) {
+          socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'You are not part of that match.' }));
+          return;
+        }
+        // A verified rejoin from the same user always supersedes whatever
+        // socket was previously in this slot - a real page reload's old
+        // connection may not have finished closing on our end yet (its
+        // 'close' event can lag slightly behind the browser tearing it down),
+        // and we don't want that race to block the one thing this feature
+        // exists for. Just close the stale one out from under it.
+        if (slot.socket && slot.socket !== socket && slot.socket.readyState === WebSocket.OPEN) {
+          slot.socket.close();
+        }
+
+        clearTimeout(slot.disconnectTimer);
+        slot.disconnectTimer = null;
+        slot.socket = socket;
+        socketRoom.set(socket, msg.matchId);
+
+        socket.send(JSON.stringify({ type: 'joined', isHost: slot.isHost, matchId: msg.matchId }));
+
+        // Both sides need a brand new RTCPeerConnection - the still-connected
+        // peer's old one died along with the departed browser tab/page.
+        for (const s of room.slots) {
+          if (s.socket && s.socket.readyState === WebSocket.OPEN) {
+            s.socket.send(JSON.stringify({ type: 'ready', mode: room.mode, isRejoin: true }));
+          }
+        }
+      } finally {
+        pendingSocketRequests.delete(socket);
       }
       return;
     }
 
     if (msg.type === 'queue') {
-      const queueType = msg.queueType === 'ranked' ? 'ranked' : 'casual';
-      const user = await verifySupabaseUser(msg.accessToken);
-      if (!user || user.id !== msg.userId) {
-        socket.send(JSON.stringify({ type: 'queue-error', message: 'Could not verify your account. Please sign in again.' }));
-        return;
-      }
+      if (pendingSocketRequests.has(socket)) return; // already processing a request for this socket
+      pendingSocketRequests.add(socket);
+      try {
+        const queueType = msg.queueType === 'ranked' ? 'ranked' : 'casual';
+        const user = await verifySupabaseUser(msg.accessToken);
+        if (!user || user.id !== msg.userId) {
+          socket.send(JSON.stringify({ type: 'queue-error', message: 'Could not verify your account. Please sign in again.' }));
+          return;
+        }
 
-      removeFromQueues(socket);
-      const entry = { socket, userId: user.id, eloRating: Number(msg.eloRating) || 1200 };
-      if (queueType === 'ranked') {
-        rankedQueue.push(entry);
-        tryMatchRanked();
-      } else {
-        casualQueue.push(entry);
-        tryMatchCasual();
+        removeFromQueues(socket);
+        const entry = { socket, userId: user.id, eloRating: Number(msg.eloRating) || 1200 };
+        if (queueType === 'ranked') {
+          rankedQueue.push(entry);
+          tryMatchRanked();
+        } else {
+          casualQueue.push(entry);
+          tryMatchCasual();
+        }
+      } finally {
+        pendingSocketRequests.delete(socket);
       }
       return;
     }
@@ -290,6 +314,7 @@ wss.on('connection', (socket) => {
   });
 
   socket.on('close', () => {
+    pendingSocketRequests.delete(socket);
     removeFromQueues(socket);
     const joinedRoom = socketRoom.get(socket);
     if (joinedRoom) {

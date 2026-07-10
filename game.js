@@ -397,6 +397,19 @@ function enumerateLegalPlacements(hand, board) {
   return placements;
 }
 
+// For an empty cell next to a candidate placement, how many of its own 4
+// sides are still "open" (empty, in bounds) once this piece is down. Fewer
+// open sides means it's closer to being fully sealed off into a capture -
+// 1 open side is one placement away, 2 is two away, and so on. A side that's
+// already the opponent's means this cell can never be mine, so it's ignored
+// entirely rather than counted as "progress."
+function sealTierBonus(openSides) {
+  if (openSides === 1) return 5;
+  if (openSides === 2) return 2;
+  if (openSides === 3) return 0.5;
+  return 0;
+}
+
 function scoreBotCandidate(candidate, board, player) {
   const opponent = player === 1 ? 2 : 1;
   const orientation = ORIENTATIONS[candidate.shapeName][candidate.orientationIndex];
@@ -406,31 +419,62 @@ function scoreBotCandidate(candidate, board, player) {
   // This lets the bot actually recognize and grab territory it can enclose
   // right now, instead of only reacting to adjacency.
   const simBoard = board.slice();
+  const cells = [];
   for (const [dr, dc] of orientation) {
-    simBoard[idx(candidate.r0 + dr, candidate.c0 + dc)] = player;
+    const cell = idx(candidate.r0 + dr, candidate.c0 + dc);
+    simBoard[cell] = player;
+    cells.push(cell);
   }
   const { score1, score2 } = computeFinalScores(simBoard);
   const myScore = player === 1 ? score1 : score2;
   const oppScore = player === 1 ? score2 : score1;
   const territoryDelta = myScore - oppScore;
 
-  // When no immediate territory swing is available (the common case early
-  // on), fall back to building toward future enclosures: cluster near your
-  // own pieces, avoid the opponent's, and hug the board edge (a free
-  // "wall" that makes enclosing cheaper).
-  let ownAdj = 0, oppAdj = 0, edgeTouches = 0;
-  for (const [dr, dc] of orientation) {
-    const r = candidate.r0 + dr, c = candidate.c0 + dc;
-    if (r === 0 || r === BOARD_SIZE - 1 || c === 0 || c === BOARD_SIZE - 1) edgeTouches++;
+  // When no immediate capture is available (the common case, especially
+  // early on), the old fallback just counted how many of the piece's own
+  // cells touched a board edge - which meant any placement that ran flat
+  // along an edge won regardless of whether it was actually building
+  // toward anything, since a straight piece maximizes that count just by
+  // lying parallel to the wall. sealProgress instead looks at the empty
+  // cells the piece now borders and rewards ones that are genuinely close
+  // to being boxed in, which is what a wall is actually useful for.
+  let ownAdj = 0, oppAdj = 0, cornerTouches = 0, edgeTouches = 0, sealProgress = 0;
+  const seenEmpty = new Set();
+  for (const cell of cells) {
+    const r = Math.floor(cell / BOARD_SIZE), c = cell % BOARD_SIZE;
+    const onEdgeR = r === 0 || r === BOARD_SIZE - 1;
+    const onEdgeC = c === 0 || c === BOARD_SIZE - 1;
+    if (onEdgeR && onEdgeC) cornerTouches++;
+    else if (onEdgeR || onEdgeC) edgeTouches++;
+
     for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
       if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
       const val = board[idx(nr, nc)];
       if (val === player) ownAdj++;
       else if (val === opponent) oppAdj++;
+
+      const nidx = idx(nr, nc);
+      if (simBoard[nidx] !== 0 || seenEmpty.has(nidx)) continue;
+      seenEmpty.add(nidx);
+
+      let openSides = 0, touchesOpponent = false;
+      for (const [nr2, nc2] of [[nr - 1, nc], [nr + 1, nc], [nr, nc - 1], [nr, nc + 1]]) {
+        if (nr2 < 0 || nr2 >= BOARD_SIZE || nc2 < 0 || nc2 >= BOARD_SIZE) continue; // board edge - already sealed
+        const v = simBoard[idx(nr2, nc2)];
+        if (v === 0) openSides++;
+        else if (v === opponent) touchesOpponent = true;
+      }
+      if (!touchesOpponent) sealProgress += sealTierBonus(openSides);
     }
   }
 
-  return territoryDelta * 1000 + ownAdj * 2 - oppAdj * 1.5 + edgeTouches * 1.5 + Math.random() * 0.5;
+  return territoryDelta * 1000
+    + sealProgress
+    + cornerTouches * 3
+    + edgeTouches * 0.5
+    + ownAdj * 2
+    - oppAdj * 1.5
+    + Math.random() * 0.5;
 }
 
 function pickBotPlacement(hand, board, player) {

@@ -628,6 +628,50 @@ function blocksOpponent(candidate, board, opponent) {
   return false;
 }
 
+// Detects an opponent playing a perfect 180-degree mirror of the bot's
+// moves - reflecting every placement through the board's center point,
+// same shape and all. On this board (12x12, so there's no fixed center
+// cell) with both players dealt an identical hand, that strategy is
+// mathematically guaranteed to keep the position symmetric turn after
+// turn, forcing an exact tie in real territory no matter what the bot
+// plays - any legal move's mirror image is always legal too, so no single
+// placement choice can escape it. This can only make the pattern harder
+// to keep pulling off in practice (see pickBotPlacement below), not
+// guarantee beating it outright.
+const MIRROR_DETECT_ROUNDS = 3;
+
+function cellsForMove(move) {
+  const orientation = ORIENTATIONS[move.shapeName][move.orientationIndex];
+  return orientation.map(([dr, dc]) => idx(move.r0 + dr, move.c0 + dc));
+}
+
+function isExactMirror(earlierMove, laterMove) {
+  if (earlierMove.shapeName !== laterMove.shapeName) return false;
+  const earlierCells = new Set(cellsForMove(earlierMove));
+  const laterCells = cellsForMove(laterMove);
+  if (laterCells.length !== earlierCells.size) return false;
+  for (const cell of laterCells) {
+    const r = Math.floor(cell / BOARD_SIZE), c = cell % BOARD_SIZE;
+    const mirrored = idx(BOARD_SIZE - 1 - r, BOARD_SIZE - 1 - c);
+    if (!earlierCells.has(mirrored)) return false;
+  }
+  return true;
+}
+
+function opponentIsMirroring(player) {
+  const opponent = player === 1 ? 2 : 1;
+  const log = state.moveLog;
+  if (log.length < MIRROR_DETECT_ROUNDS * 2) return false;
+  for (let round = 0; round < MIRROR_DETECT_ROUNDS; round++) {
+    const opponentMove = log[log.length - 1 - round * 2];
+    const myMove = log[log.length - 2 - round * 2];
+    if (!myMove || !opponentMove) return false;
+    if (myMove.player !== player || opponentMove.player !== opponent) return false;
+    if (!isExactMirror(myMove, opponentMove)) return false;
+  }
+  return true;
+}
+
 function pickBotPlacement(hand, board, player) {
   let placements = enumerateLegalPlacements(hand, board);
   if (placements.length === 0) return null;
@@ -640,11 +684,27 @@ function pickBotPlacement(hand, board, player) {
     if (nonTromino.length > 0) placements = nonTromino;
   }
 
+  const scored = [];
   let best = null, bestScore = -Infinity;
   for (const cand of placements) {
     const s = scoreBotCandidate(cand, board, player);
+    scored.push({ cand, score: s });
     if (s > bestScore) { bestScore = s; best = cand; }
   }
+
+  // Once several rounds in a row have matched exactly, stop always taking
+  // the single top-scoring candidate and pick randomly among a handful of
+  // the best options instead - a human copying moves by eye now has to
+  // work out a different mirror cell almost every turn instead of just
+  // repeating the same obvious motion, which is where this strategy
+  // actually falls apart for a real person playing through the UI even
+  // though it can't be defeated in principle.
+  if (opponentIsMirroring(player)) {
+    scored.sort((a, b) => b.score - a.score);
+    const pool = scored.slice(0, Math.min(5, scored.length));
+    return pool[Math.floor(Math.random() * pool.length)].cand;
+  }
+
   return best;
 }
 

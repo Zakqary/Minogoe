@@ -1370,7 +1370,7 @@ function render() {
 
   const banner = document.getElementById('turnBanner');
   if (!state.gameStarted) {
-    banner.textContent = 'Choose a mode below to start playing';
+    banner.textContent = 'Choose a mode to start playing';
   } else if (state.gameOver) {
     banner.textContent = 'Game over';
   } else if (state.online) {

@@ -210,9 +210,14 @@ wss.on('connection', (socket) => {
         socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'You are not part of that match.' }));
         return;
       }
-      if (slot.socket && slot.socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'That match is already connected elsewhere.' }));
-        return;
+      // A verified rejoin from the same user always supersedes whatever
+      // socket was previously in this slot - a real page reload's old
+      // connection may not have finished closing on our end yet (its
+      // 'close' event can lag slightly behind the browser tearing it down),
+      // and we don't want that race to block the one thing this feature
+      // exists for. Just close the stale one out from under it.
+      if (slot.socket && slot.socket !== socket && slot.socket.readyState === WebSocket.OPEN) {
+        slot.socket.close();
       }
 
       clearTimeout(slot.disconnectTimer);

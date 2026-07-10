@@ -11,7 +11,7 @@ const Auth = (() => {
   let currentProfile = null;
   let currentSession = null;
   let initialized = false;
-  let onChangeCallback = null;
+  let onChangeCallbacks = []; // multiple scripts (auth-ui, presence, profile, game) each subscribe
 
   async function refreshProfile() {
     if (!currentUser) {
@@ -31,7 +31,7 @@ const Auth = (() => {
     currentUser = session?.user ?? null;
     await refreshProfile();
     initialized = true;
-    onChangeCallback && onChangeCallback();
+    for (const cb of onChangeCallbacks) cb();
   });
 
   async function signUp(email, password, username) {
@@ -51,7 +51,7 @@ const Auth = (() => {
   }
 
   function onAuthChange(cb) {
-    onChangeCallback = cb;
+    onChangeCallbacks.push(cb);
     if (initialized) cb();
   }
 

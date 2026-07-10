@@ -1288,10 +1288,12 @@ function saveActiveMatch() {
   const user = Auth.getUser();
   if (!user || !Net.matchId) return;
   localStorage.setItem(ACTIVE_MATCH_KEY, JSON.stringify({ matchId: Net.matchId, userId: user.id }));
+  updateResumeMatchBanner();
 }
 
 function clearActiveMatch() {
   localStorage.removeItem(ACTIVE_MATCH_KEY);
+  updateResumeMatchBanner();
 }
 
 function handleOpponentDisconnected(graceMs) {
@@ -1358,7 +1360,23 @@ function handleRejoinReady() {
   }
 }
 
-function tryResumeActiveMatch() {
+function hasActiveMatchRecord() {
+  const raw = localStorage.getItem(ACTIVE_MATCH_KEY);
+  if (!raw) return false;
+  try {
+    const record = JSON.parse(raw);
+    return !!(record && record.matchId && record.userId);
+  } catch {
+    return false;
+  }
+}
+
+// Called both automatically (once auth resolves after page load) and
+// manually (the "Rejoin" button below) - a manual fallback matters because
+// the automatic path depends on Auth's auth-state-change firing correctly,
+// and there's no reason to strand someone mid-match if that ever hiccups.
+function tryResumeActiveMatch(retriesLeft = 10) {
+  updateResumeMatchBanner();
   if (state.online || state.connecting) return; // already mid-match - nothing to resume
   const raw = localStorage.getItem(ACTIVE_MATCH_KEY);
   if (!raw) return;
@@ -1367,10 +1385,16 @@ function tryResumeActiveMatch() {
   if (!record || !record.matchId || !record.userId) { clearActiveMatch(); return; }
 
   const accessToken = Auth.getAccessToken();
-  if (!accessToken) return; // not signed in yet - retried on the next auth-state change
+  if (!accessToken) {
+    // Auth may not have finished resolving yet on a fresh page load - retry
+    // for a few seconds rather than silently giving up forever.
+    if (retriesLeft > 0) setTimeout(() => tryResumeActiveMatch(retriesLeft - 1), 500);
+    return;
+  }
 
   state.connecting = true;
   render();
+  updateResumeMatchBanner();
   setLobbyStatus('Reconnecting to your previous match...');
   Net.rejoin({
     serverUrl: SIGNALING_SERVER_URL,
@@ -1390,6 +1414,12 @@ function tryResumeActiveMatch() {
       render();
     },
   });
+}
+
+function updateResumeMatchBanner() {
+  const banner = document.getElementById('resumeMatchBanner');
+  if (!banner) return;
+  banner.style.display = (!state.online && !state.connecting && hasActiveMatchRecord()) ? 'flex' : 'none';
 }
 
 function handleNetReady() {
@@ -1577,8 +1607,11 @@ async function refreshQueueCounts() {
   }
 }
 
+document.getElementById('resumeMatchBtn').addEventListener('click', () => tryResumeActiveMatch());
+
 // ---------- Init ----------
 render();
+updateResumeMatchBanner(); // show immediately if we have a record, even before auth resolves
 Auth.onAuthChange(tryResumeActiveMatch);
 refreshQueueCounts();
 setInterval(refreshQueueCounts, QUEUE_COUNT_POLL_MS);

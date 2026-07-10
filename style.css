@@ -51,6 +51,7 @@ h2, h3 {
 .site-nav {
   display: flex;
   justify-content: center;
+  align-items: baseline;
   gap: 22px;
   padding: 10px 20px 0;
 }
@@ -74,11 +75,6 @@ h2, h3 {
   position: relative;
   display: inline-flex;
   align-items: center;
-  /* Mirrors .site-nav a's transparent hover-underline border + padding
-     below, so the search box lines up with the links' text instead of
-     sitting a few pixels lower. */
-  border-bottom: 1px solid transparent;
-  padding-bottom: 2px;
 }
 
 .nav-search input {

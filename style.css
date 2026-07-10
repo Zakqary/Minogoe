@@ -70,6 +70,69 @@ h2, h3 {
   border-bottom-color: var(--accent);
 }
 
+.nav-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.nav-search input {
+  width: 150px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  font-family: var(--font-body);
+  color: var(--text);
+}
+
+.nav-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.nav-search input::placeholder {
+  color: var(--text-faint);
+}
+
+.nav-search-results {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 180px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  z-index: 20;
+}
+
+.nav-search-results.visible {
+  display: block;
+}
+
+.nav-search-result {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.nav-search-result:hover,
+.nav-search-result.active {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
+.nav-search-empty {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
 .site-header .logo {
   grid-column: 2;
   justify-self: center;

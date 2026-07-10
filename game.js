@@ -940,7 +940,14 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
 }
 
 function performUndo() {
-  if (state.history.length === 0) return;
+  // Undoing past a finished game restores gameOver to false (it's part of
+  // the snapshot), which would let endGame() run again on whatever new
+  // outcome comes next - recording a second, separate result for what's
+  // really the same game (e.g. lose to the bot, undo, replay until you
+  // win, repeat for as many recorded "wins" as you want). Guarding here
+  // covers every path that can trigger an undo (local vs-bot/hotseat, and
+  // an accepted online undo-request), not just requestUndo()'s own check.
+  if (state.gameOver || state.history.length === 0) return;
   applySnapshot(state.history.pop());
 
   // In vs-bot mode, a single undo should always land back on the human's
@@ -956,7 +963,7 @@ function performUndo() {
 }
 
 function requestUndo() {
-  if (state.connecting || !state.gameStarted || state.history.length === 0) return;
+  if (state.connecting || !state.gameStarted || state.gameOver || state.history.length === 0) return;
 
   if (!state.online) {
     performUndo();
@@ -1407,7 +1414,7 @@ function render() {
 
   document.getElementById('rotateBtn').disabled = state.connecting || !state.gameStarted;
   document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted || state.pendingNewGameRequest;
-  document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted
+  document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
     || state.history.length === 0 || state.pendingUndoRequest;
   const tooEarlyToPass = state.gameStarted && !state.gameOver && !opponentHandEmpty();
   document.getElementById('passBtn').disabled = state.connecting || !state.gameStarted || state.gameOver

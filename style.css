@@ -1104,7 +1104,9 @@ h2, h3 {
   }
 
   .board-wrapper {
-    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
     max-width: 100%;
   }
 
@@ -1115,13 +1117,14 @@ h2, h3 {
     display: block;
   }
 
+  /* Sits just below the board's bottom-right corner instead of on top of
+     it - close enough to reach with the same thumb, but out of the way of
+     taps aimed at that corner of the grid itself. */
   .mobile-rotate-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    position: absolute;
-    right: 10px;
-    bottom: 10px;
+    margin-top: 8px;
     width: 52px;
     height: 52px;
     border-radius: 50%;

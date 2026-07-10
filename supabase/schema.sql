@@ -210,3 +210,89 @@ drop policy if exists "Users can update their own singleplayer run" on public.si
 create policy "Users can update their own singleplayer run"
   on public.singleplayer_runs for update
   using (auth.uid() = user_id);
+
+-- ---------- Phase 10: ranked-only W/L/T counters (leaderboard "ranked matches only" filter) ----------
+
+-- games_played/wins/losses/ties on profiles mix every mode together, so the
+-- leaderboard's ranked-only view needs its own set of counters that only
+-- ever move for mode = 'ranked' games.
+alter table public.profiles add column if not exists ranked_games_played integer not null default 0;
+alter table public.profiles add column if not exists ranked_wins integer not null default 0;
+alter table public.profiles add column if not exists ranked_losses integer not null default 0;
+alter table public.profiles add column if not exists ranked_ties integer not null default 0;
+
+-- Extends the existing ranked-ELO trigger (already fires only for
+-- mode = 'ranked') to also maintain these counters, instead of adding a
+-- separate trigger that would duplicate the same "is this a ranked game
+-- between two real accounts" guard.
+create or replace function public.handle_ranked_game()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p1_elo integer;
+  p2_elo integer;
+  expected_p1 numeric;
+  actual_p1 numeric;
+  k constant integer := 32;
+  delta_p1 integer;
+  delta_p2 integer;
+begin
+  if new.mode <> 'ranked' or new.player1_id is null or new.player2_id is null then
+    return new;
+  end if;
+
+  select elo_rating into p1_elo from public.profiles where id = new.player1_id;
+  select elo_rating into p2_elo from public.profiles where id = new.player2_id;
+
+  expected_p1 := 1.0 / (1.0 + power(10, (p2_elo - p1_elo) / 400.0));
+  actual_p1 := case when new.winner = 1 then 1 when new.winner = 2 then 0 else 0.5 end;
+
+  delta_p1 := round(k * (actual_p1 - expected_p1));
+  delta_p2 := -delta_p1;
+
+  update public.profiles
+  set elo_rating = elo_rating + delta_p1,
+      ranked_games_played = ranked_games_played + 1,
+      ranked_wins = ranked_wins + case when new.winner = 1 then 1 else 0 end,
+      ranked_losses = ranked_losses + case when new.winner = 2 then 1 else 0 end,
+      ranked_ties = ranked_ties + case when new.winner is null then 1 else 0 end
+  where id = new.player1_id;
+
+  update public.profiles
+  set elo_rating = elo_rating + delta_p2,
+      ranked_games_played = ranked_games_played + 1,
+      ranked_wins = ranked_wins + case when new.winner = 2 then 1 else 0 end,
+      ranked_losses = ranked_losses + case when new.winner = 1 then 1 else 0 end,
+      ranked_ties = ranked_ties + case when new.winner is null then 1 else 0 end
+  where id = new.player2_id;
+
+  update public.games set elo_delta_p1 = delta_p1, elo_delta_p2 = delta_p2 where id = new.id;
+
+  return new;
+end;
+$$;
+
+-- Backfill from existing games so anyone with ranked history before this
+-- migration doesn't show zeros - safe to re-run, it always recomputes from
+-- source rather than incrementing.
+update public.profiles p
+set ranked_games_played = coalesce(rs.games_played, 0),
+    ranked_wins = coalesce(rs.wins, 0),
+    ranked_losses = coalesce(rs.losses, 0),
+    ranked_ties = coalesce(rs.ties, 0)
+from (
+  select player_id,
+         count(*) as games_played,
+         sum(case when winner = player_num then 1 else 0 end) as wins,
+         sum(case when winner is not null and winner <> player_num then 1 else 0 end) as losses,
+         sum(case when winner is null then 1 else 0 end) as ties
+  from (
+    select player1_id as player_id, 1 as player_num, winner from public.games where mode = 'ranked' and player1_id is not null
+    union all
+    select player2_id as player_id, 2 as player_num, winner from public.games where mode = 'ranked' and player2_id is not null
+  ) per_player
+  group by player_id
+) rs
+where p.id = rs.player_id;

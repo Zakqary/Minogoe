@@ -273,6 +273,31 @@ h2, h3 {
 .games-table .result-loss { color: var(--danger-hover); font-weight: 600; }
 .games-table .result-tie { color: var(--text-dim); }
 
+.games-table th.sortable-col {
+  cursor: pointer;
+  user-select: none;
+}
+
+.games-table th.sortable-col:hover,
+.games-table th.sortable-col.sorted {
+  color: var(--accent-hover);
+}
+
+.rank-gold td { background: rgba(230, 190, 50, 0.14); }
+.rank-silver td { background: rgba(192, 192, 192, 0.14); }
+.rank-bronze td { background: rgba(205, 127, 50, 0.14); }
+.rank-top5 td { background: rgba(255, 255, 255, 0.05); }
+
+.leaderboard-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 10px 0 14px;
+  cursor: pointer;
+}
+
 .games-table a,
 .score .label a,
 .hand h3 a {

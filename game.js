@@ -908,7 +908,7 @@ function requestPass() {
   manualPass(false);
 }
 
-function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false) {
+function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false, t = Date.now()) {
   if (state.online && !fromRemote && state.myPlayer !== state.turn) return;
 
   state.history.push(snapshotState());
@@ -920,7 +920,7 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   }
   const hand = player === 1 ? state.hand1 : state.hand2;
   hand.splice(hand.indexOf(shapeName), 1);
-  state.moveLog.push({ player, shapeName, orientationIndex, r0, c0 });
+  state.moveLog.push({ player, shapeName, orientationIndex, r0, c0, t });
   state.lastMove = { shapeName, orientationIndex, r0, c0, player };
   state.passStreak = 0;
   log(`${playerLabel(player)} placed ${shapeName}-pentomino. ${hand.length} piece(s) left.`);
@@ -933,7 +933,7 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   render();
 
   if (state.online && !fromRemote) {
-    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0 });
+    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t });
   }
 
   scheduleBotMove();
@@ -1749,6 +1749,65 @@ function hasActiveMatchRecord() {
   }
 }
 
+// Shared by tryResumeActiveMatch() (page-load/manual-button path, using the
+// matchId saved in localStorage) and handleConnectionStale() (mid-session
+// proactive path, using the currently-live match's own matchId) - both just
+// need a fresh signaling socket and a brand new WebRTC handshake for the
+// same match, with the same safety-net timeout if the attempt never
+// resolves either way.
+function attemptRejoin(matchIdToJoin, userId, accessToken) {
+  clearTimeout(rejoinTimeoutId);
+  rejoinTimeoutId = setTimeout(() => {
+    if (!state.connecting) return; // already resolved one way or another
+    state.connecting = false;
+    setLobbyStatus('Reconnect attempt timed out. Try again below.');
+    render();
+    updateResumeMatchBanner();
+  }, REJOIN_TIMEOUT_MS);
+
+  Net.rejoin({
+    serverUrl: SIGNALING_SERVER_URL,
+    matchId: matchIdToJoin,
+    userId,
+    accessToken,
+    onStatus: setLobbyStatus,
+    onReady: handleNetReady,
+    onData: handleNetData,
+    onPeerLeft: handleNetPeerLeft,
+    onOpponentDisconnected: handleOpponentDisconnected,
+    onOpponentTimeout: handleOpponentTimeout,
+    onConnectionStale: handleConnectionStale,
+    onRejoinFailed: (reason) => {
+      clearTimeout(rejoinTimeoutId);
+      clearActiveMatch();
+      state.connecting = false;
+      setLobbyStatus(reason || 'Could not reconnect to your previous match.');
+      render();
+    },
+  });
+}
+
+// Fires when net.js's own data-channel liveness check decides nothing has
+// come through in too long - independent of whatever the signaling server
+// thinks. This matters most exactly when a mobile tab gets backgrounded and
+// suspended: the underlying P2P channel can silently die without either
+// side's browser cleanly reporting it, and the signaling-server-driven
+// grace period (handleOpponentDisconnected) is never entered because the
+// signaling socket itself may still look fine. Proactively rebuild the
+// connection for the match we already know we're in, rather than waiting
+// on a disconnect notice that may never arrive.
+function handleConnectionStale() {
+  if (!state.online || (state.gameMode !== 'casual' && state.gameMode !== 'ranked') || state.gameOver || state.connecting) return;
+  const user = Auth.getUser();
+  const accessToken = Auth.getAccessToken();
+  if (!user || !accessToken || !Net.matchId) return;
+
+  state.connecting = true;
+  render();
+  setLobbyStatus('Connection lost - reconnecting...');
+  attemptRejoin(Net.matchId, user.id, accessToken);
+}
+
 // Called both automatically (once auth resolves after page load) and
 // manually (the "Rejoin" button below) - a manual fallback matters because
 // the automatic path depends on Auth's auth-state-change firing correctly,
@@ -1774,44 +1833,7 @@ function tryResumeActiveMatch(retriesLeft = 10) {
   render();
   updateResumeMatchBanner();
   setLobbyStatus('Reconnecting to your previous match...');
-
-  // Safety net: if the rejoin attempt never resolves either way - the
-  // signaling socket errors out, stalls, or closes before a 'ready' or
-  // 'rejoin-failed' message comes back - nothing else here would ever
-  // reset state.connecting, permanently hiding the resume banner (its
-  // visibility requires !state.connecting) with no way to retry. Unlike an
-  // explicit 'rejoin-failed' from the server, a bare timeout doesn't clear
-  // the saved match record, since this is more likely a transient network
-  // hiccup than a genuinely dead match - the banner reappears so the
-  // "Rejoin" button can just be tried again.
-  clearTimeout(rejoinTimeoutId);
-  rejoinTimeoutId = setTimeout(() => {
-    if (!state.connecting) return; // already resolved one way or another
-    state.connecting = false;
-    setLobbyStatus('Reconnect attempt timed out. Try again below.');
-    render();
-    updateResumeMatchBanner();
-  }, REJOIN_TIMEOUT_MS);
-
-  Net.rejoin({
-    serverUrl: SIGNALING_SERVER_URL,
-    matchId: record.matchId,
-    userId: record.userId,
-    accessToken,
-    onStatus: setLobbyStatus,
-    onReady: handleNetReady,
-    onData: handleNetData,
-    onPeerLeft: handleNetPeerLeft,
-    onOpponentDisconnected: handleOpponentDisconnected,
-    onOpponentTimeout: handleOpponentTimeout,
-    onRejoinFailed: (reason) => {
-      clearTimeout(rejoinTimeoutId);
-      clearActiveMatch();
-      state.connecting = false;
-      setLobbyStatus(reason || 'Could not reconnect to your previous match.');
-      render();
-    },
-  });
+  attemptRejoin(record.matchId, record.userId, accessToken);
 }
 
 function updateResumeMatchBanner() {
@@ -1877,7 +1899,7 @@ function handleNetDataInner(msg) {
   if (msg.type === 'newgame') {
     newGame(msg.hand);
   } else if (msg.type === 'move') {
-    commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true);
+    commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true, msg.t);
   } else if (msg.type === 'pass') {
     manualPass(true);
   } else if (msg.type === 'undo-request') {
@@ -2011,6 +2033,7 @@ function startQueue(queueType) {
     onPeerLeft: handleNetPeerLeft,
     onOpponentDisconnected: handleOpponentDisconnected,
     onOpponentTimeout: handleOpponentTimeout,
+    onConnectionStale: handleConnectionStale,
   });
 }
 
@@ -2048,6 +2071,16 @@ async function refreshQueueCounts() {
 }
 
 document.getElementById('resumeMatchBtn').addEventListener('click', () => tryResumeActiveMatch());
+
+// A phone coming back from the background is exactly the case net.js's
+// periodic staleness check is slowest to catch (it could be up to ~3s from
+// the tab resuming before the next tick) - force an immediate check right
+// when the tab becomes visible again instead of waiting on that.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.online) {
+    Net.checkConnectionNow();
+  }
+});
 
 // ---------- Init ----------
 render();

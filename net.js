@@ -29,6 +29,54 @@ const Net = (() => {
   let matchId = null;
   let isRejoin = false;
 
+  // Application-level liveness check on the data channel itself, separate
+  // from (and faster/more reliable than) both the signaling server's own
+  // heartbeat - which only watches the signaling socket, not the actual P2P
+  // game channel - and WebRTC's native connection-state transitions, which
+  // can be slow or simply never fire cleanly across a mobile tab being
+  // backgrounded and resumed. If nothing (including our own periodic pings)
+  // has arrived within STALE_THRESHOLD_MS, the channel is treated as dead.
+  const HEARTBEAT_SEND_INTERVAL_MS = 5000;
+  const STALE_THRESHOLD_MS = 13000;
+  let lastActivityAt = null;
+  let heartbeatSendTimer = null;
+  let staleCheckTimer = null;
+  let staleReported = false;
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    staleReported = false;
+    lastActivityAt = Date.now();
+    heartbeatSendTimer = setInterval(() => {
+      if (dc && dc.readyState === 'open') {
+        try { dc.send(JSON.stringify({ type: '__ping' })); } catch { /* a truly dead channel is caught by the staleness check below */ }
+      }
+    }, HEARTBEAT_SEND_INTERVAL_MS);
+    staleCheckTimer = setInterval(checkStaleness, 3000);
+  }
+
+  function stopHeartbeat() {
+    clearInterval(heartbeatSendTimer);
+    clearInterval(staleCheckTimer);
+    heartbeatSendTimer = null;
+    staleCheckTimer = null;
+  }
+
+  function checkStaleness() {
+    if (!connected || lastActivityAt === null || staleReported) return;
+    if (Date.now() - lastActivityAt > STALE_THRESHOLD_MS) {
+      staleReported = true;
+      callbacks.onConnectionStale && callbacks.onConnectionStale();
+    }
+  }
+
+  // Lets a caller force an immediate check instead of waiting up to 3s for
+  // the next periodic tick - used when a tab regains visibility, so a
+  // phone coming back from the background gets checked right away.
+  function checkConnectionNow() {
+    checkStaleness();
+  }
+
   async function flushPendingCandidates() {
     const queued = pendingCandidates;
     pendingCandidates = [];
@@ -42,6 +90,7 @@ const Net = (() => {
   }
 
   function setupPeerConnection() {
+    stopHeartbeat(); // any timers from a previous pc/dc no longer apply
     remoteDescSet = false;
     pendingCandidates = [];
     pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
@@ -110,18 +159,22 @@ const Net = (() => {
     dc.onopen = () => {
       connected = true;
       clearTimeout(connectTimeoutId);
+      startHeartbeat();
       callbacks.onStatus && callbacks.onStatus('Connected!');
       callbacks.onReady && callbacks.onReady();
     };
     dc.onclose = () => {
+      stopHeartbeat();
       if (connected) {
         connected = false;
         callbacks.onPeerLeft && callbacks.onPeerLeft();
       }
     };
     dc.onmessage = (e) => {
+      lastActivityAt = Date.now();
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
+      if (msg.type === '__ping') return; // liveness probe only, not app data
       callbacks.onData && callbacks.onData(msg);
     };
   }
@@ -244,7 +297,7 @@ const Net = (() => {
     };
   }
 
-  function connect({ serverUrl, joinMessage, onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRoomFull }) {
+  function connect({ serverUrl, joinMessage, onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRoomFull, onConnectionStale }) {
     isHost = false;
     connected = false;
     matchedMode = 'private';
@@ -254,13 +307,13 @@ const Net = (() => {
     openSocket(serverUrl, () => {
       callbacks.onStatus && callbacks.onStatus('Connected to signaling server...');
       ws.send(JSON.stringify(joinMessage));
-    }, { onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRoomFull });
+    }, { onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRoomFull, onConnectionStale });
   }
 
   // Re-establishes a fresh WebSocket + RTCPeerConnection into a match you
   // were previously paired into (identified by matchId), within the grace
   // window the signaling server holds the room open for after a disconnect.
-  function rejoin({ serverUrl, matchId: targetMatchId, userId, accessToken, onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRejoinFailed }) {
+  function rejoin({ serverUrl, matchId: targetMatchId, userId, accessToken, onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRejoinFailed, onConnectionStale }) {
     isHost = false;
     connected = false;
     matchedMode = 'private';
@@ -269,7 +322,7 @@ const Net = (() => {
     openSocket(serverUrl, () => {
       callbacks.onStatus && callbacks.onStatus('Reconnecting to your match...');
       ws.send(JSON.stringify({ type: 'rejoin', matchId: targetMatchId, userId, accessToken }));
-    }, { onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRejoinFailed });
+    }, { onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRejoinFailed, onConnectionStale });
   }
 
   function cancelQueue() {
@@ -299,6 +352,7 @@ const Net = (() => {
     send,
     cancelQueue,
     leaveRoom,
+    checkConnectionNow,
     get isHost() { return isHost; },
     get connected() { return connected; },
     get matchedMode() { return matchedMode; },

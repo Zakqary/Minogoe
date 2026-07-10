@@ -62,6 +62,7 @@ let initialHand = [];
 let board = null;
 let stepIndex = 0;
 let playTimer = null;
+let gameStartedAtMs = null;
 
 function idxOf(r, c) { return r * boardSize + c; }
 
@@ -161,6 +162,77 @@ function drawBoard() {
   }
 }
 
+// ---------- Turn-time chart ----------
+const CHART_ROW_H = 20;
+const CHART_WIDTH = 220;
+const CHART_LABEL_W = 46; // reserved space for the "Xs" time label text
+
+// Duration for move i is the gap between when it was made and whenever
+// control passed to that player - either the previous move's timestamp, or
+// the game's started_at for the very first move. Replays recorded before
+// per-move timestamps existed won't have moveLog[].t at all - detected via
+// the first entry missing it, since that's a whole-game, all-or-nothing
+// property of when the game was played.
+function computeTurnDurations() {
+  if (moveLog.length === 0 || moveLog[0].t === undefined) return null;
+  const durations = [];
+  let prevT = gameStartedAtMs;
+  for (const mv of moveLog) {
+    durations.push({ player: mv.player, ms: Math.max(0, mv.t - prevT) });
+    prevT = mv.t;
+  }
+  return durations;
+}
+
+function formatDurationLabel(ms) {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function drawTimingChart() {
+  const canvas = document.getElementById('timingChart');
+  const emptyEl = document.getElementById('timingChartEmpty');
+  const durations = computeTurnDurations();
+
+  if (!durations || durations.length === 0) {
+    canvas.style.display = 'none';
+    emptyEl.style.display = 'block';
+    return;
+  }
+  canvas.style.display = 'block';
+  emptyEl.style.display = 'none';
+
+  canvas.width = CHART_WIDTH;
+  canvas.height = durations.length * CHART_ROW_H + 4;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const maxMs = Math.max(...durations.map((d) => d.ms), 1);
+  const barAreaWidth = CHART_WIDTH - CHART_LABEL_W;
+
+  durations.forEach((d, i) => {
+    const y = i * CHART_ROW_H + 3;
+    const barH = CHART_ROW_H - 6;
+    const barW = Math.max(2, (d.ms / maxMs) * barAreaWidth);
+    const isCurrent = i === stepIndex - 1;
+
+    ctx.globalAlpha = isCurrent ? 1 : 0.7;
+    ctx.fillStyle = d.player === 1 ? '#5b7fd9' : '#d97a52';
+    ctx.fillRect(0, y, barW, barH);
+    ctx.globalAlpha = 1;
+
+    if (isCurrent) {
+      ctx.strokeStyle = '#ece7f1';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, y + 0.5, barW - 1, barH - 1);
+    }
+
+    ctx.fillStyle = '#a89db2';
+    ctx.font = '10px Manrope, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(formatDurationLabel(d.ms), barAreaWidth + 6, y + barH / 2);
+  });
+}
+
 function updateStepInfo() {
   document.getElementById('stepInfo').textContent = `Move ${stepIndex} / ${moveLog.length}`;
 }
@@ -170,6 +242,7 @@ function stepForward() {
   stepIndex++;
   applyMovesUpTo(stepIndex);
   drawBoard();
+  drawTimingChart();
   updateStepInfo();
   renderHands();
 }
@@ -179,6 +252,7 @@ function stepBackward() {
   stepIndex--;
   applyMovesUpTo(stepIndex);
   drawBoard();
+  drawTimingChart();
   updateStepInfo();
   renderHands();
 }
@@ -236,6 +310,7 @@ async function loadReplay() {
   boardSize = data.board_size;
   moveLog = data.move_log;
   initialHand = data.initial_hand;
+  gameStartedAtMs = new Date(data.started_at).getTime();
   stepIndex = 0;
   board = new Int8Array(boardSize * boardSize);
 
@@ -255,6 +330,7 @@ async function loadReplay() {
   document.getElementById('handLabel2').textContent = `${p2Name}'s hand`;
 
   drawBoard();
+  drawTimingChart();
   updateStepInfo();
   renderHands();
 }
@@ -267,6 +343,7 @@ document.getElementById('restartBtn').addEventListener('click', () => {
   stepIndex = 0;
   applyMovesUpTo(0);
   drawBoard();
+  drawTimingChart();
   updateStepInfo();
   renderHands();
 });

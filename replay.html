@@ -36,7 +36,14 @@
 
   <div class="replay-page">
     <div id="replayMeta" class="replay-meta">Loading...</div>
-    <canvas id="board"></canvas>
+    <div class="replay-board-row">
+      <canvas id="board"></canvas>
+      <div class="replay-timing-chart">
+        <h3>Turn Times</h3>
+        <canvas id="timingChart"></canvas>
+        <div id="timingChartEmpty" class="timing-chart-empty" style="display:none;">No timing data available for this replay.</div>
+      </div>
+    </div>
     <div class="replay-controls">
       <button id="restartBtn">Restart</button>
       <button id="stepBackBtn">&laquo; Step</button>

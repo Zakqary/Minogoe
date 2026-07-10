@@ -4,7 +4,7 @@ const CELL_PX = 52; // 12 * 52 = 624px board
 const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
 const HANDICAP_P2 = 1; // player 2 moves second, so they start with a 1-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
-const TURN_TIME_LIMITS = { casual: 60, ranked: 30 }; // seconds; private/bot/hotseat are untimed
+const TURN_TIME_LIMITS = { casual: 120, ranked: 60 }; // seconds; private/bot/hotseat are untimed
 const ACTIVE_MATCH_KEY = 'minogoe_activeMatch'; // localStorage key for reconnect-after-reload
 
 // ---------- Base shapes (row, col), keyed and prefixed by piece size ----------
@@ -828,9 +828,15 @@ function tickTurnTimer() {
   const remainingMs = state.turnDeadline - Date.now();
   if (remainingMs <= 0) {
     el.textContent = "Time's up!";
+    stopTurnTimer();
     if (state.turn === state.myPlayer) {
-      stopTurnTimer();
       timeoutForfeit();
+    } else {
+      // Don't rely solely on the timed-out player's own client to self-report -
+      // their tab may be backgrounded/throttled and never fire this at all,
+      // leaving the game hanging on my end forever. My independently-ticking
+      // timer (same shared deadline) can declare it just as well.
+      timeoutOpponentForfeit();
     }
     return;
   }
@@ -853,6 +859,19 @@ function timeoutForfeit() {
   if (state.gameOver) return;
   const forfeitingPlayer = state.myPlayer;
   const winner = forfeitingPlayer === 1 ? 2 : 1;
+  if (state.online) Net.send({ type: 'forfeit', forfeitingPlayer });
+  endGame(`${playerLabel(forfeitingPlayer)} ran out of time.`, winner);
+}
+
+// Fallback for when the timed-out player's own client never reports its
+// forfeit (backgrounded/throttled tab, closed laptop, dead connection, etc.) -
+// the waiting player's own timer shares the same deadline, so it can declare
+// the timeout independently instead of waiting forever on a message that may
+// never arrive.
+function timeoutOpponentForfeit() {
+  if (state.gameOver) return;
+  const forfeitingPlayer = state.turn;
+  const winner = state.myPlayer;
   if (state.online) Net.send({ type: 'forfeit', forfeitingPlayer });
   endGame(`${playerLabel(forfeitingPlayer)} ran out of time.`, winner);
 }

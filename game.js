@@ -410,6 +410,39 @@ function sealTierBonus(openSides) {
   return 0;
 }
 
+// Pockets past this size are treated as "still just the open board," not a
+// forming capture - walling one off takes several more turns, which is
+// plenty of time for the opponent to walk a piece into the middle of it and
+// permanently contest it. Capped below this size, a pocket is small enough
+// to realistically finish sealing before that happens.
+const REGION_SIZE_CAP = 8;
+
+// Bounded flood fill from one empty cell, used only to size-check the pocket
+// it belongs to. Stops early (capped: true) once it's clearly bigger than
+// REGION_SIZE_CAP rather than walking the whole board.
+function boundedRegionSize(simBoard, startIdx, opponent, cap) {
+  const visited = new Set([startIdx]);
+  const queue = [startIdx];
+  let qi = 0;
+  let touchesOpponent = false;
+  while (qi < queue.length) {
+    if (queue.length > cap) return { size: queue.length, touchesOpponent, capped: true };
+    const cur = queue[qi++];
+    const r = Math.floor(cur / BOARD_SIZE), c = cur % BOARD_SIZE;
+    for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+      if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+      const nidx = idx(nr, nc);
+      const val = simBoard[nidx];
+      if (val === 0) {
+        if (!visited.has(nidx)) { visited.add(nidx); queue.push(nidx); }
+      } else if (val === opponent) {
+        touchesOpponent = true;
+      }
+    }
+  }
+  return { size: queue.length, touchesOpponent, capped: false };
+}
+
 function scoreBotCandidate(candidate, board, player) {
   const opponent = player === 1 ? 2 : 1;
   const orientation = ORIENTATIONS[candidate.shapeName][candidate.orientationIndex];
@@ -457,14 +490,24 @@ function scoreBotCandidate(candidate, board, player) {
       if (simBoard[nidx] !== 0 || seenEmpty.has(nidx)) continue;
       seenEmpty.add(nidx);
 
-      let openSides = 0, touchesOpponent = false;
+      let openSides = 0;
       for (const [nr2, nc2] of [[nr - 1, nc], [nr + 1, nc], [nr, nc - 1], [nr, nc + 1]]) {
         if (nr2 < 0 || nr2 >= BOARD_SIZE || nc2 < 0 || nc2 >= BOARD_SIZE) continue; // board edge - already sealed
         const v = simBoard[idx(nr2, nc2)];
         if (v === 0) openSides++;
-        else if (v === opponent) touchesOpponent = true;
       }
-      if (!touchesOpponent) sealProgress += sealTierBonus(openSides);
+
+      // How big is the actual pocket this cell belongs to? A tight 1-open-
+      // side cell that's part of a sprawling 20-cell region isn't "one
+      // placement from a capture" the way it would be in a small pocket -
+      // scale the tier bonus down toward zero as the true region grows past
+      // REGION_SIZE_CAP, and drop it entirely if the opponent already
+      // borders that pocket anywhere within the capped radius.
+      const region = boundedRegionSize(simBoard, nidx, opponent, REGION_SIZE_CAP);
+      if (!region.touchesOpponent && !region.capped) {
+        const sizeFactor = 1 - (region.size - 1) / REGION_SIZE_CAP;
+        sealProgress += sealTierBonus(openSides) * sizeFactor;
+      }
     }
   }
 

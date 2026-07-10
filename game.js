@@ -520,9 +520,38 @@ function scoreBotCandidate(candidate, board, player) {
     + Math.random() * 0.5;
 }
 
+// Hardcoded override, kept separate from the scoring heuristic above: the
+// bot should never voluntarily lead with the tromino. It's the hand's most
+// flexible piece (small enough to fit gaps nothing else can), so burning it
+// in the opening turns - when there's no real board state to react to yet -
+// just wastes that flexibility for later, unless it's actually blocking
+// something the opponent is building right now.
+const EARLY_GAME_PLY_LIMIT = 6;
+
+function blocksOpponent(candidate, board, opponent) {
+  const orientation = ORIENTATIONS[candidate.shapeName][candidate.orientationIndex];
+  for (const [dr, dc] of orientation) {
+    const r = candidate.r0 + dr, c = candidate.c0 + dc;
+    for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+      if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+      if (board[idx(nr, nc)] === opponent) return true;
+    }
+  }
+  return false;
+}
+
 function pickBotPlacement(hand, board, player) {
-  const placements = enumerateLegalPlacements(hand, board);
+  let placements = enumerateLegalPlacements(hand, board);
   if (placements.length === 0) return null;
+
+  if (state.plyCount < EARLY_GAME_PLY_LIMIT) {
+    const opponent = player === 1 ? 2 : 1;
+    const nonTromino = placements.filter((cand) =>
+      !TROMINO_NAMES.includes(cand.shapeName) || blocksOpponent(cand, board, opponent)
+    );
+    if (nonTromino.length > 0) placements = nonTromino;
+  }
+
   let best = null, bestScore = -Infinity;
   for (const cand of placements) {
     const s = scoreBotCandidate(cand, board, player);

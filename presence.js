@@ -38,10 +38,23 @@ async function refreshOnlineCount() {
   }
 }
 
+async function refreshGamesPlayedCount() {
+  const el = document.getElementById('gamesPlayedCount');
+  if (!el) return;
+  const { count, error } = await supabaseClient
+    .from('games')
+    .select('*', { count: 'exact', head: true });
+  if (!error && count !== null) {
+    el.textContent = `${count.toLocaleString()} games of Minogoe played`;
+  }
+}
+
 Auth.onAuthChange(() => {
   if (Auth.getUser()) startHeartbeat();
   else stopHeartbeat();
 });
 
 refreshOnlineCount();
+refreshGamesPlayedCount();
 setInterval(refreshOnlineCount, PRESENCE_POLL_MS);
+setInterval(refreshGamesPlayedCount, PRESENCE_POLL_MS);

@@ -77,9 +77,15 @@ h2, h3 {
   width: auto;
 }
 
-.online-count {
+.header-stats {
   grid-column: 1;
   justify-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.online-count {
   display: inline-flex;
   align-items: center;
   gap: 6px;

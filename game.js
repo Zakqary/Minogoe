@@ -631,14 +631,52 @@ function blocksOpponent(candidate, board, opponent) {
 // Detects an opponent playing a perfect 180-degree mirror of the bot's
 // moves - reflecting every placement through the board's center point,
 // same shape and all. On this board (12x12, so there's no fixed center
-// cell) with both players dealt an identical hand, that strategy is
-// mathematically guaranteed to keep the position symmetric turn after
-// turn, forcing an exact tie in real territory no matter what the bot
-// plays - any legal move's mirror image is always legal too, so no single
-// placement choice can escape it. This can only make the pattern harder
-// to keep pulling off in practice (see pickBotPlacement below), not
-// guarantee beating it outright.
+// cell) with both players dealt an identical hand, that strategy keeps
+// the position symmetric turn after turn if left unchallenged, forcing an
+// exact tie in real territory. Almost every placement's mirror image is
+// legal too, so most move choices can't escape it on their own - except
+// one real structural escape hatch: a placement whose own cells are
+// already closed under the board's mirror map (see isSelfMirroringPlacement
+// below), which the opponent literally cannot copy since "mirroring" it
+// would land on the exact same, now-occupied, cells. pickBotPlacement
+// prefers that whenever it's available; MIRROR_DETECT_ROUNDS is the
+// fallback for turns where it isn't (e.g. no self-mirroring piece in
+// hand), and only makes the pattern harder to keep pulling off, not
+// guaranteed to beat it.
 const MIRROR_DETECT_ROUNDS = 3;
+
+// True if every occupied/empty cell has an occupied/empty mirror partner
+// under the board's 180-degree point reflection - i.e. the position is
+// still exactly symmetric (either it's the very start of the game, or the
+// opponent has mirrored every move so far).
+function isBoardSymmetric(board) {
+  for (let i = 0; i < board.length; i++) {
+    const r = Math.floor(i / BOARD_SIZE), c = i % BOARD_SIZE;
+    const mirrored = idx(BOARD_SIZE - 1 - r, BOARD_SIZE - 1 - c);
+    if (mirrored < i) continue; // check each pair once
+    if ((board[i] !== 0) !== (board[mirrored] !== 0)) return false;
+  }
+  return true;
+}
+
+// True if this candidate's own set of cells is closed under the board's
+// 180-degree point reflection - every cell's mirror partner is also part
+// of the same placement. Reflecting a move like this produces the exact
+// same cells, which this move just occupied, so there is nothing left for
+// an opponent to "mirror" it into. Only a handful of (shape, orientation,
+// position) combinations satisfy this on a 12x12 board - e.g. the 2x2
+// square tetromino placed dead-center - since it requires both the piece
+// itself and its exact placement to line up with the board's fold line.
+function isSelfMirroringPlacement(candidate) {
+  const orientation = ORIENTATIONS[candidate.shapeName][candidate.orientationIndex];
+  const cellSet = new Set(orientation.map(([dr, dc]) => idx(candidate.r0 + dr, candidate.c0 + dc)));
+  for (const cell of cellSet) {
+    const r = Math.floor(cell / BOARD_SIZE), c = cell % BOARD_SIZE;
+    const mirrored = idx(BOARD_SIZE - 1 - r, BOARD_SIZE - 1 - c);
+    if (!cellSet.has(mirrored)) return false;
+  }
+  return true;
+}
 
 function cellsForMove(move) {
   const orientation = ORIENTATIONS[move.shapeName][move.orientationIndex];
@@ -682,6 +720,18 @@ function pickBotPlacement(hand, board, player) {
       !TROMINO_NAMES.includes(cand.shapeName) || blocksOpponent(cand, board, opponent)
     );
     if (nonTromino.length > 0) placements = nonTromino;
+  }
+
+  if (isBoardSymmetric(board)) {
+    const selfMirroring = placements.filter(isSelfMirroringPlacement);
+    if (selfMirroring.length > 0) {
+      let mirrorBest = null, mirrorBestScore = -Infinity;
+      for (const cand of selfMirroring) {
+        const s = scoreBotCandidate(cand, board, player);
+        if (s > mirrorBestScore) { mirrorBestScore = s; mirrorBest = cand; }
+      }
+      return mirrorBest;
+    }
   }
 
   const scored = [];

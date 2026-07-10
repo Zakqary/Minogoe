@@ -557,6 +557,26 @@ h2, h3 {
   padding: 3px;
 }
 
+.sp-upcoming-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
+.sp-upcoming-pieces {
+  display: flex;
+  gap: 6px;
+}
+
+.sp-upcoming-pieces canvas {
+  background: var(--surface-2);
+  border-radius: 5px;
+  padding: 3px;
+  opacity: 0.75;
+}
+
 #connectBtn:hover:not(:disabled), #casualQueueBtn:hover:not(:disabled),
 #rankedQueueBtn:hover:not(:disabled), #newGameBtn:hover:not(:disabled), #spStartBtn:hover:not(:disabled) {
   background: var(--accent-hover);

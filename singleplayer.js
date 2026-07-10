@@ -4,9 +4,10 @@
 // state machine, so shape/orientation generation is duplicated (same
 // approach replay.js already takes, for the same reason).
 
-const BOARD_SIZE = 12;
+const BOARD_SIZE = 9;
 const CELL_PX = 52;
 const MAX_CAPTURE_SIZE = 4; // enclosures bigger than this don't count
+const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one
 
 // ---------- Shapes ----------
 const BASE_SHAPES = {
@@ -73,7 +74,8 @@ const state = {
   running: false,
   finished: false,
   failed: false,
-  selected: null, // { shapeName, orientationIndex }
+  selected: null, // { shapeName, orientationIndex } - the current piece being placed
+  pieceQueue: [], // shapeNames coming up after the current piece, length LOOKAHEAD_COUNT
   mouseRC: null,
   hover: null,
   lastTapCell: null,
@@ -90,6 +92,7 @@ function resetBoardState() {
   state.finished = false;
   state.failed = false;
   state.selected = null;
+  state.pieceQueue = [];
   state.hover = null;
   state.lastTapCell = null;
   state.startTime = null;
@@ -204,6 +207,7 @@ function isBoardFullyCaptured() {
 // ---------- Run flow ----------
 function startRun() {
   resetBoardState();
+  for (let i = 0; i < LOOKAHEAD_COUNT; i++) state.pieceQueue.push(drawWeightedPiece());
   state.running = true;
   state.startTime = Date.now();
   startTimerTick();
@@ -211,8 +215,13 @@ function startRun() {
   render();
 }
 
+// Pulls the current piece from the front of the lookahead queue and refills
+// the back of it, so the next LOOKAHEAD_COUNT pieces are always visible in
+// advance - lets you plan board space instead of being blindsided by
+// whatever random shape shows up, especially late in a run.
 function spawnNextPiece() {
-  const shapeName = drawWeightedPiece();
+  const shapeName = state.pieceQueue.shift();
+  state.pieceQueue.push(drawWeightedPiece());
   state.selected = { shapeName, orientationIndex: 0 };
   recomputeHover();
   if (!hasAnyLegalMove(shapeName, state.board)) {
@@ -378,6 +387,19 @@ function render() {
     drawShapeIcon(iconCanvas, BASE_SHAPES[state.selected.shapeName]);
   } else {
     iconCanvas.style.display = 'none';
+  }
+
+  const upcomingEl = document.getElementById('spUpcomingPieces');
+  upcomingEl.innerHTML = '';
+  if (state.running) {
+    for (const shapeName of state.pieceQueue) {
+      const item = document.createElement('div');
+      item.className = 'sp-upcoming-item';
+      const c = document.createElement('canvas');
+      drawShapeIcon(c, BASE_SHAPES[shapeName]);
+      item.appendChild(c);
+      upcomingEl.appendChild(item);
+    }
   }
 }
 

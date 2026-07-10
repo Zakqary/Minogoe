@@ -329,6 +329,10 @@ h2, h3 {
   color: var(--text-faint);
 }
 
+.replay-page .hands {
+  width: 100%;
+}
+
 .app {
   display: flex;
   justify-content: center;
@@ -433,6 +437,21 @@ h2, h3 {
 .undo-request-banner button:hover {
   border-color: var(--accent);
 }
+
+.elo-result-banner {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.elo-result-banner.positive { color: #8fd98f; }
+.elo-result-banner.negative { color: #e8b3b3; }
 
 #board {
   cursor: default;
@@ -844,8 +863,9 @@ h2, h3 {
   }
 
   /* Within the side panel, surface the piece hands first so players don't
-     have to scroll past mode/queue buttons to reach them from the board. */
-  .hands {
+     have to scroll past mode/queue buttons to reach them from the board.
+     Scoped to .side-panel so this doesn't also reorder replay.html's hands. */
+  .side-panel .hands {
     order: -1;
   }
 

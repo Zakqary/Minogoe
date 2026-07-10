@@ -5,6 +5,7 @@ const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
 const HANDICAP_P2 = 1; // player 2 moves second, so they start with a 1-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
 const TURN_TIME_LIMITS = { casual: 60, ranked: 30 }; // seconds; private/bot/hotseat are untimed
+const ACTIVE_MATCH_KEY = 'minogoe_activeMatch'; // localStorage key for reconnect-after-reload
 
 // ---------- Base shapes (row, col), keyed and prefixed by piece size ----------
 const BASE_SHAPES = {
@@ -110,6 +111,7 @@ const state = {
   incomingUndoRequest: false, // true when my opponent has asked to undo and I need to respond
   turnDeadline: null, // epoch ms when the current online turn times out (casual/ranked only)
   lastTapCell: null,  // touch only: last cell tapped on the board, for tap-to-preview/tap-again-to-confirm
+  scoringCells: null, // [{index, owner}] - set once the game ends, for the scoring-square dots
 };
 
 function snapshotState() {
@@ -120,6 +122,7 @@ function snapshotState() {
     score1: state.score1,
     score2: state.score2,
     turn: state.turn,
+    plyCount: state.plyCount,
     gameOver: state.gameOver,
     moveLog: [...state.moveLog],
     lastMove: state.lastMove,
@@ -134,10 +137,59 @@ function applySnapshot(snap) {
   state.score1 = snap.score1;
   state.score2 = snap.score2;
   state.turn = snap.turn;
+  state.plyCount = snap.plyCount;
   state.gameOver = snap.gameOver;
   state.moveLog = snap.moveLog;
   state.lastMove = snap.lastMove;
   state.passStreak = snap.passStreak;
+}
+
+// Full-game resync, sent by whichever peer never left to catch up a peer
+// that just reconnected after a page reload (their in-memory state is gone,
+// unlike an undo snapshot this also needs the pieces that make replay/ELO
+// recording work, since either side might end up recording the result).
+function serializeFullState() {
+  return {
+    board: Array.from(state.board),
+    hand1: state.hand1,
+    hand2: state.hand2,
+    score1: state.score1,
+    score2: state.score2,
+    turn: state.turn,
+    plyCount: state.plyCount,
+    passStreak: state.passStreak,
+    gameOver: state.gameOver,
+    moveLog: state.moveLog,
+    initialHand: state.initialHand,
+    lastMove: state.lastMove,
+    gameStartedAt: state.gameStartedAt,
+    scoringCells: state.scoringCells,
+  };
+}
+
+function applyFullState(msg) {
+  state.gameStarted = true;
+  state.board = Int8Array.from(msg.board);
+  state.hand1 = msg.hand1;
+  state.hand2 = msg.hand2;
+  state.score1 = msg.score1;
+  state.score2 = msg.score2;
+  state.turn = msg.turn;
+  state.plyCount = msg.plyCount;
+  state.passStreak = msg.passStreak;
+  state.gameOver = msg.gameOver;
+  state.moveLog = msg.moveLog;
+  state.initialHand = msg.initialHand;
+  state.lastMove = msg.lastMove;
+  state.gameStartedAt = msg.gameStartedAt;
+  state.scoringCells = msg.scoringCells;
+  state.selected = null;
+  state.hover = null;
+  state.mouseRC = null;
+  state.lastTapCell = null;
+  state.history = []; // undo history doesn't survive a reconnect
+  state.pendingUndoRequest = false;
+  state.incomingUndoRequest = false;
 }
 
 function idx(r, c) { return r * BOARD_SIZE + c; }
@@ -220,8 +272,11 @@ function newGame(remoteHand) {
   state.mouseRC = null;
   state.hover = null;
   state.lastTapCell = null;
+  state.scoringCells = null;
   state.history = [];
   state.pendingUndoRequest = false;
+  clearTimeout(eloResultTimer);
+  document.getElementById('eloResultBanner').style.display = 'none';
   state.incomingUndoRequest = false;
   state.gameStartedAt = new Date().toISOString();
   lastObservedTurnKey = null;
@@ -351,6 +406,7 @@ function scheduleBotMove() {
 function computeFinalScores(board) {
   const visited = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
   let score1 = 0, score2 = 0, undecided = 0;
+  const scoringCells = []; // { index, owner } for every cell that counted toward a score
   for (let i = 0; i < board.length; i++) {
     if (board[i] === 0 && !visited[i]) {
       const regionCells = [i];
@@ -376,12 +432,13 @@ function computeFinalScores(board) {
         const owner = [...borderOwners][0];
         if (owner === 1) score1 += regionCells.length;
         else score2 += regionCells.length;
+        for (const cellIdx of regionCells) scoringCells.push({ index: cellIdx, owner });
       } else {
         undecided += regionCells.length;
       }
     }
   }
-  return { score1, score2, undecided };
+  return { score1, score2, undecided, scoringCells };
 }
 
 // ---------- Turn / pass / end-game logic ----------
@@ -390,13 +447,13 @@ function switchTurn() {
   state.plyCount += 1;
 }
 
-const MIN_VOLUNTARY_PASS_TURN = 9;
-
-// Which turn (1st, 2nd, ...) the current turn holder is on, counting every
-// turn they've taken so far including passes. Used to stop players from
-// voluntarily passing their early turns to play with full board information later.
-function currentTurnNumber() {
-  return Math.floor(state.plyCount / 2) + 1;
+// Voluntary passing is only allowed once your opponent's hand is empty (they
+// can never place again) - otherwise you could hoard passes on your early
+// turns to play with more board information than they had. Once their hand
+// is empty there's no more information asymmetry to protect against.
+function opponentHandEmpty() {
+  const oppHand = state.turn === 1 ? state.hand2 : state.hand1;
+  return oppHand.length === 0;
 }
 
 // Auto-passes the current turn holder for as long as they have no legal
@@ -451,7 +508,7 @@ function requestPass() {
   if (state.gameOver || state.connecting || !state.gameStarted) return;
   if (state.online && state.myPlayer !== state.turn) return;
   if (state.vsBot && state.turn === 2) return; // it's the bot's turn, not yours
-  if (currentTurnNumber() < MIN_VOLUNTARY_PASS_TURN) return;
+  if (!opponentHandEmpty()) return;
   manualPass(false);
 }
 
@@ -545,10 +602,17 @@ function endGame(reason, forcedWinner) {
   if (state.gameOver) return;
   state.gameOver = true;
   stopTurnTimer();
+  clearInterval(reconnectCountdownTimer);
+  clearTimeout(resyncFallbackTimer);
+  if (state.online) {
+    Net.leaveRoom();
+    clearActiveMatch();
+  }
 
-  const { score1, score2, undecided } = computeFinalScores(state.board);
+  const { score1, score2, undecided, scoringCells } = computeFinalScores(state.board);
   state.score1 = score1;
   state.score2 = score2 + HANDICAP_P2;
+  state.scoringCells = scoringCells;
 
   let winner;
   let result;
@@ -616,12 +680,42 @@ async function recordGameResult(winner) {
     };
   }
 
-  const { error } = await supabaseClient.from('games').insert(row);
+  const { data, error } = await supabaseClient.from('games').insert(row).select('id').single();
   if (error) {
     log('Could not save game result: ' + error.message);
-  } else {
-    log('Game result saved to your match history.');
+    return;
   }
+  log('Game result saved to your match history.');
+
+  if (row.mode === 'ranked') {
+    // The elo_delta_p1/p2 columns are populated by a separate AFTER INSERT
+    // trigger (a follow-up UPDATE), so they won't be present on the row we
+    // just inserted - a fresh select is needed to see the trigger's result.
+    const { data: eloRow, error: eloError } = await supabaseClient
+      .from('games')
+      .select('elo_delta_p1, elo_delta_p2')
+      .eq('id', data.id)
+      .single();
+    if (!eloError && eloRow && eloRow.elo_delta_p1 != null) {
+      if (state.online) {
+        Net.send({ type: 'elo-result', delta_p1: eloRow.elo_delta_p1, delta_p2: eloRow.elo_delta_p2 });
+      }
+      showEloResult(state.myPlayer === 1 ? eloRow.elo_delta_p1 : eloRow.elo_delta_p2);
+    }
+  }
+}
+
+let eloResultTimer = null;
+function showEloResult(myDelta) {
+  Auth.refreshProfile();
+  const banner = document.getElementById('eloResultBanner');
+  const sign = myDelta > 0 ? '+' : '';
+  banner.textContent = `Ranked result: ${sign}${myDelta} ELO`;
+  banner.classList.toggle('positive', myDelta > 0);
+  banner.classList.toggle('negative', myDelta < 0);
+  banner.style.display = 'flex';
+  clearTimeout(eloResultTimer);
+  eloResultTimer = setTimeout(() => { banner.style.display = 'none'; }, 8000);
 }
 
 // ---------- Selection / hover ----------
@@ -768,6 +862,20 @@ function drawBoard() {
     ctx.stroke();
   }
 
+  // Once the game is over, mark every empty square that counted toward a
+  // score with a small dot in the scoring player's color, so it's obvious
+  // at a glance which enclosed territory actually decided the game.
+  if (state.gameOver && state.scoringCells) {
+    const dotRadius = CELL_PX * 0.16;
+    for (const { index, owner } of state.scoringCells) {
+      const r = Math.floor(index / BOARD_SIZE), c = index % BOARD_SIZE;
+      ctx.fillStyle = owner === 1 ? '#5b7fd9' : '#d97a52';
+      ctx.beginPath();
+      ctx.arc(c * CELL_PX + CELL_PX / 2, r * CELL_PX + CELL_PX / 2, dotRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
   // Subtle highlight on the most recently placed piece, so it's easy to
   // spot if you looked away while the opponent was moving.
   if (state.lastMove) {
@@ -836,13 +944,13 @@ function render() {
   document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted;
   document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted
     || state.history.length === 0 || state.pendingUndoRequest;
-  const tooEarlyToPass = state.gameStarted && !state.gameOver && currentTurnNumber() < MIN_VOLUNTARY_PASS_TURN;
+  const tooEarlyToPass = state.gameStarted && !state.gameOver && !opponentHandEmpty();
   document.getElementById('passBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
     || (state.online && state.myPlayer !== state.turn)
     || (state.vsBot && state.turn === 2)
     || tooEarlyToPass;
   document.getElementById('passBtn').title = tooEarlyToPass
-    ? `Pass unlocks on your ${MIN_VOLUNTARY_PASS_TURN}th turn`
+    ? 'Pass unlocks once your opponent has no pieces left'
     : '';
   document.getElementById('forfeitBtn').disabled = state.connecting || !state.gameStarted || state.gameOver;
 
@@ -855,7 +963,10 @@ function render() {
 
   document.getElementById('casualQueueBtn').disabled = state.online || state.connecting;
   document.getElementById('rankedQueueBtn').disabled = state.online || state.connecting;
-  document.getElementById('cancelConnectBtn').style.display = state.connecting ? '' : 'none';
+  // Only show Cancel while genuinely establishing a first connection - not
+  // while state.connecting is true because we're mid-game waiting for a
+  // disconnected opponent to reconnect (state.online is already true then).
+  document.getElementById('cancelConnectBtn').style.display = (state.connecting && !state.online) ? '' : 'none';
 
   document.getElementById('chatInput').disabled = !state.online;
   document.getElementById('chatSendBtn').disabled = !state.online;
@@ -1058,7 +1169,127 @@ function setLobbyStatus(text) {
   document.getElementById('onlineStatus').textContent = text;
 }
 
+// ---------- Reconnect (casual/ranked only) ----------
+let reconnectCountdownTimer = null;
+let resyncFallbackTimer = null;
+
+function saveActiveMatch() {
+  if (state.gameMode !== 'casual' && state.gameMode !== 'ranked') return;
+  const user = Auth.getUser();
+  if (!user || !Net.matchId) return;
+  localStorage.setItem(ACTIVE_MATCH_KEY, JSON.stringify({ matchId: Net.matchId, userId: user.id }));
+}
+
+function clearActiveMatch() {
+  localStorage.removeItem(ACTIVE_MATCH_KEY);
+}
+
+function handleOpponentDisconnected(graceMs) {
+  // Freezes the board via the same state.connecting guards used while
+  // establishing a connection in the first place - see cancelConnectBtn's
+  // visibility logic in render() for how this is distinguished from that.
+  state.connecting = true;
+  render();
+
+  let remainingSec = Math.ceil((graceMs || 30000) / 1000);
+  const tick = () => {
+    setLobbyStatus(`Opponent disconnected — waiting up to ${remainingSec}s for them to reconnect...`);
+    remainingSec--;
+  };
+  clearInterval(reconnectCountdownTimer);
+  tick();
+  reconnectCountdownTimer = setInterval(tick, 1000);
+}
+
+function handleOpponentTimeout() {
+  clearInterval(reconnectCountdownTimer);
+  state.connecting = false;
+  if (state.gameOver || !state.gameStarted) return;
+  endGame('Opponent did not reconnect in time.', state.myPlayer);
+}
+
+function handleRejoinReady() {
+  clearInterval(reconnectCountdownTimer);
+  state.online = true;
+  state.connecting = false;
+  state.vsBot = false;
+  state.gameMode = Net.matchedMode;
+  state.myPlayer = Net.isHost ? 1 : 2;
+  document.getElementById('connectBtn').disabled = true;
+  document.getElementById('roomInput').disabled = true;
+
+  // Re-send identify - if I'm the one who just reloaded, state.opponentUserId
+  // is back to null and recordGameResult() needs the real value.
+  const myProfile = Auth.getProfile();
+  Net.send({
+    type: 'identify',
+    userId: Auth.getUser()?.id ?? null,
+    username: myProfile ? myProfile.username : null,
+  });
+
+  const iHaveLiveGame = state.gameStarted && !state.gameOver;
+  if (iHaveLiveGame) {
+    setLobbyStatus('Opponent reconnected!');
+    log('Opponent reconnected.');
+    Net.send({ type: 'resync', ...serializeFullState() });
+    render();
+  } else {
+    setLobbyStatus('Reconnected! Recovering your match...');
+    clearTimeout(resyncFallbackTimer);
+    resyncFallbackTimer = setTimeout(() => {
+      setLobbyStatus('Could not recover your match state. Returning to the lobby.');
+      log('Could not recover your match state.');
+      clearActiveMatch();
+      state.online = false;
+      document.getElementById('connectBtn').disabled = false;
+      document.getElementById('roomInput').disabled = false;
+      render();
+    }, 10000);
+  }
+}
+
+function tryResumeActiveMatch() {
+  if (state.online || state.connecting) return; // already mid-match - nothing to resume
+  const raw = localStorage.getItem(ACTIVE_MATCH_KEY);
+  if (!raw) return;
+  let record;
+  try { record = JSON.parse(raw); } catch { clearActiveMatch(); return; }
+  if (!record || !record.matchId || !record.userId) { clearActiveMatch(); return; }
+
+  const accessToken = Auth.getAccessToken();
+  if (!accessToken) return; // not signed in yet - retried on the next auth-state change
+
+  state.connecting = true;
+  render();
+  setLobbyStatus('Reconnecting to your previous match...');
+  Net.rejoin({
+    serverUrl: SIGNALING_SERVER_URL,
+    matchId: record.matchId,
+    userId: record.userId,
+    accessToken,
+    onStatus: setLobbyStatus,
+    onReady: handleNetReady,
+    onData: handleNetData,
+    onPeerLeft: handleNetPeerLeft,
+    onOpponentDisconnected: handleOpponentDisconnected,
+    onOpponentTimeout: handleOpponentTimeout,
+    onRejoinFailed: (reason) => {
+      clearActiveMatch();
+      state.connecting = false;
+      setLobbyStatus(reason || 'Could not reconnect to your previous match.');
+      render();
+    },
+  });
+}
+
 function handleNetReady() {
+  if (Net.isRejoin) {
+    handleRejoinReady();
+    return;
+  }
+
+  clearInterval(reconnectCountdownTimer);
+  clearTimeout(resyncFallbackTimer);
   state.online = true;
   state.connecting = false;
   state.vsBot = false;
@@ -1085,6 +1316,8 @@ function handleNetReady() {
   } else {
     render();
   }
+
+  saveActiveMatch();
 }
 
 function handleNetData(msg) {
@@ -1116,10 +1349,24 @@ function handleNetData(msg) {
   } else if (msg.type === 'chat') {
     const opponentPlayerNum = state.myPlayer === 1 ? 2 : 1;
     log(`\u{1F4AC} ${playerLabel(opponentPlayerNum)}: ${msg.text}`);
+  } else if (msg.type === 'elo-result') {
+    showEloResult(state.myPlayer === 1 ? msg.delta_p1 : msg.delta_p2);
+  } else if (msg.type === 'resync') {
+    clearTimeout(resyncFallbackTimer);
+    applyFullState(msg);
+    log('Reconnected — game state restored.');
+    setLobbyStatus(`Connected! You are Player ${state.myPlayer}. (${state.gameMode})`);
+    render();
   }
 }
 
 function handleNetPeerLeft() {
+  if (state.online && (state.gameMode === 'casual' || state.gameMode === 'ranked') && !state.gameOver) {
+    // For casual/ranked, the signaling-server-driven grace period
+    // (handleOpponentDisconnected/handleOpponentTimeout) is authoritative -
+    // a transient WebRTC-layer blip shouldn't jump straight to "gone".
+    return;
+  }
   log('Your opponent disconnected.');
   setLobbyStatus('Opponent disconnected.');
   stopTurnTimer();
@@ -1165,6 +1412,8 @@ function startQueue(queueType) {
     onReady: handleNetReady,
     onData: handleNetData,
     onPeerLeft: handleNetPeerLeft,
+    onOpponentDisconnected: handleOpponentDisconnected,
+    onOpponentTimeout: handleOpponentTimeout,
   });
 }
 
@@ -1180,3 +1429,4 @@ document.getElementById('cancelConnectBtn').addEventListener('click', () => {
 
 // ---------- Init ----------
 render();
+Auth.onAuthChange(tryResumeActiveMatch);

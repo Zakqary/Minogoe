@@ -58,6 +58,7 @@ for (const name of Object.keys(BASE_SHAPES)) ORIENTATIONS[name] = generateOrient
 // ---------- Replay state ----------
 let boardSize = 12;
 let moveLog = [];
+let initialHand = [];
 let board = null;
 let stepIndex = 0;
 let playTimer = null;
@@ -73,6 +74,64 @@ function applyMovesUpTo(n) {
       board[idxOf(mv.r0 + dr, mv.c0 + dc)] = mv.player;
     }
   }
+}
+
+// Both players start with an identical copy of initialHand - a player's
+// remaining hand at step n is that copy minus whatever they've placed so far.
+function handsUpTo(n) {
+  const hand1 = [...initialHand];
+  const hand2 = [...initialHand];
+  for (let i = 0; i < n; i++) {
+    const mv = moveLog[i];
+    const hand = mv.player === 1 ? hand1 : hand2;
+    const pos = hand.indexOf(mv.shapeName);
+    if (pos !== -1) hand.splice(pos, 1);
+  }
+  return { hand1, hand2 };
+}
+
+function drawShapeIcon(canvasEl, coords) {
+  const px = 8;
+  const maxR = Math.max(...coords.map(p => p[0])) + 1;
+  const maxC = Math.max(...coords.map(p => p[1])) + 1;
+  canvasEl.width = maxC * px;
+  canvasEl.height = maxR * px;
+  const cctx = canvasEl.getContext('2d');
+  cctx.fillStyle = '#ded6e3';
+  for (const [r, c] of coords) {
+    cctx.fillRect(c * px, r * px, px - 1, px - 1);
+  }
+}
+
+function renderHand(elId, hand) {
+  const counts = {};
+  for (const s of hand) counts[s] = (counts[s] || 0) + 1;
+  const el = document.getElementById(elId);
+  el.innerHTML = '';
+
+  const names = Object.keys(counts).sort();
+  if (names.length === 0) {
+    el.innerHTML = '<span>empty</span>';
+    return;
+  }
+  for (const name of names) {
+    const item = document.createElement('div');
+    item.className = 'piece-icon';
+    const iconCanvas = document.createElement('canvas');
+    drawShapeIcon(iconCanvas, BASE_SHAPES[name]);
+    item.appendChild(iconCanvas);
+    const countEl = document.createElement('div');
+    countEl.className = 'count';
+    countEl.textContent = `${counts[name]}`;
+    item.appendChild(countEl);
+    el.appendChild(item);
+  }
+}
+
+function renderHands() {
+  const { hand1, hand2 } = handsUpTo(stepIndex);
+  renderHand('hand1', hand1);
+  renderHand('hand2', hand2);
 }
 
 function drawBoard() {
@@ -112,6 +171,7 @@ function stepForward() {
   applyMovesUpTo(stepIndex);
   drawBoard();
   updateStepInfo();
+  renderHands();
 }
 
 function stepBackward() {
@@ -120,6 +180,7 @@ function stepBackward() {
   applyMovesUpTo(stepIndex);
   drawBoard();
   updateStepInfo();
+  renderHands();
 }
 
 function stopPlaying() {
@@ -174,6 +235,7 @@ async function loadReplay() {
 
   boardSize = data.board_size;
   moveLog = data.move_log;
+  initialHand = data.initial_hand;
   stepIndex = 0;
   board = new Int8Array(boardSize * boardSize);
 
@@ -189,8 +251,12 @@ async function loadReplay() {
     <div>${new Date(data.ended_at).toLocaleString()}</div>
   `;
 
+  document.getElementById('handLabel1').textContent = `${p1Name}'s hand`;
+  document.getElementById('handLabel2').textContent = `${p2Name}'s hand`;
+
   drawBoard();
   updateStepInfo();
+  renderHands();
 }
 
 document.getElementById('stepBackBtn').addEventListener('click', () => { stopPlaying(); stepBackward(); });
@@ -202,6 +268,7 @@ document.getElementById('restartBtn').addEventListener('click', () => {
   applyMovesUpTo(0);
   drawBoard();
   updateStepInfo();
+  renderHands();
 });
 
 loadReplay();

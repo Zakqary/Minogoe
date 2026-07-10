@@ -60,6 +60,7 @@ const Auth = (() => {
     signIn,
     signOut,
     onAuthChange,
+    refreshProfile,
     getUser: () => currentUser,
     getProfile: () => currentProfile,
     getAccessToken: () => currentSession?.access_token ?? null,

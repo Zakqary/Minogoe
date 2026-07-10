@@ -26,6 +26,8 @@ const Net = (() => {
   let remoteDescSet = false;
   let pendingCandidates = [];
   let matchedMode = 'private';
+  let matchId = null;
+  let isRejoin = false;
 
   async function flushPendingCandidates() {
     const queued = pendingCandidates;
@@ -127,6 +129,7 @@ const Net = (() => {
   async function handleSignal(msg) {
     if (msg.type === 'joined') {
       isHost = msg.isHost;
+      matchId = msg.matchId || matchId;
       callbacks.onStatus && callbacks.onStatus(
         isHost ? 'Waiting for your friend to join the room...' : 'Room found. Waiting on host to connect...'
       );
@@ -143,8 +146,14 @@ const Net = (() => {
       return;
     }
 
+    if (msg.type === 'rejoin-failed') {
+      callbacks.onRejoinFailed && callbacks.onRejoinFailed(msg.reason);
+      return;
+    }
+
     if (msg.type === 'ready') {
       matchedMode = msg.mode || 'private';
+      isRejoin = !!msg.isRejoin;
       callbacks.onStatus && callbacks.onStatus('Opponent found - establishing direct connection...');
       setupPeerConnection();
       if (isHost) {
@@ -196,13 +205,20 @@ const Net = (() => {
       }
       return;
     }
+
+    if (msg.type === 'opponent-disconnected') {
+      callbacks.onOpponentDisconnected && callbacks.onOpponentDisconnected(msg.graceMs);
+      return;
+    }
+
+    if (msg.type === 'opponent-timeout') {
+      callbacks.onOpponentTimeout && callbacks.onOpponentTimeout();
+      return;
+    }
   }
 
-  function connect({ serverUrl, joinMessage, onStatus, onReady, onData, onPeerLeft }) {
-    callbacks = { onStatus, onReady, onData, onPeerLeft };
-    isHost = false;
-    connected = false;
-    matchedMode = 'private';
+  function openSocket(serverUrl, onOpen, cbs) {
+    callbacks = cbs;
 
     try {
       ws = new WebSocket(serverUrl);
@@ -211,10 +227,7 @@ const Net = (() => {
       return;
     }
 
-    ws.onopen = () => {
-      callbacks.onStatus && callbacks.onStatus('Connected to signaling server...');
-      ws.send(JSON.stringify(joinMessage));
-    };
+    ws.onopen = onOpen;
     ws.onmessage = (e) => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
@@ -230,10 +243,46 @@ const Net = (() => {
     };
   }
 
+  function connect({ serverUrl, joinMessage, onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout }) {
+    isHost = false;
+    connected = false;
+    matchedMode = 'private';
+    matchId = null;
+    isRejoin = false;
+
+    openSocket(serverUrl, () => {
+      callbacks.onStatus && callbacks.onStatus('Connected to signaling server...');
+      ws.send(JSON.stringify(joinMessage));
+    }, { onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout });
+  }
+
+  // Re-establishes a fresh WebSocket + RTCPeerConnection into a match you
+  // were previously paired into (identified by matchId), within the grace
+  // window the signaling server holds the room open for after a disconnect.
+  function rejoin({ serverUrl, matchId: targetMatchId, userId, accessToken, onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRejoinFailed }) {
+    isHost = false;
+    connected = false;
+    matchedMode = 'private';
+    isRejoin = false;
+
+    openSocket(serverUrl, () => {
+      callbacks.onStatus && callbacks.onStatus('Reconnecting to your match...');
+      ws.send(JSON.stringify({ type: 'rejoin', matchId: targetMatchId, userId, accessToken }));
+    }, { onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRejoinFailed });
+  }
+
   function cancelQueue() {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'unqueue' }));
       ws.close();
+    }
+  }
+
+  // Tells the signaling server this match is over, so it doesn't hold a
+  // casual/ranked room (and its reconnect bookkeeping) open indefinitely.
+  function leaveRoom() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'leave-room' }));
     }
   }
 
@@ -245,10 +294,14 @@ const Net = (() => {
 
   return {
     connect,
+    rejoin,
     send,
     cancelQueue,
+    leaveRoom,
     get isHost() { return isHost; },
     get connected() { return connected; },
     get matchedMode() { return matchedMode; },
+    get matchId() { return matchId; },
+    get isRejoin() { return isRejoin; },
   };
 })();

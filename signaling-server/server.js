@@ -13,10 +13,14 @@ const WebSocket = require('ws');
 const PORT = process.env.PORT || 8080;
 const SUPABASE_URL = 'https://kokygjmttluthboxckct.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_aH7g-hhPpt-1or4nBP6UvA_bZkS13Td';
+const RECONNECT_GRACE_MS = 30000;
 
 const wss = new WebSocket.Server({ port: PORT });
 
-const rooms = new Map();       // roomCode -> array of up to 2 sockets
+// roomCode -> { mode, slots: [slot, slot] }
+// slot: { socket (null while disconnected), userId (null for private rooms),
+//         isHost, disconnectTimer (null unless mid-grace-period) }
+const rooms = new Map();
 const socketRoom = new Map();  // socket -> roomCode
 
 const casualQueue = [];        // { socket, userId, eloRating }
@@ -26,16 +30,20 @@ function generateRoomCode() {
   return Math.random().toString(36).slice(2, 10).toUpperCase();
 }
 
-function pairSockets(socketA, socketB, mode) {
+function pairSockets(entryA, entryB, mode) {
   const code = generateRoomCode();
-  rooms.set(code, [socketA, socketB]);
-  socketRoom.set(socketA, code);
-  socketRoom.set(socketB, code);
+  const slots = [
+    { socket: entryA.socket, userId: entryA.userId ?? null, isHost: true, disconnectTimer: null },
+    { socket: entryB.socket, userId: entryB.userId ?? null, isHost: false, disconnectTimer: null },
+  ];
+  rooms.set(code, { mode, slots });
+  socketRoom.set(entryA.socket, code);
+  socketRoom.set(entryB.socket, code);
 
-  socketA.send(JSON.stringify({ type: 'joined', isHost: true }));
-  socketB.send(JSON.stringify({ type: 'joined', isHost: false }));
-  socketA.send(JSON.stringify({ type: 'ready', mode }));
-  socketB.send(JSON.stringify({ type: 'ready', mode }));
+  entryA.socket.send(JSON.stringify({ type: 'joined', isHost: true, matchId: code }));
+  entryB.socket.send(JSON.stringify({ type: 'joined', isHost: false, matchId: code }));
+  entryA.socket.send(JSON.stringify({ type: 'ready', mode }));
+  entryB.socket.send(JSON.stringify({ type: 'ready', mode }));
 }
 
 function removeFromQueues(socket) {
@@ -51,7 +59,7 @@ function tryMatchCasual() {
     const b = casualQueue.shift();
     if (a.socket.readyState !== WebSocket.OPEN) continue;
     if (b.socket.readyState !== WebSocket.OPEN) { casualQueue.unshift(a); continue; }
-    pairSockets(a.socket, b.socket, 'casual');
+    pairSockets(a, b, 'casual');
   }
 }
 
@@ -69,7 +77,7 @@ function tryMatchRanked() {
     if (a.socket.readyState !== WebSocket.OPEN && b.socket.readyState !== WebSocket.OPEN) continue;
     if (a.socket.readyState !== WebSocket.OPEN) { rankedQueue.push(b); continue; }
     if (b.socket.readyState !== WebSocket.OPEN) { rankedQueue.push(a); continue; }
-    pairSockets(a.socket, b.socket, 'ranked');
+    pairSockets(a, b, 'ranked');
   }
 }
 
@@ -86,17 +94,50 @@ async function verifySupabaseUser(accessToken) {
   }
 }
 
-function removeFromRoom(socket, room) {
-  const peers = rooms.get(room);
-  if (!peers) return;
-  const idx = peers.indexOf(socket);
-  if (idx !== -1) peers.splice(idx, 1);
-  for (const p of peers) {
-    if (p.readyState === WebSocket.OPEN) {
-      p.send(JSON.stringify({ type: 'peer-left' }));
+// Private rooms (friend room-code games): a departure is final, exactly like
+// before - notify whoever's left immediately and free up the vacated slot.
+function removePrivateRoomSlot(socket, roomCode, room) {
+  const idx = room.slots.findIndex((s) => s.socket === socket);
+  if (idx !== -1) room.slots.splice(idx, 1);
+  for (const s of room.slots) {
+    if (s.socket && s.socket.readyState === WebSocket.OPEN) {
+      s.socket.send(JSON.stringify({ type: 'peer-left' }));
     }
   }
-  if (peers.length === 0) rooms.delete(room);
+  if (room.slots.length === 0) rooms.delete(roomCode);
+}
+
+// Casual/ranked: don't tear the match down immediately - hold the slot open
+// for RECONNECT_GRACE_MS in case the disconnected player reloads/rejoins.
+function startDisconnectGrace(socket, roomCode, room, slot) {
+  slot.socket = null;
+  const other = room.slots.find((s) => s !== slot);
+  if (other && other.socket && other.socket.readyState === WebSocket.OPEN) {
+    other.socket.send(JSON.stringify({ type: 'opponent-disconnected', graceMs: RECONNECT_GRACE_MS }));
+  }
+  clearTimeout(slot.disconnectTimer);
+  slot.disconnectTimer = setTimeout(() => {
+    const stillHere = room.slots.find((s) => s !== slot);
+    if (stillHere && stillHere.socket && stillHere.socket.readyState === WebSocket.OPEN) {
+      stillHere.socket.send(JSON.stringify({ type: 'opponent-timeout' }));
+      socketRoom.delete(stillHere.socket);
+    }
+    rooms.delete(roomCode);
+  }, RECONNECT_GRACE_MS);
+}
+
+function removeFromRoom(socket, roomCode) {
+  const room = rooms.get(roomCode);
+  if (!room) return;
+
+  if (room.mode === 'private') {
+    removePrivateRoomSlot(socket, roomCode, room);
+    return;
+  }
+
+  const slot = room.slots.find((s) => s.socket === socket);
+  if (!slot) return;
+  startDisconnectGrace(socket, roomCode, room, slot);
 }
 
 wss.on('connection', (socket) => {
@@ -109,27 +150,67 @@ wss.on('connection', (socket) => {
     }
 
     if (msg.type === 'join') {
-      const room = String(msg.room || '').trim().toUpperCase();
-      if (!room) return;
+      const roomCode = String(msg.room || '').trim().toUpperCase();
+      if (!roomCode) return;
 
-      let peers = rooms.get(room);
-      if (!peers) {
-        peers = [];
-        rooms.set(room, peers);
+      let room = rooms.get(roomCode);
+      if (!room) {
+        room = { mode: 'private', slots: [] };
+        rooms.set(roomCode, room);
       }
-      if (peers.length >= 2) {
+      if (room.slots.length >= 2) {
         socket.send(JSON.stringify({ type: 'full' }));
         return;
       }
 
-      peers.push(socket);
-      socketRoom.set(socket, room);
-      const isHost = peers.length === 1;
+      const isHost = room.slots.length === 0;
+      room.slots.push({ socket, userId: null, isHost, disconnectTimer: null });
+      socketRoom.set(socket, roomCode);
       socket.send(JSON.stringify({ type: 'joined', isHost }));
 
-      if (peers.length === 2) {
-        for (const p of peers) {
-          p.send(JSON.stringify({ type: 'ready', mode: 'private' }));
+      if (room.slots.length === 2) {
+        for (const s of room.slots) {
+          s.socket.send(JSON.stringify({ type: 'ready', mode: 'private' }));
+        }
+      }
+      return;
+    }
+
+    if (msg.type === 'rejoin') {
+      const room = rooms.get(msg.matchId);
+      if (!room) {
+        socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'That match is no longer available.' }));
+        return;
+      }
+
+      const user = await verifySupabaseUser(msg.accessToken);
+      if (!user || user.id !== msg.userId) {
+        socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'Could not verify your account. Please sign in again.' }));
+        return;
+      }
+
+      const slot = room.slots.find((s) => s.userId === user.id);
+      if (!slot) {
+        socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'You are not part of that match.' }));
+        return;
+      }
+      if (slot.socket && slot.socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'That match is already connected elsewhere.' }));
+        return;
+      }
+
+      clearTimeout(slot.disconnectTimer);
+      slot.disconnectTimer = null;
+      slot.socket = socket;
+      socketRoom.set(socket, msg.matchId);
+
+      socket.send(JSON.stringify({ type: 'joined', isHost: slot.isHost, matchId: msg.matchId }));
+
+      // Both sides need a brand new RTCPeerConnection - the still-connected
+      // peer's old one died along with the departed browser tab/page.
+      for (const s of room.slots) {
+        if (s.socket && s.socket.readyState === WebSocket.OPEN) {
+          s.socket.send(JSON.stringify({ type: 'ready', mode: room.mode, isRejoin: true }));
         }
       }
       return;
@@ -160,14 +241,28 @@ wss.on('connection', (socket) => {
       return;
     }
 
+    // Sent once a game legitimately ends, so casual/ranked rooms (which now
+    // survive a disconnect for the reconnect grace period) don't linger
+    // forever if both players just keep browsing instead of closing the tab.
+    if (msg.type === 'leave-room') {
+      const roomCode = socketRoom.get(socket);
+      if (roomCode) {
+        rooms.delete(roomCode);
+        socketRoom.delete(socket);
+      }
+      return;
+    }
+
     // Anything else (offer / answer / ice) just gets relayed verbatim
     // to whichever other socket is in the same room.
     const joinedRoom = socketRoom.get(socket);
     if (joinedRoom) {
-      const peers = rooms.get(joinedRoom) || [];
-      for (const p of peers) {
-        if (p !== socket && p.readyState === WebSocket.OPEN) {
-          p.send(raw.toString());
+      const room = rooms.get(joinedRoom);
+      if (room) {
+        for (const s of room.slots) {
+          if (s.socket && s.socket !== socket && s.socket.readyState === WebSocket.OPEN) {
+            s.socket.send(raw.toString());
+          }
         }
       }
     }

@@ -138,6 +138,7 @@ const Net = (() => {
 
     if (msg.type === 'full') {
       callbacks.onStatus && callbacks.onStatus('That room already has two players. Try a different room code.');
+      callbacks.onRoomFull && callbacks.onRoomFull();
       return;
     }
 
@@ -243,7 +244,7 @@ const Net = (() => {
     };
   }
 
-  function connect({ serverUrl, joinMessage, onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout }) {
+  function connect({ serverUrl, joinMessage, onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRoomFull }) {
     isHost = false;
     connected = false;
     matchedMode = 'private';
@@ -253,7 +254,7 @@ const Net = (() => {
     openSocket(serverUrl, () => {
       callbacks.onStatus && callbacks.onStatus('Connected to signaling server...');
       ws.send(JSON.stringify(joinMessage));
-    }, { onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout });
+    }, { onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRoomFull });
   }
 
   // Re-establishes a fresh WebSocket + RTCPeerConnection into a match you

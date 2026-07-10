@@ -584,6 +584,12 @@ h2, h3 {
   letter-spacing: 0.04em;
 }
 
+.private-room-divider {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
 .mode-buttons {
   display: flex;
   gap: 8px;

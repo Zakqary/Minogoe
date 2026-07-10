@@ -1530,15 +1530,24 @@ function handleNetPeerLeft() {
   render();
 }
 
-document.getElementById('connectBtn').addEventListener('click', () => {
-  const room = document.getElementById('roomInput').value.trim();
+// Room codes meant for a person to read/type/say out loud - avoid visually
+// ambiguous characters (0/O, 1/I/L) rather than the server's own internal
+// 8-char codes (generateRoomCode() in server.js), which nobody ever types.
+function generatePrivateRoomCode() {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+function connectToPrivateRoom(room) {
   if (!room) {
     setLobbyStatus('Enter a room code.');
     return;
   }
   state.connecting = true;
   render();
-  setLobbyStatus('Connecting... (if this seems stuck for a while, it is safe to click Connect again to retry)');
+  setLobbyStatus(`Connecting to room ${room}... (if this seems stuck for a while, it is safe to click again to retry)`);
   Net.connect({
     serverUrl: SIGNALING_SERVER_URL,
     joinMessage: { type: 'join', room },
@@ -1546,7 +1555,25 @@ document.getElementById('connectBtn').addEventListener('click', () => {
     onReady: handleNetReady,
     onData: handleNetData,
     onPeerLeft: handleNetPeerLeft,
+    onRoomFull: () => {
+      state.connecting = false;
+      render();
+    },
   });
+}
+
+document.getElementById('connectBtn').addEventListener('click', () => {
+  connectToPrivateRoom(document.getElementById('roomInput').value.trim());
+});
+
+document.getElementById('createRoomBtn').addEventListener('click', () => {
+  // Auto-generating the code (rather than having the host type something
+  // freeform, like the old "e.g. ABCD" placeholder) avoids unrelated pairs
+  // of players both guessing the same obvious example and getting matched
+  // with a stranger instead of their friend.
+  const code = generatePrivateRoomCode();
+  document.getElementById('roomInput').value = code;
+  connectToPrivateRoom(code);
 });
 
 function startQueue(queueType) {

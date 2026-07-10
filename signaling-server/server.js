@@ -168,7 +168,20 @@ function removeFromRoom(socket, roomCode) {
   startDisconnectGrace(socket, roomCode, room, slot);
 }
 
+// Hosting platforms (Render included) commonly drop WebSocket connections
+// that sit idle through their proxy layer, with no clean close frame - the
+// socket just silently stops working. This matters most for private rooms,
+// where a host can sit waiting for a friend to type in a code for a while
+// (unlike the queues, which usually match quickly once anyone's in them).
+// A periodic ping/pong both keeps the connection active from the proxy's
+// perspective and lets us proactively clean up truly-dead sockets instead
+// of waiting on a TCP timeout that may never come.
+const HEARTBEAT_INTERVAL_MS = 25000;
+
 wss.on('connection', (socket) => {
+  socket.isAlive = true;
+  socket.on('pong', () => { socket.isAlive = true; });
+
   socket.on('message', async (raw) => {
     let msg;
     try {
@@ -323,6 +336,19 @@ wss.on('connection', (socket) => {
     }
   });
 });
+
+const heartbeatInterval = setInterval(() => {
+  for (const socket of wss.clients) {
+    if (socket.isAlive === false) {
+      socket.terminate(); // no pong since the last ping - treat as dead, this fires 'close' and runs normal cleanup
+      continue;
+    }
+    socket.isAlive = false;
+    socket.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on('close', () => clearInterval(heartbeatInterval));
 
 httpServer.listen(PORT);
 console.log(`Minogoe signaling server listening on port ${PORT}`);

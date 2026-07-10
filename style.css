@@ -519,6 +519,11 @@ h2, h3 {
   color: #211505 !important;
 }
 
+.queue-count {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 #connectBtn:disabled, #casualQueueBtn:disabled, #rankedQueueBtn:disabled, #newGameBtn:disabled {
   background: var(--surface-2);
   border-color: var(--border);

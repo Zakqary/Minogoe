@@ -8,14 +8,13 @@
 // identically from here on - queue matching just decides who gets grouped
 // into the same room.
 
+const http = require('http');
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
 const SUPABASE_URL = 'https://kokygjmttluthboxckct.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_aH7g-hhPpt-1or4nBP6UvA_bZkS13Td';
 const RECONNECT_GRACE_MS = 30000;
-
-const wss = new WebSocket.Server({ port: PORT });
 
 // roomCode -> { mode, slots: [slot, slot] }
 // slot: { socket (null while disconnected), userId (null for private rooms),
@@ -25,6 +24,23 @@ const socketRoom = new Map();  // socket -> roomCode
 
 const casualQueue = [];        // { socket, userId, eloRating }
 const rankedQueue = [];
+
+// Plain HTTP endpoint (same port as the WebSocket server) so the client can
+// poll queue sizes before committing to actually joining one.
+const httpServer = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/queue-counts') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ casual: casualQueue.length, ranked: rankedQueue.length }));
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+});
+
+const wss = new WebSocket.Server({ server: httpServer });
 
 function generateRoomCode() {
   return Math.random().toString(36).slice(2, 10).toUpperCase();
@@ -278,4 +294,5 @@ wss.on('connection', (socket) => {
   });
 });
 
+httpServer.listen(PORT);
 console.log(`Minogoe signaling server listening on port ${PORT}`);

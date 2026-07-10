@@ -1427,6 +1427,31 @@ document.getElementById('cancelConnectBtn').addEventListener('click', () => {
   render();
 });
 
+// Lets players see whether it's worth queueing before they commit to it -
+// polls the signaling server's HTTP endpoint (same host/port as the WS),
+// separate from the WebRTC connection itself.
+const QUEUE_COUNT_POLL_MS = 7000;
+const SIGNALING_HTTP_URL = SIGNALING_SERVER_URL.replace(/^ws/, 'http');
+
+function formatQueueCount(n) {
+  if (n === 1) return '1 waiting';
+  return `${n} waiting`;
+}
+
+async function refreshQueueCounts() {
+  try {
+    const res = await fetch(`${SIGNALING_HTTP_URL}/queue-counts`);
+    if (!res.ok) return;
+    const { casual, ranked } = await res.json();
+    document.getElementById('casualQueueCount').textContent = formatQueueCount(casual);
+    document.getElementById('rankedQueueCount').textContent = formatQueueCount(ranked);
+  } catch {
+    // signaling server unreachable - leave whatever was last shown
+  }
+}
+
 // ---------- Init ----------
 render();
 Auth.onAuthChange(tryResumeActiveMatch);
+refreshQueueCounts();
+setInterval(refreshQueueCounts, QUEUE_COUNT_POLL_MS);

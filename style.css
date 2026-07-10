@@ -841,15 +841,13 @@ h2, h3 {
   font-weight: 700;
 }
 
-.site-footer {
+.top-announcement {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 28px 20px 32px;
+  justify-content: center;
+  padding: 12px 20px 0;
 }
 
-.footer-announcement {
+.announcement-pill {
   background: var(--accent);
   color: #211505;
   font-weight: 700;
@@ -858,6 +856,14 @@ h2, h3 {
   border-radius: 20px;
   text-align: center;
   box-shadow: var(--shadow-md);
+}
+
+.site-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 20px 32px;
 }
 
 .site-footer a {
@@ -878,7 +884,11 @@ h2, h3 {
 
 .footer-credit {
   color: var(--text-faint);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
 }
 
 /* New element with no desktop-visible state of its own - hidden by default,

@@ -109,6 +109,8 @@ const state = {
   passStreak: 0,      // consecutive passes (forced or voluntary); 2 in a row ends the game
   pendingUndoRequest: false,  // true once I've asked to undo and am waiting on my opponent
   incomingUndoRequest: false, // true when my opponent has asked to undo and I need to respond
+  pendingNewGameRequest: false,  // true once I've asked for a rematch and am waiting on my opponent (casual/ranked)
+  incomingNewGameRequest: false, // true when my opponent has asked for a rematch and I need to respond
   turnDeadline: null, // epoch ms when the current online turn times out (casual/ranked only)
   lastTapCell: null,  // touch only: last cell tapped on the board, for tap-to-preview/tap-again-to-confirm
   scoringCells: null, // [{index, owner}] - set once the game ends, for the scoring-square dots
@@ -278,6 +280,8 @@ function newGame(remoteHand) {
   clearTimeout(eloResultTimer);
   document.getElementById('eloResultBanner').style.display = 'none';
   state.incomingUndoRequest = false;
+  state.pendingNewGameRequest = false;
+  state.incomingNewGameRequest = false;
   state.gameStartedAt = new Date().toISOString();
   lastObservedTurnKey = null;
   clearLog();
@@ -288,6 +292,40 @@ function newGame(remoteHand) {
   if (state.online && Net.isHost && !isRemote) {
     Net.send({ type: 'newgame', hand });
   }
+}
+
+// Casual/ranked matches require both players to agree before starting a
+// rematch - otherwise the host could force the other player straight into
+// another ranked game with no say in it. Private rooms keep the old
+// instant/host-only behavior (newGame() above still enforces host-only there).
+function requestNewGame() {
+  if (state.connecting || !state.gameStarted) return;
+
+  if (!state.online || (state.gameMode !== 'casual' && state.gameMode !== 'ranked')) {
+    newGame();
+    return;
+  }
+
+  if (state.pendingNewGameRequest) return;
+  state.pendingNewGameRequest = true;
+  render();
+  setLobbyStatus('New game request sent - waiting for your opponent to respond...');
+  Net.send({ type: 'newgame-request' });
+}
+
+function respondToNewGameRequest(accept) {
+  state.incomingNewGameRequest = false;
+  Net.send({ type: 'newgame-response', accepted: accept });
+  if (accept) {
+    if (Net.isHost) {
+      newGame();
+    } else {
+      setLobbyStatus('Waiting for the host to start the new game...');
+    }
+  } else {
+    log('You declined the new game request.');
+  }
+  render();
 }
 
 // ---------- Placement validity ----------
@@ -941,7 +979,7 @@ function render() {
   canvas.classList.toggle('placing', !!state.selected && !state.gameOver);
 
   document.getElementById('rotateBtn').disabled = state.connecting || !state.gameStarted;
-  document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted;
+  document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted || state.pendingNewGameRequest;
   document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted
     || state.history.length === 0 || state.pendingUndoRequest;
   const tooEarlyToPass = state.gameStarted && !state.gameOver && !opponentHandEmpty();
@@ -955,6 +993,7 @@ function render() {
   document.getElementById('forfeitBtn').disabled = state.connecting || !state.gameStarted || state.gameOver;
 
   document.getElementById('undoRequestBanner').style.display = state.incomingUndoRequest ? 'flex' : 'none';
+  document.getElementById('newGameRequestBanner').style.display = state.incomingNewGameRequest ? 'flex' : 'none';
 
   document.getElementById('hotseatBtn').classList.toggle('active', !state.vsBot);
   document.getElementById('vsBotBtn').classList.toggle('active', state.vsBot);
@@ -1134,6 +1173,9 @@ document.getElementById('forfeitBtn').addEventListener('click', () => forfeitGam
 document.getElementById('undoAcceptBtn').addEventListener('click', () => respondToUndoRequest(true));
 document.getElementById('undoDeclineBtn').addEventListener('click', () => respondToUndoRequest(false));
 
+document.getElementById('newGameAcceptBtn').addEventListener('click', () => respondToNewGameRequest(true));
+document.getElementById('newGameDeclineBtn').addEventListener('click', () => respondToNewGameRequest(false));
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'r' || e.key === 'R') {
     rotateSelected();
@@ -1141,7 +1183,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 document.getElementById('newGameBtn').addEventListener('click', () => {
-  newGame();
+  requestNewGame();
 });
 
 document.getElementById('hotseatBtn').addEventListener('click', () => {
@@ -1356,6 +1398,22 @@ function handleNetData(msg) {
     applyFullState(msg);
     log('Reconnected — game state restored.');
     setLobbyStatus(`Connected! You are Player ${state.myPlayer}. (${state.gameMode})`);
+    render();
+  } else if (msg.type === 'newgame-request') {
+    state.incomingNewGameRequest = true;
+    render();
+  } else if (msg.type === 'newgame-response') {
+    state.pendingNewGameRequest = false;
+    if (msg.accepted) {
+      log('Opponent accepted your new game request.');
+      if (Net.isHost) {
+        newGame();
+      } else {
+        setLobbyStatus('Waiting for the host to start the new game...');
+      }
+    } else {
+      log('Opponent declined your new game request.');
+    }
     render();
   }
 }

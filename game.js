@@ -488,16 +488,30 @@ function opponentCanReachRegion(board, regionCells, opponentHand) {
 }
 
 // Bot-only variant of computeFinalScores(): a region only counts toward
-// this "trusted" tally if, on top of being fully mono-bordered, the
-// opponent's remaining hand has no legal placement reaching into it.
-// computeFinalScores answers "who would this belong to if the game ended
-// right now," which is the right question for real end-of-game scoring but
-// a poor one for move selection - a mono-bordered region the opponent can
-// still drop a piece into isn't a secured advantage, it's just space they
-// haven't gotten around to contesting yet, and trusting it is exactly what
-// leads the bot to stake out large, undefended "captures" that get walked
-// into and nullified a turn or two later.
-function computeTrustedScores(board, opponentHand) {
+// this "trusted" tally if, on top of being fully mono-bordered, the OTHER
+// player's remaining hand has no legal placement reaching into it - a
+// region already owned by player 1 is checked against hand2 (can the bot
+// still contest it), and vice versa. computeFinalScores answers "who would
+// this belong to if the game ended right now," which is the right question
+// for real end-of-game scoring but a poor one for move selection - a mono-
+// bordered region the other side can still drop a piece into isn't a
+// secured advantage, it's just space nobody's gotten around to contesting
+// yet, and trusting it is exactly what leads the bot to stake out large,
+// undefended "captures" that get walked into and nullified a turn or two
+// later. This is also what lets the bot recognize a genuine threat: if the
+// opponent's forming territory isn't reachable by the bot's own hand, it
+// counts at full value here, which is precisely the signal that should
+// drive the bot to cut in and contest it before it's too late while it
+// still can.
+function removeOnePiece(hand, shapeName) {
+  const i = hand.indexOf(shapeName);
+  if (i === -1) return hand;
+  const copy = hand.slice();
+  copy.splice(i, 1);
+  return copy;
+}
+
+function computeTrustedScores(board, hand1, hand2) {
   const visited = new Uint8Array(board.length);
   let trusted1 = 0, trusted2 = 0;
   for (let i = 0; i < board.length; i++) {
@@ -520,10 +534,13 @@ function computeTrustedScores(board, opponentHand) {
           }
         }
       }
-      if (borderOwners.size === 1 && !opponentCanReachRegion(board, regionCells, opponentHand)) {
+      if (borderOwners.size === 1) {
         const owner = [...borderOwners][0];
-        if (owner === 1) trusted1 += regionCells.length;
-        else trusted2 += regionCells.length;
+        const invaderHand = owner === 1 ? hand2 : hand1;
+        if (!opponentCanReachRegion(board, regionCells, invaderHand)) {
+          if (owner === 1) trusted1 += regionCells.length;
+          else trusted2 += regionCells.length;
+        }
       }
     }
   }
@@ -545,8 +562,20 @@ function scoreBotCandidate(candidate, board, player) {
     simBoard[cell] = player;
     cells.push(cell);
   }
-  const opponentHand = player === 1 ? state.hand2 : state.hand1;
-  const { trusted1, trusted2 } = computeTrustedScores(simBoard, opponentHand);
+  // The hand passed in for reachability purposes should reflect that this
+  // candidate's own piece is no longer "available" - it's already down on
+  // simBoard. Without this, a move that uses up the bot's only piece
+  // capable of reaching some other opponent-leaning pocket would still get
+  // credit as if that pocket were still contestable, hiding the real cost
+  // of spending this piece here instead of there. This is also what
+  // creates the incentive to actually block: if using a piece on a small
+  // capture elsewhere would leave a bigger opponent pocket newly
+  // unreachable (and therefore newly "trusted" for them), that shows up
+  // directly as a worse territoryDelta for this candidate.
+  const myHandForTrust = removeOnePiece(player === 1 ? state.hand1 : state.hand2, candidate.shapeName);
+  const hand1ForTrust = player === 1 ? myHandForTrust : state.hand1;
+  const hand2ForTrust = player === 2 ? myHandForTrust : state.hand2;
+  const { trusted1, trusted2 } = computeTrustedScores(simBoard, hand1ForTrust, hand2ForTrust);
   const myScore = player === 1 ? trusted1 : trusted2;
   const oppScore = player === 1 ? trusted2 : trusted1;
   const territoryDelta = myScore - oppScore;

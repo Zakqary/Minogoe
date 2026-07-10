@@ -286,6 +286,7 @@ function newGame(remoteHand) {
   lastObservedTurnKey = null;
   clearLog();
   log(`New game started. Both players drew the same hand. ${playerLabel(2)} starts with a ${HANDICAP_P2}-point handicap.`);
+  playGameStartChime();
   checkGameEnd();
   render();
 
@@ -810,6 +811,54 @@ function playDing() {
 function maybeDingForTurn() {
   const isMyTurn = state.online ? state.turn === state.myPlayer : (state.vsBot ? state.turn === 1 : true);
   if (isMyTurn) playDing();
+}
+
+// A bright two-note chime, distinct from the single-tone turn ding, so a
+// fresh game starting doesn't sound like just another turn notification.
+function playGameStartChime() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const now = audioCtx.currentTime;
+    for (const freq of [523.25, 659.25]) { // C5 + E5
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.1, now + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.6);
+    }
+  } catch {
+    // audio unavailable/blocked - not critical, ignore
+  }
+}
+
+// Two quick ascending notes, so an incoming chat message is clearly
+// distinguishable by ear from the turn ding and the game-start chime.
+function playChatPing() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const now = audioCtx.currentTime;
+    for (const { freq, start } of [{ freq: 660, start: 0 }, { freq: 990, start: 0.09 }]) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, now + start);
+      gain.gain.exponentialRampToValueAtTime(0.1, now + start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + start + 0.18);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now + start);
+      osc.stop(now + start + 0.2);
+    }
+  } catch {
+    // audio unavailable/blocked - not critical, ignore
+  }
 }
 
 // ---------- Per-turn timer (online casual/ranked only) ----------
@@ -1410,6 +1459,7 @@ function handleNetData(msg) {
   } else if (msg.type === 'chat') {
     const opponentPlayerNum = state.myPlayer === 1 ? 2 : 1;
     log(`\u{1F4AC} ${playerLabel(opponentPlayerNum)}: ${msg.text}`);
+    playChatPing();
   } else if (msg.type === 'elo-result') {
     showEloResult(state.myPlayer === 1 ? msg.delta_p1 : msg.delta_p2);
   } else if (msg.type === 'resync') {

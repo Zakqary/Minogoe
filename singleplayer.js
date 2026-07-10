@@ -199,8 +199,17 @@ function runCaptureCascade() {
   return changed;
 }
 
-function isBoardFullyCaptured() {
-  for (let i = 0; i < state.board.length; i++) if (state.board[i] !== 2) return false;
+// The board is complete once no empty (0) cells remain - NOT once every
+// cell is specifically captured (2). A piece that exactly fills the last
+// remaining gap (leaving nothing empty behind it to enclose) never
+// triggers the capture rule in runCaptureCascade(), since that rule only
+// fires by finding a leftover empty region - so its own cells stay
+// "placed" (1) forever even though the board is genuinely done. Checking
+// for "== 2 everywhere" instead of "no 0s left" wrongly treated that as
+// unfinished, which then made the next piece unplaceable anywhere and
+// incorrectly failed the run instead of recognizing a win.
+function isBoardComplete() {
+  for (let i = 0; i < state.board.length; i++) if (state.board[i] === 0) return false;
   return true;
 }
 
@@ -250,7 +259,12 @@ function commitPlacement(r0, c0) {
 
   runCaptureCascade();
 
-  if (isBoardFullyCaptured()) {
+  if (isBoardComplete()) {
+    // Cosmetic: any cells still sitting at "placed" (1) rather than
+    // "captured" (2) at this point are only in that state because they
+    // directly filled the last gap with nothing left over to enclose -
+    // color them in like the rest of the board for the finished view.
+    for (let i = 0; i < state.board.length; i++) if (state.board[i] === 1) state.board[i] = 2;
     finishRun();
     return;
   }

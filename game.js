@@ -1354,6 +1354,7 @@ function rotateSelected() {
   recomputeHover();
   updateSelectionInfo();
   drawBoard();
+  refreshDragGhostShape();
 }
 
 function recomputeHover() {
@@ -1704,11 +1705,11 @@ function drawShapeIcon(canvasEl, coords) {
 let pieceDrag = null; // { shapeName, startX, startY, moved, ghostEl }
 const DRAG_THRESHOLD_PX = 8;
 
-function createDragGhost(shapeName) {
+function createDragGhost(shapeName, orientationIndex) {
   const ghost = document.createElement('div');
   ghost.className = 'piece-drag-ghost';
   const c = document.createElement('canvas');
-  drawShapeIcon(c, BASE_SHAPES[shapeName]);
+  drawShapeIcon(c, ORIENTATIONS[shapeName][orientationIndex]);
   ghost.appendChild(c);
   document.body.appendChild(ghost);
   return ghost;
@@ -1719,6 +1720,18 @@ function updateDragGhost(ghostEl, clientX, clientY) {
   // Offset above the finger so the piece itself isn't hidden underneath it.
   ghostEl.style.left = `${clientX}px`;
   ghostEl.style.top = `${clientY - 60}px`;
+}
+
+// Lets the mobile rotate button (or the 'r' key/scroll-wheel, on the off
+// chance a touch device also has one) actually rotate the piece being
+// dragged - without this the ghost silently kept showing the pre-rotation
+// orientation even though the board's hover preview underneath had already
+// rotated, since the ghost is a static canvas snapshot taken once at drag
+// start rather than something recomputed every frame like the hover.
+function refreshDragGhostShape() {
+  if (!pieceDrag || !pieceDrag.moved || !pieceDrag.ghostEl || !state.selected) return;
+  const canvasEl = pieceDrag.ghostEl.querySelector('canvas');
+  if (canvasEl) drawShapeIcon(canvasEl, ORIENTATIONS[state.selected.shapeName][state.selected.orientationIndex]);
 }
 
 // Shared with mouse/tap hover - just derives state.mouseRC from a raw touch
@@ -1759,7 +1772,7 @@ function wirePieceDrag(item, name) {
     if (!pieceDrag.moved && Math.hypot(touch.clientX - pieceDrag.startX, touch.clientY - pieceDrag.startY) > DRAG_THRESHOLD_PX) {
       pieceDrag.moved = true;
       selectShape(pieceDrag.shapeName);
-      pieceDrag.ghostEl = createDragGhost(pieceDrag.shapeName);
+      pieceDrag.ghostEl = createDragGhost(pieceDrag.shapeName, state.selected.orientationIndex);
     }
     if (pieceDrag.moved) {
       updateDragGhost(pieceDrag.ghostEl, touch.clientX, touch.clientY);

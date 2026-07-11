@@ -20,7 +20,7 @@ const Auth = (() => {
     }
     const { data, error } = await supabaseClient
       .from('profiles')
-      .select('*')
+      .select('*, companion:companion_mino_id(id, color, rarity, modifier, stage, name)')
       .eq('id', currentUser.id)
       .single();
     currentProfile = error ? null : data;

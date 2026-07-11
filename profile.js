@@ -8,7 +8,7 @@ async function renderProfilePage() {
   if (viewUserId) {
     const { data, error } = await supabaseClient
       .from('profiles')
-      .select('*')
+      .select('*, companion:companion_mino_id(id, color, rarity, modifier, stage, name)')
       .eq('id', viewUserId)
       .single();
     if (error || !data) {
@@ -83,8 +83,12 @@ async function renderProfilePage() {
     ? new Date(profile.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
     : null;
 
+  const companionHtml = profile.companion
+    ? `<span class="profile-companion" title="${escapeHtml(minoLabel(profile.companion))}${profile.companion.name ? ' - ' + escapeHtml(profile.companion.name) : ''}">${minoVisualHtml(profile.companion, 32)}</span>`
+    : '';
+
   container.innerHTML = `
-    <h2 class="profile-heading">${avatarHtml(profile.avatar_id, 36)} ${escapeHtml(profile.username)} ${titleBadgeHtml(profile.title_id)}</h2>
+    <h2 class="profile-heading">${avatarHtml(profile.avatar_id, 36)} ${escapeHtml(profile.username)} ${titleBadgeHtml(profile.title_id)} ${companionHtml}</h2>
     ${joinedText ? `<div class="profile-joined">Account created on ${escapeHtml(joinedText)}</div>` : ''}
     <div class="profile-stats">
       <div class="stat"><div class="stat-value">${rank != null ? '#' + rank : '-'}</div><div class="stat-label">Rank</div></div>

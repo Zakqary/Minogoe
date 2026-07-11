@@ -94,7 +94,7 @@ async function renderShopPage() {
       <div class="shop-item-card">
         <span class="shop-item-preview seed-pack-preview">&#127793;</span>
         <div class="shop-item-name">Seed Pack</div>
-        <div class="shop-item-sub">A random Mino seed</div>
+        <div class="shop-item-sub">You have ${profile.unopened_seed_packs || 0} unopened</div>
         <button class="shop-buy-seedpack-btn">Buy for 10 coins</button>
       </div>
     </div>
@@ -170,20 +170,15 @@ function wireShopButtons() {
     buySeedPackBtn.addEventListener('click', async () => {
       showShopError('');
       buySeedPackBtn.disabled = true;
-      const { data: newMinoId, error } = await supabaseClient.rpc('buy_seed_pack');
+      const { error } = await supabaseClient.rpc('buy_seed_pack');
       if (error) {
         showShopError(error.message);
         buySeedPackBtn.disabled = false;
         return;
       }
-      const { data: mino } = await supabaseClient.from('minos').select('*').eq('id', newMinoId).single();
       await refreshAfterMutation();
-      if (mino) {
-        const el = document.getElementById('seedRevealMessage');
-        if (el) {
-          el.textContent = `You got a ${mino.rarity}${mino.modifier ? ' ' + mino.modifier : ''} ${mino.color} seed! Plant it in your garden.`;
-        }
-      }
+      const el = document.getElementById('seedRevealMessage');
+      if (el) el.textContent = 'Sealed seed pack added to your inventory - open it whenever you like in your garden.';
     });
   }
 }

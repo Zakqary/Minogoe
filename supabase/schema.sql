@@ -924,3 +924,116 @@ create trigger on_human_game_played
   for each row
   when (new.mode in ('casual', 'ranked'))
   execute function public.handle_human_game_played();
+
+-- ---------- Phase 17: seed pack inventory (open-on-demand), companion Minos ----------
+
+alter table public.profiles add column if not exists unopened_seed_packs integer not null default 0;
+alter table public.profiles add column if not exists companion_mino_id uuid references public.minos(id) on delete set null;
+
+-- Buying a pack no longer grants a seed immediately - it just adds a sealed
+-- pack to inventory, so the client can show an "open when you're ready"
+-- animation instead of an instant reveal. See open_seed_pack() below for the
+-- actual grant.
+create or replace function public.buy_seed_pack()
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  current_coins integer;
+  pack_price constant integer := 10;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select coins into current_coins from public.profiles where id = uid for update;
+  if current_coins < pack_price then
+    raise exception 'Not enough coins';
+  end if;
+
+  update public.profiles
+  set coins = coins - pack_price, unopened_seed_packs = unopened_seed_packs + 1
+  where id = uid;
+
+  return current_coins - pack_price;
+end;
+$$;
+
+create or replace function public.open_seed_pack()
+returns uuid
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  pack_count integer;
+  new_id uuid;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select unopened_seed_packs into pack_count from public.profiles where id = uid for update;
+  if pack_count is null or pack_count < 1 then
+    raise exception 'No seed packs to open';
+  end if;
+
+  update public.profiles set unopened_seed_packs = unopened_seed_packs - 1 where id = uid;
+  new_id := public.grant_random_seed(uid, true);
+  return new_id;
+end;
+$$;
+
+-- A companion must be a fully-grown adult - it's meant to show off a Mino
+-- you've actually raised, not a freshly-planted seed. p_mino_id = null clears it.
+create or replace function public.set_companion(p_mino_id uuid)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if p_mino_id is not null and not exists (
+    select 1 from public.minos where id = p_mino_id and user_id = uid and stage = 'adult'
+  ) then
+    raise exception 'Mino not found';
+  end if;
+
+  update public.profiles set companion_mino_id = p_mino_id where id = uid;
+end;
+$$;
+
+-- Digging up resets a mino to seed form, which would break the "companion is
+-- always an adult" invariant - clear the companion pointer too whenever the
+-- mino being dug up happens to be the caller's current companion.
+create or replace function public.dig_up_mino(p_mino_id uuid)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if not exists (select 1 from public.minos where id = p_mino_id and user_id = uid and planted) then
+    raise exception 'Planted mino not found';
+  end if;
+
+  update public.minos
+  set planted = false, stage = 'seed', growth_progress = 0
+  where id = p_mino_id;
+
+  update public.profiles set companion_mino_id = null
+  where id = uid and companion_mino_id = p_mino_id;
+end;
+$$;

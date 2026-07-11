@@ -58,6 +58,71 @@ function coinIconHtml(size = 14) {
   return `<img src="assets/coin.png" alt="" class="coin-icon" style="width:${size}px;height:${size}px;">`;
 }
 
+// ---------- Mino (garden creature) rendering - shared so game.js/profile.js
+// can render a player's companion without loading garden.js's full page logic ----------
+
+// Hex swatches for each seed color - keep in sync with schema.sql's
+// random_mino_color() (Phase 16). Purely a display concern: the DB only
+// ever stores the color name, never a hex value.
+const MINO_COLOR_HEX = {
+  Crimson: '#c0392b',
+  Amber: '#e6923a',
+  Gold: '#d4af37',
+  Verdant: '#4a9b4a',
+  Teal: '#3aa6a6',
+  Azure: '#3b82c4',
+  Violet: '#8b6fd9',
+  Magenta: '#c74fb0',
+  Umber: '#8a5a3b',
+  Slate: '#6b7280',
+};
+
+function capitalize(word) {
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+// A small procedural SVG "creature" rather than illustrated art - there's
+// no art pipeline for 10 colors x 5 rarities x 4 stages x 10 modifiers the
+// way avatars have one (those are hand-supplied image files). Stage
+// changes the silhouette (seed -> sprouting leaves -> eyes -> limbs);
+// rarity is a CSS glow applied around the shape via mino-rarity-<rarity>.
+function minoVisualHtml(mino, size = 48) {
+  const hex = MINO_COLOR_HEX[mino.color] || '#999';
+  const hasEyes = mino.stage === 'adolescent' || mino.stage === 'adult';
+  const hasLimbs = mino.stage === 'adult';
+  const hasLeaves = mino.stage === 'sapling';
+  const bodyRy = mino.stage === 'seed' ? 22 : 35;
+  const bodyRx = mino.stage === 'seed' ? 26 : 40;
+
+  const leaves = hasLeaves
+    ? `<path d="M50 22 Q34 8 26 22 Q40 24 50 22 Z" fill="#4a9b4a"/><path d="M50 22 Q66 8 74 22 Q60 24 50 22 Z" fill="#4a9b4a"/>`
+    : '';
+  const eyes = hasEyes
+    ? `<circle cx="38" cy="55" r="5" fill="#1a1a1a"/><circle cx="62" cy="55" r="5" fill="#1a1a1a"/>`
+    : '';
+  // Positioned outside the body ellipse's horizontal edges (cx +/- bodyRx)
+  // so they read as distinct limb nubs rather than disappearing inside the
+  // larger same-colored body shape.
+  const limbs = hasLimbs
+    ? `<ellipse cx="${50 - bodyRx + 2}" cy="86" rx="10" ry="8" fill="${hex}"/><ellipse cx="${50 + bodyRx - 2}" cy="86" rx="10" ry="8" fill="${hex}"/>`
+    : '';
+
+  return `
+    <div class="mino-visual mino-rarity-${mino.rarity}" style="width:${size}px;height:${size}px;">
+      <svg viewBox="0 0 100 100" width="100%" height="100%">
+        ${leaves}
+        <ellipse cx="50" cy="60" rx="${bodyRx}" ry="${bodyRy}" fill="${hex}" />
+        ${eyes}
+        ${limbs}
+      </svg>
+    </div>
+  `;
+}
+
+function minoLabel(mino) {
+  return `${capitalize(mino.rarity)}${mino.modifier ? ' ' + mino.modifier : ''} ${mino.color}`;
+}
+
 function renderAuthWidget() {
   const el = document.getElementById('authWidget');
   const user = Auth.getUser();

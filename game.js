@@ -107,6 +107,7 @@ const state = {
   opponentAvatarId: null, // the connected peer's equipped avatar item id, if any
   opponentTitleId: null,  // the connected peer's equipped title item id, if any
   opponentEloRating: null, // the connected peer's ELO rating, if they're logged in
+  opponentCompanion: null, // the connected peer's chosen companion Mino ({ color, rarity, modifier, stage }), if any
   introShown: false,  // whether the match intro card has already been shown this match
   gameStartedAt: null,
   initialHand: [],    // the pristine drawn hand, for replay reconstruction
@@ -277,6 +278,23 @@ function playerTitleId(playerNum) {
   return null;
 }
 
+// The chosen companion Mino ({ color, rarity, modifier, stage }) for whoever's
+// in a given player slot, or null - same shape as playerAvatarId/playerTitleId.
+function playerCompanion(playerNum) {
+  if (state.online) {
+    if (playerNum === state.myPlayer) {
+      const profile = Auth.getProfile();
+      return profile ? profile.companion : null;
+    }
+    return state.opponentCompanion || null;
+  }
+  if (playerNum === 1) {
+    const profile = Auth.getProfile();
+    return profile ? profile.companion : null;
+  }
+  return null;
+}
+
 // Combines the existing name link with an avatar image + title badge -
 // only for real accounts (bot/guest/local-hotseat-P2 have no profile, so
 // playerProfileId is null and they show as plain name text, same as before).
@@ -289,7 +307,9 @@ function playerBadgeHtml(playerNum) {
   // reads as presumptuous, since no match (and no real "player 1 vs 2") has
   // been decided yet. Cosmetics only show once a game is actually underway.
   if (!id || !state.gameStarted) return nameHtml;
-  return `${avatarHtml(playerAvatarId(playerNum), 20)} ${nameHtml} ${titleBadgeHtml(playerTitleId(playerNum))}`;
+  const companion = playerCompanion(playerNum);
+  const companionHtml = companion ? `<span class="player-companion">${minoVisualHtml(companion, 20)}</span>` : '';
+  return `${avatarHtml(playerAvatarId(playerNum), 20)} ${companionHtml}${nameHtml} ${titleBadgeHtml(playerTitleId(playerNum))}`;
 }
 
 // ---------- Pre-match "vs" intro card (casual/ranked only) ----------
@@ -1929,6 +1949,7 @@ function handleRejoinReady() {
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
     eloRating: myProfile ? myProfile.elo_rating : null,
+    companion: myProfile ? myProfile.companion : null,
   });
 
   const iHaveLiveGame = state.gameStarted && !state.gameOver;
@@ -2074,6 +2095,7 @@ function handleNetReady() {
   state.opponentAvatarId = null;
   state.opponentTitleId = null;
   state.opponentEloRating = null;
+  state.opponentCompanion = null;
   state.introShown = false;
   state.pendingUndoRequest = false;
   state.incomingUndoRequest = false;
@@ -2090,6 +2112,7 @@ function handleNetReady() {
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
     eloRating: myProfile ? myProfile.elo_rating : null,
+    companion: myProfile ? myProfile.companion : null,
   });
 
   if (Net.isHost) {
@@ -2157,6 +2180,7 @@ function handleNetDataInner(msg) {
     state.opponentAvatarId = msg.avatarId ?? null;
     state.opponentTitleId = msg.titleId ?? null;
     state.opponentEloRating = msg.eloRating ?? null;
+    state.opponentCompanion = msg.companion ?? null;
     showMatchIntroCard();
     render();
   } else if (msg.type === 'chat') {

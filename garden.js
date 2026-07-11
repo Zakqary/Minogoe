@@ -1,71 +1,14 @@
-// Hex swatches for each seed color - keep in sync with schema.sql's
-// random_mino_color() (Phase 16). Purely a display concern: the DB only
-// ever stores the color name, never a hex value.
-const MINO_COLOR_HEX = {
-  Crimson: '#c0392b',
-  Amber: '#e6923a',
-  Gold: '#d4af37',
-  Verdant: '#4a9b4a',
-  Teal: '#3aa6a6',
-  Azure: '#3b82c4',
-  Violet: '#8b6fd9',
-  Magenta: '#c74fb0',
-  Umber: '#8a5a3b',
-  Slate: '#6b7280',
-};
-
-function capitalize(word) {
-  return word.charAt(0).toUpperCase() + word.slice(1);
-}
-
-// A small procedural SVG "creature" rather than illustrated art - there's
-// no art pipeline for 10 colors x 5 rarities x 4 stages x 10 modifiers the
-// way avatars have one (those are hand-supplied image files). Stage
-// changes the silhouette (seed -> sprouting leaves -> eyes -> limbs);
-// rarity is a CSS glow applied around the shape via mino-rarity-<rarity>.
-function minoVisualHtml(mino, size = 48) {
-  const hex = MINO_COLOR_HEX[mino.color] || '#999';
-  const hasEyes = mino.stage === 'adolescent' || mino.stage === 'adult';
-  const hasLimbs = mino.stage === 'adult';
-  const hasLeaves = mino.stage === 'sapling';
-  const bodyRy = mino.stage === 'seed' ? 22 : 35;
-  const bodyRx = mino.stage === 'seed' ? 26 : 40;
-
-  const leaves = hasLeaves
-    ? `<path d="M50 22 Q34 8 26 22 Q40 24 50 22 Z" fill="#4a9b4a"/><path d="M50 22 Q66 8 74 22 Q60 24 50 22 Z" fill="#4a9b4a"/>`
-    : '';
-  const eyes = hasEyes
-    ? `<circle cx="38" cy="55" r="5" fill="#1a1a1a"/><circle cx="62" cy="55" r="5" fill="#1a1a1a"/>`
-    : '';
-  // Positioned outside the body ellipse's horizontal edges (cx +/- bodyRx)
-  // so they read as distinct limb nubs rather than disappearing inside the
-  // larger same-colored body shape.
-  const limbs = hasLimbs
-    ? `<ellipse cx="${50 - bodyRx + 2}" cy="86" rx="10" ry="8" fill="${hex}"/><ellipse cx="${50 + bodyRx - 2}" cy="86" rx="10" ry="8" fill="${hex}"/>`
-    : '';
-
-  return `
-    <div class="mino-visual mino-rarity-${mino.rarity}" style="width:${size}px;height:${size}px;">
-      <svg viewBox="0 0 100 100" width="100%" height="100%">
-        ${leaves}
-        <ellipse cx="50" cy="60" rx="${bodyRx}" ry="${bodyRy}" fill="${hex}" />
-        ${eyes}
-        ${limbs}
-      </svg>
-    </div>
-  `;
-}
-
-function minoLabel(mino) {
-  return `${capitalize(mino.rarity)}${mino.modifier ? ' ' + mino.modifier : ''} ${mino.color}`;
-}
+// MINO_COLOR_HEX / capitalize / minoVisualHtml / minoLabel live in
+// auth-ui.js - shared with game.js/profile.js so a player's companion can be
+// rendered on the scoreboard and profile page without loading this whole
+// garden page's logic.
 
 function showGardenError(message) {
   const el = document.getElementById('gardenError');
   if (el) el.textContent = message;
 }
 
-function potSlotHtml(mino) {
+function potSlotHtml(mino, companionId) {
   if (!mino) {
     return `
       <div class="garden-pot empty">
@@ -75,14 +18,21 @@ function potSlotHtml(mino) {
     `;
   }
   const progressText = mino.stage === 'adult' ? 'Fully grown' : `${mino.growth_progress}/5 games to grow`;
+  const isCompanion = mino.id === companionId;
+  // The companion picker only makes sense once a Mino is fully grown - a
+  // seedling would look odd trailing a player around mid-game.
+  const companionBtn = mino.stage === 'adult'
+    ? `<button class="garden-companion-btn${isCompanion ? ' active' : ''}" data-id="${escapeHtml(mino.id)}" data-current="${isCompanion ? 'true' : 'false'}">${isCompanion ? '★ Companion' : 'Make Companion'}</button>`
+    : '';
   return `
-    <div class="garden-pot planted">
+    <div class="garden-pot planted${isCompanion ? ' is-companion' : ''}">
       ${minoVisualHtml(mino, 56)}
       <div class="garden-mino-name" data-id="${escapeHtml(mino.id)}" data-current="${escapeHtml(mino.name || '')}" title="Click to rename">
         ${mino.name ? escapeHtml(mino.name) : 'Unnamed Mino'} &#9998;
       </div>
       <div class="garden-mino-sub">${escapeHtml(minoLabel(mino))}</div>
       <div class="garden-mino-stage">${capitalize(mino.stage)} &middot; ${progressText}</div>
+      ${companionBtn}
       <button class="garden-digup-btn" data-id="${escapeHtml(mino.id)}">Dig Up</button>
     </div>
   `;
@@ -94,6 +44,16 @@ function seedCardHtml(seed, canPlant) {
       ${minoVisualHtml(seed, 40)}
       <div class="garden-seed-label">${escapeHtml(minoLabel(seed))}</div>
       <button class="garden-plant-btn" data-id="${escapeHtml(seed.id)}" ${canPlant ? '' : 'disabled'}>Plant</button>
+    </div>
+  `;
+}
+
+function seedPackCardHtml() {
+  return `
+    <div class="garden-seed-card seed-pack-card">
+      <div class="seed-pack-icon">&#127793;</div>
+      <div class="garden-seed-label">Sealed Seed Pack</div>
+      <button class="garden-open-pack-btn">Open</button>
     </div>
   `;
 }
@@ -128,9 +88,17 @@ async function renderGardenPage() {
   const seeds = all.filter((m) => !m.planted);
   const potCount = profile.garden_pot_count;
   const canPlant = planted.length < potCount;
+  const companionId = profile.companion_mino_id || null;
+  const packCount = profile.unopened_seed_packs || 0;
 
   const pots = [];
-  for (let i = 0; i < potCount; i++) pots.push(potSlotHtml(planted[i] || null));
+  for (let i = 0; i < potCount; i++) pots.push(potSlotHtml(planted[i] || null, companionId));
+
+  const packCards = Array.from({ length: packCount }, () => seedPackCardHtml()).join('');
+  const seedCards = seeds.map((s) => seedCardHtml(s, canPlant)).join('');
+  const inventoryEmpty = !packCards && !seedCards
+    ? '<p>No seeds yet - play casual/ranked games or buy a seed pack in the shop.</p>'
+    : '';
 
   container.innerHTML = `
     <div class="shop-balance">${coinIconHtml(18)} You have <strong>${profile.coins}</strong> coin${profile.coins === 1 ? '' : 's'}. Visit the <a href="shop.html">shop</a> for extra pots and seed packs.</div>
@@ -140,7 +108,7 @@ async function renderGardenPage() {
     <div class="garden-pots">${pots.join('')}</div>
 
     <h3>Seed Inventory</h3>
-    <div class="garden-seed-inventory">${seeds.map((s) => seedCardHtml(s, canPlant)).join('') || '<p>No seeds yet - play casual/ranked games or buy a seed pack in the shop.</p>'}</div>
+    <div class="garden-seed-inventory">${packCards}${seedCards}${inventoryEmpty}</div>
   `;
 
   wireGardenButtons();
@@ -155,6 +123,32 @@ async function promptRename(minoId, currentName) {
     return;
   }
   renderGardenPage();
+}
+
+// Opens a seed pack in place: a brief shake animation, then the reveal - the
+// full page (new seed in inventory, one fewer sealed pack) only re-renders
+// after the reveal has had a moment to show, so the player actually sees
+// what they got instead of the grid just reshuffling under them.
+async function openPackWithAnimation(cardEl) {
+  cardEl.classList.add('seed-pack-shaking');
+  await new Promise((resolve) => setTimeout(resolve, 900));
+
+  const { data: newMinoId, error } = await supabaseClient.rpc('open_seed_pack');
+  if (error) {
+    showGardenError(error.message);
+    renderGardenPage();
+    return;
+  }
+
+  const { data: mino } = await supabaseClient.from('minos').select('*').eq('id', newMinoId).single();
+  cardEl.classList.remove('seed-pack-shaking');
+  if (mino) {
+    cardEl.classList.add('seed-pack-revealed');
+    cardEl.innerHTML = `${minoVisualHtml(mino, 44)}<div class="garden-seed-label">New: ${escapeHtml(minoLabel(mino))}!</div>`;
+  }
+
+  await Auth.refreshProfile();
+  setTimeout(renderGardenPage, 1600);
 }
 
 function wireGardenButtons() {
@@ -172,6 +166,7 @@ function wireGardenButtons() {
         btn.disabled = false;
         return;
       }
+      await Auth.refreshProfile();
       renderGardenPage();
     });
   }
@@ -187,6 +182,31 @@ function wireGardenButtons() {
         return;
       }
       renderGardenPage();
+    });
+  }
+
+  for (const btn of document.querySelectorAll('.garden-companion-btn')) {
+    btn.addEventListener('click', async () => {
+      showGardenError('');
+      btn.disabled = true;
+      const isCurrent = btn.dataset.current === 'true';
+      const { error } = await supabaseClient.rpc('set_companion', { p_mino_id: isCurrent ? null : btn.dataset.id });
+      if (error) {
+        showGardenError(error.message);
+        btn.disabled = false;
+        return;
+      }
+      await Auth.refreshProfile();
+      if (typeof renderAuthWidget === 'function') renderAuthWidget();
+      renderGardenPage();
+    });
+  }
+
+  for (const btn of document.querySelectorAll('.garden-open-pack-btn')) {
+    btn.addEventListener('click', () => {
+      showGardenError('');
+      btn.disabled = true;
+      openPackWithAnimation(btn.closest('.seed-pack-card'));
     });
   }
 }

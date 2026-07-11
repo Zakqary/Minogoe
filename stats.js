@@ -1,10 +1,53 @@
 // Shape names are stored as e.g. "P_F" (Pentomino F), "Q_I" (Tetromino I),
 // "R_L" (Tromino L) - see BASE_SHAPES in game.js. Split the prefix back into
-// a readable category rather than showing the raw DB key.
+// a readable category, used as this chart's hover tooltip now that the row
+// label itself is drawn as an icon (see BASE_SHAPES/drawShapeIcon below).
 function formatShapeName(shapeName) {
   const [prefix, letter] = (shapeName || '').split('_');
   const category = { P: 'Pentomino', Q: 'Tetromino', R: 'Tromino' }[prefix] || prefix;
   return letter ? `${letter} ${category}` : (shapeName || 'Unknown');
+}
+
+// Duplicated from game.js rather than shared - same standalone-page
+// convention replay.js already follows, since this page doesn't otherwise
+// load any of game.js's live/interactive state machine.
+const BASE_SHAPES = {
+  P_F: [[0,1],[0,2],[1,0],[1,1],[2,1]],
+  P_I: [[0,0],[1,0],[2,0],[3,0],[4,0]],
+  P_L: [[0,0],[1,0],[2,0],[3,0],[3,1]],
+  P_N: [[0,1],[1,1],[2,0],[2,1],[3,0]],
+  P_P: [[0,0],[0,1],[1,0],[1,1],[2,0]],
+  P_T: [[0,0],[0,1],[0,2],[1,1],[2,1]],
+  P_U: [[0,0],[0,2],[1,0],[1,1],[1,2]],
+  P_V: [[0,0],[1,0],[2,0],[2,1],[2,2]],
+  P_W: [[0,0],[1,0],[1,1],[2,1],[2,2]],
+  P_X: [[0,1],[1,0],[1,1],[1,2],[2,1]],
+  P_Y: [[0,1],[1,0],[1,1],[2,1],[3,1]],
+  P_Z: [[0,0],[0,1],[1,1],[2,1],[2,2]],
+  Q_I: [[0,0],[0,1],[0,2],[0,3]],
+  Q_O: [[0,0],[0,1],[1,0],[1,1]],
+  Q_T: [[0,0],[0,1],[0,2],[1,1]],
+  Q_S: [[0,1],[0,2],[1,0],[1,1]],
+  Q_Z: [[0,0],[0,1],[1,1],[1,2]],
+  Q_L: [[0,0],[1,0],[2,0],[2,1]],
+  Q_J: [[0,1],[1,1],[2,1],[2,0]],
+  R_I: [[0,0],[0,1],[0,2]],
+  R_L: [[0,0],[1,0],[1,1]],
+};
+
+// Same px/color as game.js's hand-tray drawShapeIcon(), for visual
+// consistency with how pieces look everywhere else on the site.
+function drawShapeIcon(canvasEl, coords) {
+  const px = 8;
+  const maxR = Math.max(...coords.map((p) => p[0])) + 1;
+  const maxC = Math.max(...coords.map((p) => p[1])) + 1;
+  canvasEl.width = maxC * px;
+  canvasEl.height = maxR * px;
+  const ctx = canvasEl.getContext('2d');
+  ctx.fillStyle = '#ded6e3';
+  for (const [r, c] of coords) {
+    ctx.fillRect(c * px, r * px, px - 1, px - 1);
+  }
 }
 
 function statBoxHtml(value, label) {
@@ -21,6 +64,26 @@ function barRowHtml(label, pct, valueText, color) {
   return `
     <div class="stats-bar-row">
       <div class="stats-bar-label">${escapeHtml(label)}</div>
+      <div class="stats-bar-track">
+        <div class="stats-bar-fill" style="width:${clampedPct}%; background:${color};"></div>
+      </div>
+      <div class="stats-bar-value">${escapeHtml(valueText)}</div>
+    </div>
+  `;
+}
+
+// Same row layout as barRowHtml(), but the label cell is a blank canvas
+// (drawn afterward - see the drawShapeIcon loop in renderStatsPage()),
+// since a string of HTML can't draw onto a <canvas> before it's actually
+// in the document. Narrower than the text label column it replaces, which
+// helps keep this chart compact with 12+ rows.
+function pieceRowHtml(shapeName, pct, valueText, color) {
+  const clampedPct = Math.max(0, Math.min(100, pct));
+  return `
+    <div class="stats-bar-row">
+      <div class="stats-piece-icon-cell" title="${escapeHtml(formatShapeName(shapeName))}">
+        <canvas class="stats-piece-icon-canvas" data-shape="${escapeHtml(shapeName)}"></canvas>
+      </div>
       <div class="stats-bar-track">
         <div class="stats-bar-fill" style="width:${clampedPct}%; background:${color};"></div>
       </div>
@@ -76,8 +139,8 @@ async function renderStatsPage() {
   let pieceChart;
   if (pieces.length > 0) {
     const maxRate = Math.max(...pieces.map((p) => Number(p.win_rate)), 1);
-    pieceChart = pieces.map((p) => barRowHtml(
-      formatShapeName(p.shape_name),
+    pieceChart = pieces.map((p) => pieceRowHtml(
+      p.shape_name,
       (Number(p.win_rate) / maxRate) * 100,
       `${p.win_rate}% (${p.games_count})`,
       'var(--accent)'
@@ -117,6 +180,11 @@ async function renderStatsPage() {
       ${scoreChart}
     </div>
   `;
+
+  for (const canvasEl of container.querySelectorAll('.stats-piece-icon-canvas')) {
+    const coords = BASE_SHAPES[canvasEl.dataset.shape];
+    if (coords) drawShapeIcon(canvasEl, coords);
+  }
 }
 
 renderStatsPage();

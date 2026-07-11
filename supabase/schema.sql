@@ -541,3 +541,51 @@ begin
   return new;
 end;
 $$;
+
+-- ---------- Phase 14: hidden/restricted shop items (e.g. admin-only titles) ----------
+
+-- A hidden item never appears in the shop for anyone to browse or buy -
+-- ownership is only ever granted directly (see shop_items_seed.sql's
+-- "Restricted items" section), never purchased. purchase_item() is updated
+-- to refuse buying a hidden item even via a direct RPC call - hiding it
+-- from the shop UI alone wouldn't stop that.
+alter table public.shop_items add column if not exists hidden boolean not null default false;
+
+create or replace function public.purchase_item(p_item_id text)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  item_price integer;
+  item_hidden boolean;
+  current_coins integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select price, hidden into item_price, item_hidden from public.shop_items where id = p_item_id;
+  if item_price is null then
+    raise exception 'Item not found';
+  end if;
+  if item_hidden then
+    raise exception 'Item not available for purchase';
+  end if;
+
+  if exists (select 1 from public.user_inventory where user_id = uid and item_id = p_item_id) then
+    raise exception 'Item already owned';
+  end if;
+
+  select coins into current_coins from public.profiles where id = uid for update;
+  if current_coins < item_price then
+    raise exception 'Not enough coins';
+  end if;
+
+  update public.profiles set coins = coins - item_price where id = uid;
+  insert into public.user_inventory (user_id, item_id) values (uid, p_item_id);
+
+  return current_coins - item_price;
+end;
+$$;

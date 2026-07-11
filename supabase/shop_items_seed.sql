@@ -3,8 +3,8 @@
 -- Safe to re-run any time - it upserts by id, so tweaking a price or name
 -- and re-running just updates the existing row.
 --
--- Requires schema.sql's Phase 12 (shop_items table) and Phase 13 (color/
--- notice columns) to have been run first.
+-- Requires schema.sql's Phase 12 (shop_items table), Phase 13 (color/
+-- notice columns), and Phase 14 (hidden column) to have been run first.
 --
 -- Avatars: drop the image file into assets/avatars/ (see the README there
 -- for size/format), then set image_path to "assets/avatars/<filename>".
@@ -27,7 +27,7 @@
 insert into public.shop_items (id, type, name, price, image_path, title_text, color, notice) values
   ('title_GOAT', 'title', 'GOAT', 20, null, 'GOAT', '#d4af37', null),
   ('title_GirlInAisle10', 'title', 'Girl in Aisle 10', 15, null, 'Girl in Aisle 10', '#e07bb5', null),
-  ('title_OG', 'title', 'OG', 5, null, 'OG', '#d1974a', 'No longer sold after 8/1/26!'),
+  ('title_OG', 'title', 'OG', 1, null, 'OG', '#d1974a', 'No longer sold after 8/1/26!'),
   ('title_Strategist', 'title', 'Strategist', 5, null, 'Strategist', '#5b8fd9', null),
   ('title_Genius', 'title', 'Genius', 15, null, 'Genius', '#9b7fd9', null),
   ('title_Gamer', 'title', 'Gamer', 5, null, 'Gamer', '#6fbf73', null),
@@ -57,3 +57,21 @@ delete from public.shop_items where id in (
   'avatar_example',
   'title_champion'
 );
+
+-- Restricted items - hidden = true keeps an item out of everyone's shop
+-- grid (and, per schema.sql Phase 14, out of purchase_item() too - it
+-- can't be bought even via a direct API call). Ownership is instead
+-- granted directly below, by username. The recipient still equips it
+-- normally from their own shop page - it just won't show up for anyone
+-- else, and no one else can buy it.
+insert into public.shop_items (id, type, name, price, title_text, color, hidden) values
+  ('title_admin', 'title', 'Admin', 0, 'Admin', '#e04545', true)
+on conflict (id) do update set
+  name = excluded.name,
+  title_text = excluded.title_text,
+  color = excluded.color,
+  hidden = excluded.hidden;
+
+insert into public.user_inventory (user_id, item_id)
+select id, 'title_admin' from public.profiles where username = 'AVNJ'
+on conflict (user_id, item_id) do nothing;

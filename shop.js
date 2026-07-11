@@ -92,6 +92,17 @@ function showShopError(message) {
   if (el) el.textContent = message;
 }
 
+// After any successful coin/inventory/equip mutation, the shop's own view
+// of Auth.getProfile() needs a refetch - but so does the nav widget at the
+// top of this (and every) page, which otherwise keeps showing the old
+// coins/avatar/title until the next full page load, since refreshProfile()
+// alone doesn't re-render anything.
+async function refreshAfterMutation() {
+  await Auth.refreshProfile();
+  if (typeof renderAuthWidget === 'function') renderAuthWidget();
+  renderShopPage();
+}
+
 function wireShopButtons() {
   for (const btn of document.querySelectorAll('.shop-buy-btn')) {
     btn.addEventListener('click', async () => {
@@ -103,8 +114,7 @@ function wireShopButtons() {
         btn.disabled = false;
         return;
       }
-      await Auth.refreshProfile();
-      renderShopPage();
+      await refreshAfterMutation();
     });
   }
 
@@ -119,11 +129,9 @@ function wireShopButtons() {
         btn.disabled = false;
         return;
       }
-      await Auth.refreshProfile();
-      renderShopPage();
+      await refreshAfterMutation();
     });
   }
-
 }
 
 Auth.onAuthChange(renderShopPage);

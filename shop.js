@@ -82,6 +82,23 @@ async function renderShopPage() {
 
     <h3>Titles</h3>
     <div class="shop-grid">${titles.map((i) => itemCardHtml(i, profile)).join('') || '<p>No titles in the shop yet.</p>'}</div>
+
+    <h3>Garden Supplies</h3>
+    <div class="shop-grid">
+      <div class="shop-item-card">
+        <span class="shop-item-preview pot-preview">&#127968;</span>
+        <div class="shop-item-name">Extra Pot</div>
+        <div class="shop-item-sub">You have ${profile.garden_pot_count}</div>
+        <button class="shop-buy-pot-btn">Buy for 10 coins</button>
+      </div>
+      <div class="shop-item-card">
+        <span class="shop-item-preview seed-pack-preview">&#127793;</span>
+        <div class="shop-item-name">Seed Pack</div>
+        <div class="shop-item-sub">A random Mino seed</div>
+        <button class="shop-buy-seedpack-btn">Buy for 10 coins</button>
+      </div>
+    </div>
+    <div id="seedRevealMessage" class="shop-seed-reveal"></div>
   `;
 
   wireShopButtons();
@@ -100,7 +117,7 @@ function showShopError(message) {
 async function refreshAfterMutation() {
   await Auth.refreshProfile();
   if (typeof renderAuthWidget === 'function') renderAuthWidget();
-  renderShopPage();
+  await renderShopPage();
 }
 
 function wireShopButtons() {
@@ -130,6 +147,43 @@ function wireShopButtons() {
         return;
       }
       await refreshAfterMutation();
+    });
+  }
+
+  const buyPotBtn = document.querySelector('.shop-buy-pot-btn');
+  if (buyPotBtn) {
+    buyPotBtn.addEventListener('click', async () => {
+      showShopError('');
+      buyPotBtn.disabled = true;
+      const { error } = await supabaseClient.rpc('buy_pot');
+      if (error) {
+        showShopError(error.message);
+        buyPotBtn.disabled = false;
+        return;
+      }
+      await refreshAfterMutation();
+    });
+  }
+
+  const buySeedPackBtn = document.querySelector('.shop-buy-seedpack-btn');
+  if (buySeedPackBtn) {
+    buySeedPackBtn.addEventListener('click', async () => {
+      showShopError('');
+      buySeedPackBtn.disabled = true;
+      const { data: newMinoId, error } = await supabaseClient.rpc('buy_seed_pack');
+      if (error) {
+        showShopError(error.message);
+        buySeedPackBtn.disabled = false;
+        return;
+      }
+      const { data: mino } = await supabaseClient.from('minos').select('*').eq('id', newMinoId).single();
+      await refreshAfterMutation();
+      if (mino) {
+        const el = document.getElementById('seedRevealMessage');
+        if (el) {
+          el.textContent = `You got a ${mino.rarity}${mino.modifier ? ' ' + mino.modifier : ''} ${mino.color} seed! Plant it in your garden.`;
+        }
+      }
     });
   }
 }

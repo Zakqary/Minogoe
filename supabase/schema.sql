@@ -609,3 +609,318 @@ alter table public.games add column if not exists client_match_id text;
 create unique index if not exists games_client_match_id_key
   on public.games (client_match_id)
   where client_match_id is not null;
+
+-- ---------- Phase 16: garden - plant and grow "Minos" from human games ----------
+
+alter table public.profiles add column if not exists garden_pot_count integer not null default 3;
+-- Distinct from shop_items.hidden - e.g. the Admin title is hidden but not
+-- mino_giftable, since it's granted to one specific account, not a random
+-- gift pool everyone can eventually receive.
+alter table public.shop_items add column if not exists mino_giftable boolean not null default false;
+
+create table if not exists public.minos (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  color text not null,
+  rarity text not null check (rarity in ('common', 'uncommon', 'rare', 'epic', 'legendary')),
+  modifier text,                               -- null ~80% of the time - purely cosmetic flavor
+  stage text not null default 'seed' check (stage in ('seed', 'sapling', 'adolescent', 'adult')),
+  growth_progress integer not null default 0,  -- human (casual/ranked) games played since the last stage-up
+  planted boolean not null default false,
+  name text,
+  seen boolean not null default true,          -- false only for a game-reward seed, until acknowledged client-side
+  last_gift_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+alter table public.minos enable row level security;
+
+drop policy if exists "Minos are publicly readable" on public.minos;
+create policy "Minos are publicly readable"
+  on public.minos for select
+  using (true);
+
+-- No insert/update/delete policy - every mutation goes through the
+-- security definer functions below, same as coins/shop/inventory.
+
+create or replace function public.random_mino_color()
+returns text
+language sql
+as $$
+  select (array['Crimson','Amber','Gold','Verdant','Teal','Azure','Violet','Magenta','Umber','Slate'])
+    [floor(random() * 10 + 1)];
+$$;
+
+create or replace function public.random_mino_rarity()
+returns text
+language sql
+as $$
+  select case
+    when r < 0.50 then 'common'
+    when r < 0.77 then 'uncommon'
+    when r < 0.92 then 'rare'
+    when r < 0.98 then 'epic'
+    else 'legendary'
+  end
+  from (select random() as r) rolled;
+$$;
+
+create or replace function public.random_mino_modifier()
+returns text
+language sql
+as $$
+  select case when random() < 0.2
+    then (array['Spotted','Striped','Glowing','Sparkly','Fuzzy','Iridescent','Shadowy','Radiant','Freckled','Metallic'])
+      [floor(random() * 10 + 1)]
+    else null
+  end;
+$$;
+
+-- Shared by buy_seed_pack() and the human-game trigger below, so the same
+-- roll logic isn't duplicated in two places.
+create or replace function public.grant_random_seed(p_user_id uuid, p_seen boolean)
+returns uuid
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  new_id uuid;
+begin
+  insert into public.minos (user_id, color, rarity, modifier, seen)
+  values (p_user_id, public.random_mino_color(), public.random_mino_rarity(), public.random_mino_modifier(), p_seen)
+  returning id into new_id;
+  return new_id;
+end;
+$$;
+
+create or replace function public.plant_seed(p_mino_id uuid)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  pot_count integer;
+  planted_count integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if not exists (
+    select 1 from public.minos
+    where id = p_mino_id and user_id = uid and not planted and stage = 'seed'
+  ) then
+    raise exception 'Seed not found';
+  end if;
+
+  select garden_pot_count into pot_count from public.profiles where id = uid;
+  select count(*) into planted_count from public.minos where user_id = uid and planted;
+
+  if planted_count >= pot_count then
+    raise exception 'No free pots';
+  end if;
+
+  update public.minos set planted = true where id = p_mino_id;
+end;
+$$;
+
+-- Digging up always resets a mino fully back to seed form (losing growth
+-- progress) - it just frees the pot, it doesn't delete the mino, so its
+-- color/rarity/modifier/name are preserved for replanting later.
+create or replace function public.dig_up_mino(p_mino_id uuid)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if not exists (select 1 from public.minos where id = p_mino_id and user_id = uid and planted) then
+    raise exception 'Planted mino not found';
+  end if;
+
+  update public.minos
+  set planted = false, stage = 'seed', growth_progress = 0
+  where id = p_mino_id;
+end;
+$$;
+
+create or replace function public.rename_mino(p_mino_id uuid, p_name text)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  trimmed text := nullif(trim(p_name), '');
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if trimmed is not null and length(trimmed) > 24 then
+    raise exception 'Name is too long';
+  end if;
+
+  if not exists (select 1 from public.minos where id = p_mino_id and user_id = uid) then
+    raise exception 'Mino not found';
+  end if;
+
+  update public.minos set name = trimmed where id = p_mino_id;
+end;
+$$;
+
+-- Flips a game-reward seed's "seen" flag once the new-seed toast has shown
+-- it - kept as its own tiny RPC rather than a raw client update, same
+-- no-direct-writes discipline as everything else on minos.
+create or replace function public.mark_mino_seen(p_mino_id uuid)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  update public.minos set seen = true where id = p_mino_id and user_id = uid;
+end;
+$$;
+
+create or replace function public.buy_pot()
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  current_coins integer;
+  pot_price constant integer := 10;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select coins into current_coins from public.profiles where id = uid for update;
+  if current_coins < pot_price then
+    raise exception 'Not enough coins';
+  end if;
+
+  update public.profiles
+  set coins = coins - pot_price, garden_pot_count = garden_pot_count + 1
+  where id = uid;
+
+  return current_coins - pot_price;
+end;
+$$;
+
+create or replace function public.buy_seed_pack()
+returns uuid
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  current_coins integer;
+  pack_price constant integer := 10;
+  new_id uuid;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select coins into current_coins from public.profiles where id = uid for update;
+  if current_coins < pack_price then
+    raise exception 'Not enough coins';
+  end if;
+
+  update public.profiles set coins = coins - pack_price where id = uid;
+  new_id := public.grant_random_seed(uid, true);
+
+  return new_id;
+end;
+$$;
+
+-- Growth, seed-drops, and adult gifts are all driven from here rather than
+-- from the client - a games row only ever gets inserted once per match
+-- (client_match_id's unique constraint, Phase 15) regardless of which of
+-- the two clients' recordGameResult() call wins that race, and regardless
+-- of whether a client learned the match ended via its own endGame() or via
+-- a resync (which bypasses endGame() entirely). Hooking this to the client
+-- would need to solve both of those problems again; hooking it here means
+-- it just always fires exactly once per player per human game.
+create or replace function public.handle_human_game_played()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p_id uuid;
+  m record;
+  gift_item record;
+begin
+  foreach p_id in array array[new.player1_id, new.player2_id] loop
+    if p_id is null then
+      continue;
+    end if;
+
+    update public.minos
+    set growth_progress = growth_progress + 1
+    where user_id = p_id and planted and stage <> 'adult';
+
+    update public.minos
+    set stage = case stage
+          when 'seed' then 'sapling'
+          when 'sapling' then 'adolescent'
+          when 'adolescent' then 'adult'
+          else stage
+        end,
+        growth_progress = 0
+    where user_id = p_id and planted and stage <> 'adult' and growth_progress >= 5;
+
+    if random() < 0.1 then
+      perform public.grant_random_seed(p_id, false);
+    end if;
+
+    -- Only advances last_gift_at on an actual hit (not every eligible
+    -- game) - that's what keeps this "rare" instead of a flat weekly
+    -- guarantee, while still averaging out to roughly once a week for a
+    -- normally-active player.
+    for m in
+      select * from public.minos
+      where user_id = p_id and planted and stage = 'adult'
+        and (last_gift_at is null or now() - last_gift_at >= interval '7 days')
+    loop
+      if random() < 0.25 then
+        select * into gift_item from public.shop_items
+        where mino_giftable
+          and id not in (select item_id from public.user_inventory where user_id = p_id)
+        order by random()
+        limit 1;
+
+        if gift_item.id is not null and random() < 0.8 then
+          insert into public.user_inventory (user_id, item_id) values (p_id, gift_item.id);
+        else
+          update public.profiles set coins = coins + (5 + floor(random() * 11)::integer) where id = p_id;
+        end if;
+
+        update public.minos set last_gift_at = now() where id = m.id;
+      end if;
+    end loop;
+  end loop;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_human_game_played on public.games;
+create trigger on_human_game_played
+  after insert on public.games
+  for each row
+  when (new.mode in ('casual', 'ranked'))
+  execute function public.handle_human_game_played();

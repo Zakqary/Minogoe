@@ -4,7 +4,8 @@
 -- and re-running just updates the existing row.
 --
 -- Requires schema.sql's Phase 12 (shop_items table), Phase 13 (color/
--- notice columns), and Phase 14 (hidden column) to have been run first.
+-- notice columns), Phase 14 (hidden column), and Phase 16 (mino_giftable
+-- column) to have been run first.
 --
 -- Avatars: drop the image file into assets/avatars/ (see the README there
 -- for size/format), then set image_path to "assets/avatars/<filename>".
@@ -81,3 +82,20 @@ on conflict (id) do update set
 insert into public.user_inventory (user_id, item_id)
 select id, 'title_admin' from public.profiles where username = 'AVNJ'
 on conflict (user_id, item_id) do nothing;
+
+-- Mino gift pool - hidden = true keeps these out of the shop just like the
+-- Admin title above, but mino_giftable = true (instead of a username grant)
+-- means an adult Mino can randomly gift one to whoever owns it, per
+-- schema.sql Phase 16's handle_human_game_played() trigger. Add more rows
+-- here any time to grow the pool - price is irrelevant since these are
+-- never purchased.
+insert into public.shop_items (id, type, name, price, image_path, title_text, color, hidden, mino_giftable) values
+  ('title_Bloomkeeper', 'title', 'Bloomkeeper', 0, null, 'Bloomkeeper', '#6fbf73', true, true),
+  ('title_Greenthumb', 'title', 'Greenthumb', 0, null, 'Greenthumb', '#4bc4c4', true, true)
+on conflict (id) do update set
+  name = excluded.name,
+  image_path = excluded.image_path,
+  title_text = excluded.title_text,
+  color = excluded.color,
+  hidden = excluded.hidden,
+  mino_giftable = excluded.mino_giftable;

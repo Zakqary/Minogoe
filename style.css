@@ -1547,3 +1547,219 @@ h2, h3 {
     width: 200px;
   }
 }
+
+/* ---------- Garden / Minos ---------- */
+
+.garden-intro {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 4px 0 18px;
+  max-width: 640px;
+}
+
+.mino-visual {
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.mino-rarity-uncommon svg { filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.35)); }
+.mino-rarity-rare svg { filter: drop-shadow(0 0 5px var(--accent-hover)); }
+.mino-rarity-epic svg { filter: drop-shadow(0 0 8px #b06fd9); }
+.mino-rarity-legendary svg {
+  filter: drop-shadow(0 0 8px #ffd700);
+  animation: mino-legendary-shimmer 2.2s ease-in-out infinite;
+}
+
+@keyframes mino-legendary-shimmer {
+  0%, 100% { filter: drop-shadow(0 0 6px #ffd700); }
+  50% { filter: drop-shadow(0 0 14px #fff2a8); }
+}
+
+.garden-pots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.garden-pot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 160px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 16px 12px;
+  text-align: center;
+}
+
+.garden-pot.empty {
+  color: var(--text-faint);
+  border-style: dashed;
+}
+
+.garden-pot-icon {
+  font-size: 28px;
+  opacity: 0.6;
+}
+
+.garden-pot-label {
+  font-size: 12px;
+}
+
+.garden-mino-name {
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.garden-mino-name:hover {
+  color: var(--accent-hover);
+}
+
+.garden-mino-sub {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.garden-mino-stage {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.garden-digup-btn {
+  margin-top: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-body);
+}
+
+.garden-digup-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger-hover);
+}
+
+.garden-seed-inventory {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.garden-seed-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 120px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 12px 10px;
+  text-align: center;
+}
+
+.garden-seed-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.garden-plant-btn {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-body);
+}
+
+.garden-plant-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.garden-plant-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.shop-item-sub {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.pot-preview,
+.seed-pack-preview {
+  font-size: 32px;
+  line-height: 1;
+}
+
+.shop-seed-reveal {
+  font-size: 13px;
+  color: var(--accent-hover);
+  margin-top: 10px;
+  min-height: 1em;
+}
+
+/* ---------- New-seed toast ---------- */
+
+.mino-seed-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 14px 18px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  max-width: 260px;
+}
+
+.mino-seed-toast-message {
+  font-weight: 600;
+  padding-right: 16px;
+}
+
+.mino-seed-toast-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.mino-seed-toast-sub a {
+  color: var(--accent-hover);
+}
+
+.mino-seed-toast-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px;
+}
+
+.mino-seed-toast-dismiss:hover {
+  color: var(--text);
+}
+
+@media (max-width: 900px) {
+  .mino-seed-toast {
+    left: 12px;
+    right: 12px;
+    max-width: none;
+  }
+}

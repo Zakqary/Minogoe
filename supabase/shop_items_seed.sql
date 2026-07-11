@@ -29,6 +29,9 @@ insert into public.shop_items (id, type, name, price, image_path, title_text, co
   ('title_GirlInAisle10', 'title', 'Girl in Aisle 10', 15, null, 'Girl in Aisle 10', '#e07bb5', null),
   ('title_OG', 'title', 'OG', 1, null, 'OG', '#ffffff', 'No longer sold after 8/1/26!'),
   ('title_Strategist', 'title', 'Strategist', 5, null, 'Strategist', '#5b8fd9', null),
+  ('title_Minnow', 'title', 'Minnow', 5, null, 'Minnow', '#5b8fd9', null),
+  ('title_Springtail', 'title', 'Springtail', 5, null, 'Springtail', '#5b8fd9', null),
+  ('title_Leech', 'title', 'Leech', 5, null, 'Leech', '#5b8fd9', null),
   ('title_Genius', 'title', 'Genius', 15, null, 'Genius', '#9b7fd9', null),
   ('title_Gamer', 'title', 'Gamer', 5, null, 'Gamer', '#6fbf73', null),
   ('title_Loaded', 'title', 'Loaded', 30, null, 'Loaded', '#e6c14a', null),
@@ -41,7 +44,10 @@ insert into public.shop_items (id, type, name, price, image_path, title_text, co
   ('avatar_monarch', 'avatar', 'Monarch', 20, 'assets/avatars/monarch.png', null, null, null),
   ('avatar_hot', 'avatar', 'Hot', 20, 'assets/avatars/hot.png', null, null, null),
   ('avatar_positive', 'avatar', 'Positive', 15, 'assets/avatars/positive.png', null, null, null),
-  ('avatar_territory', 'avatar', 'Territory', 15, 'assets/avatars/territory.png', null, null, null)
+  ('avatar_territory', 'avatar', 'Territory', 15, 'assets/avatars/territory.png', null, null, null),
+  ('avatar_leech', 'avatar', 'Leech', 15, 'assets/avatars/leech.png', null, null, null),
+  ('avatar_minnow', 'avatar', 'Minnow', 15, 'assets/avatars/minnow.png', null, null, null),
+  ('avatar_springtail', 'avatar', 'Springtail', 15, 'assets/avatars/springtail.png', null, null, null)
 on conflict (id) do update set
   type = excluded.type,
   name = excluded.name,

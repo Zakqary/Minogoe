@@ -6,6 +6,7 @@ const HANDICAP_POINTS = 1; // whoever moves second gets a 1-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
 const TURN_TIME_LIMITS = { casual: 120, ranked: 60 }; // seconds; private/bot/hotseat are untimed
 const ACTIVE_MATCH_KEY = 'minogoe_activeMatch'; // localStorage key for reconnect-after-reload
+const MATCH_INTRO_DURATION_MS = 4500; // how long the pre-match "vs" intro card stays up before auto-dismissing
 
 // ---------- Base shapes (row, col), keyed and prefixed by piece size ----------
 const BASE_SHAPES = {
@@ -105,6 +106,8 @@ const state = {
   opponentUsername: null, // the connected peer's username, if they're logged in
   opponentAvatarId: null, // the connected peer's equipped avatar item id, if any
   opponentTitleId: null,  // the connected peer's equipped title item id, if any
+  opponentEloRating: null, // the connected peer's ELO rating, if they're logged in
+  introShown: false,  // whether the match intro card has already been shown this match
   gameStartedAt: null,
   initialHand: [],    // the pristine drawn hand, for replay reconstruction
   moveLog: [],        // ordered { player, shapeName, orientationIndex, r0, c0 } placements
@@ -282,6 +285,81 @@ function playerBadgeHtml(playerNum) {
   const nameHtml = playerLink(id, playerLabel(playerNum));
   if (!id) return nameHtml;
   return `${avatarHtml(playerAvatarId(playerNum), 20)} ${nameHtml} ${titleBadgeHtml(playerTitleId(playerNum))}`;
+}
+
+// ---------- Pre-match "vs" intro card (casual/ranked only) ----------
+
+// Number of players with a strictly higher ELO, plus one - same technique
+// profile.js uses for its own "Rank" stat, via a count-only query instead
+// of fetching every profile.
+async function eloRank(eloRating) {
+  if (eloRating == null) return null;
+  const { count, error } = await supabaseClient
+    .from('profiles')
+    .select('id', { count: 'exact', head: true })
+    .gt('elo_rating', eloRating);
+  return error ? null : (count ?? 0) + 1;
+}
+
+function matchIntroPlayerHtml(p, rank) {
+  const eloText = p.eloRating != null ? `ELO ${p.eloRating}` : 'Unranked';
+  return `
+    <div class="match-intro-player">
+      ${avatarHtml(p.avatarId, 56)}
+      <div class="match-intro-name">${playerLink(p.userId, p.username)}</div>
+      ${titleBadgeHtml(p.titleId)}
+      <div class="match-intro-elo">${escapeHtml(eloText)}</div>
+      ${rank != null ? `<div class="match-intro-rank">#${rank}</div>` : ''}
+    </div>
+  `;
+}
+
+function dismissMatchIntroCard() {
+  const el = document.getElementById('matchIntroOverlay');
+  if (el) el.remove();
+}
+
+// Shown once per match, right when both players' identities are known
+// (the moment the opponent's 'identify' message arrives) - skipped for
+// private-room/bot/hotseat games, and never re-shown on a mid-game rejoin
+// (guarded by state.introShown, only reset in handleNetReady() for a
+// brand new match).
+async function showMatchIntroCard() {
+  if (state.introShown) return;
+  if (state.gameMode !== 'casual' && state.gameMode !== 'ranked') return;
+  state.introShown = true;
+
+  const myProfile = Auth.getProfile();
+  const me = {
+    userId: Auth.getUser()?.id ?? null,
+    username: myProfile ? myProfile.username : 'You',
+    avatarId: myProfile ? myProfile.avatar_id : null,
+    titleId: myProfile ? myProfile.title_id : null,
+    eloRating: myProfile ? myProfile.elo_rating : null,
+  };
+  const opponent = {
+    userId: state.opponentUserId,
+    username: state.opponentUsername || 'Opponent',
+    avatarId: state.opponentAvatarId,
+    titleId: state.opponentTitleId,
+    eloRating: state.opponentEloRating,
+  };
+
+  const [myRank, opponentRank] = await Promise.all([eloRank(me.eloRating), eloRank(opponent.eloRating)]);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'matchIntroOverlay';
+  overlay.className = 'match-intro-overlay';
+  overlay.innerHTML = `
+    <div class="match-intro-card">
+      ${matchIntroPlayerHtml(me, myRank)}
+      <div class="match-intro-vs">VS</div>
+      ${matchIntroPlayerHtml(opponent, opponentRank)}
+    </div>
+  `;
+  overlay.addEventListener('click', dismissMatchIntroCard);
+  document.body.appendChild(overlay);
+  setTimeout(dismissMatchIntroCard, MATCH_INTRO_DURATION_MS);
 }
 
 function pickRandom(names, count) {
@@ -1836,6 +1914,7 @@ function handleRejoinReady() {
     username: myProfile ? myProfile.username : null,
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
+    eloRating: myProfile ? myProfile.elo_rating : null,
   });
 
   const iHaveLiveGame = state.gameStarted && !state.gameOver;
@@ -1980,6 +2059,8 @@ function handleNetReady() {
   state.opponentUsername = null;
   state.opponentAvatarId = null;
   state.opponentTitleId = null;
+  state.opponentEloRating = null;
+  state.introShown = false;
   state.pendingUndoRequest = false;
   state.incomingUndoRequest = false;
   document.getElementById('connectBtn').disabled = true;
@@ -1994,6 +2075,7 @@ function handleNetReady() {
     username: myProfile ? myProfile.username : null,
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
+    eloRating: myProfile ? myProfile.elo_rating : null,
   });
 
   if (Net.isHost) {
@@ -2060,6 +2142,8 @@ function handleNetDataInner(msg) {
     state.opponentUsername = msg.username;
     state.opponentAvatarId = msg.avatarId ?? null;
     state.opponentTitleId = msg.titleId ?? null;
+    state.opponentEloRating = msg.eloRating ?? null;
+    showMatchIntroCard();
     render();
   } else if (msg.type === 'chat') {
     const opponentPlayerNum = state.myPlayer === 1 ? 2 : 1;

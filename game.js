@@ -1702,6 +1702,9 @@ function drawShapeIcon(canvasEl, coords) {
 // hand tray onto the board is the more natural mobile gesture. Tracks a
 // single in-progress drag at a time; a touch that never moves past
 // DRAG_THRESHOLD_PX is just treated as a plain tap-to-select instead.
+// Dropping the drag doesn't place the piece outright - see
+// finishPieceDrag()'s comment - it just leaves a preview at the drop
+// point, confirmed the same way a plain tap-tap placement is.
 let pieceDrag = null; // { shapeName, startX, startY, moved, ghostEl }
 const DRAG_THRESHOLD_PX = 8;
 
@@ -1746,17 +1749,17 @@ function updateBoardHoverFromPoint(clientX, clientY) {
   drawBoard();
 }
 
+// Dropping a dragged piece no longer commits it immediately - it leaves
+// the placement as a live preview (the same on-board hover highlight the
+// mouse shows) instead, so the piece can still be rotated afterward via
+// the rotate button. Rotating mid-drag was awkward - the whole point of
+// dropping first - so confirming now always takes a second, separate tap
+// on the same board cell, reusing the exact "tap the same cell twice"
+// confirm check the canvas's own touchstart handler below already
+// implements for its keyboard-less tap-to-place flow.
 function finishPieceDrag(clientX, clientY) {
   updateBoardHoverFromPoint(clientX, clientY);
-  const canPlaceHere = state.selected && state.hover && state.hover.valid
-    && !state.gameOver && !state.connecting
-    && !(state.online && state.myPlayer !== state.turn);
-  if (canPlaceHere) {
-    commitPlacement(state.selected.shapeName, state.selected.orientationIndex, state.hover.r0, state.hover.c0);
-  } else {
-    state.hover = null;
-    drawBoard();
-  }
+  state.lastTapCell = state.mouseRC ? { row: state.mouseRC.row, col: state.mouseRC.col } : null;
 }
 
 function wirePieceDrag(item, name) {

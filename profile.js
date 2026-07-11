@@ -33,6 +33,14 @@ async function renderProfilePage() {
 
   await Catalog.ready();
 
+  // Rank on the ELO leaderboard - number of players with a strictly higher
+  // rating, plus one. A count query instead of fetching every profile.
+  const { count: higherEloCount, error: rankError } = await supabaseClient
+    .from('profiles')
+    .select('id', { count: 'exact', head: true })
+    .gt('elo_rating', profile.elo_rating);
+  const rank = rankError ? null : (higherEloCount ?? 0) + 1;
+
   const { data: games, error } = await supabaseClient
     .from('games')
     .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
@@ -79,6 +87,7 @@ async function renderProfilePage() {
     <h2 class="profile-heading">${avatarHtml(profile.avatar_id, 36)} ${escapeHtml(profile.username)} ${titleBadgeHtml(profile.title_id)}</h2>
     ${joinedText ? `<div class="profile-joined">Account created on ${escapeHtml(joinedText)}</div>` : ''}
     <div class="profile-stats">
+      <div class="stat"><div class="stat-value">${rank != null ? '#' + rank : '-'}</div><div class="stat-label">Rank</div></div>
       <div class="stat"><div class="stat-value">${profile.elo_rating}</div><div class="stat-label">ELO</div></div>
       <div class="stat"><div class="stat-value">${profile.games_played}</div><div class="stat-label">Games</div></div>
       <div class="stat"><div class="stat-value">${profile.wins}</div><div class="stat-label">Wins</div></div>

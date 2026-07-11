@@ -28,13 +28,14 @@ function fieldFor(key) {
 async function loadLeaderboard() {
   const { data, error } = await supabaseClient
     .from('profiles')
-    .select('id, username, elo_rating, games_played, wins, losses, ties, ranked_games_played, ranked_wins, ranked_losses, ranked_ties');
+    .select('id, username, elo_rating, games_played, wins, losses, ties, ranked_games_played, ranked_wins, ranked_losses, ranked_ties, avatar_id, title_id');
 
   if (error) {
     document.getElementById('leaderboardContent').innerHTML = `<p>Could not load leaderboard: ${escapeHtml(error.message)}</p>`;
     return;
   }
   players = data || [];
+  await Catalog.ready();
   renderLeaderboard();
 }
 
@@ -68,7 +69,7 @@ function renderLeaderboard() {
   const rows = sorted.map((p, i) => `
     <tr class="${rankRowClass(i)}">
       <td>${i + 1}</td>
-      <td><a href="profile.html?user=${encodeURIComponent(p.id)}">${escapeHtml(p.username)}</a></td>
+      <td class="leaderboard-player-cell">${avatarHtml(p.avatar_id, 20)} <a href="profile.html?user=${encodeURIComponent(p.id)}">${escapeHtml(p.username)}</a> ${titleBadgeHtml(p.title_id)}</td>
       <td>${p.elo_rating}</td>
       <td>${p[fieldFor('games')]}</td>
       <td>${p[fieldFor('wins')]}</td>

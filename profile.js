@@ -31,6 +31,8 @@ async function renderProfilePage() {
 
   const userId = profile.id;
 
+  await Catalog.ready();
+
   const { data: games, error } = await supabaseClient
     .from('games')
     .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
@@ -74,7 +76,7 @@ async function renderProfilePage() {
     : null;
 
   container.innerHTML = `
-    <h2>${escapeHtml(profile.username)}</h2>
+    <h2 class="profile-heading">${avatarHtml(profile.avatar_id, 36)} ${escapeHtml(profile.username)} ${titleBadgeHtml(profile.title_id)}</h2>
     ${joinedText ? `<div class="profile-joined">Account created on ${escapeHtml(joinedText)}</div>` : ''}
     <div class="profile-stats">
       <div class="stat"><div class="stat-value">${profile.elo_rating}</div><div class="stat-label">ELO</div></div>

@@ -305,3 +305,200 @@ where p.id = rs.player_id;
 -- this flag to show "W - FF" instead of that (potentially misleading, e.g.
 -- the "loser" having more board territory than the forfeit winner) tally.
 alter table public.games add column if not exists forfeit boolean not null default false;
+
+-- ---------- Phase 12: coins, daily check-in, shop (profile pictures/titles) ----------
+
+alter table public.profiles add column if not exists coins integer not null default 0;
+alter table public.profiles add column if not exists last_checkin_at timestamptz;
+alter table public.profiles add column if not exists avatar_id text;
+alter table public.profiles add column if not exists title_id text;
+
+-- id is a human-chosen slug (e.g. 'avatar_star'), not a generated uuid, so it
+-- can double as a stable, readable key in shop_items_seed.sql and in
+-- image_path ('assets/avatars/<file>') without an extra lookup.
+create table if not exists public.shop_items (
+  id text primary key,
+  type text not null check (type in ('avatar', 'title')),
+  name text not null,
+  price integer not null check (price >= 0),
+  image_path text,  -- avatars only
+  title_text text   -- titles only
+);
+
+alter table public.shop_items enable row level security;
+
+drop policy if exists "Shop items are publicly readable" on public.shop_items;
+create policy "Shop items are publicly readable"
+  on public.shop_items for select
+  using (true);
+
+-- No insert/update/delete policy for shop_items - the catalog is only ever
+-- edited by hand via shop_items_seed.sql in the Supabase SQL editor, never
+-- by a client.
+
+alter table public.profiles drop constraint if exists profiles_avatar_id_fkey;
+alter table public.profiles add constraint profiles_avatar_id_fkey
+  foreign key (avatar_id) references public.shop_items(id) on delete set null;
+
+alter table public.profiles drop constraint if exists profiles_title_id_fkey;
+alter table public.profiles add constraint profiles_title_id_fkey
+  foreign key (title_id) references public.shop_items(id) on delete set null;
+
+-- One row per (user, item) ever purchased - what the shop checks against to
+-- show "Buy" vs "Equip" and what equip_avatar()/equip_title() below check
+-- ownership against.
+create table if not exists public.user_inventory (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  item_id text not null references public.shop_items(id) on delete cascade,
+  purchased_at timestamptz not null default now(),
+  primary key (user_id, item_id)
+);
+
+alter table public.user_inventory enable row level security;
+
+drop policy if exists "Inventory is publicly readable" on public.user_inventory;
+create policy "Inventory is publicly readable"
+  on public.user_inventory for select
+  using (true);
+
+-- No insert/update/delete policy - rows are only ever created by
+-- purchase_item() below (a security definer function, which runs as the
+-- table owner and so isn't subject to this restriction).
+
+-- Coins/avatar_id/title_id must never be settable by a raw client update() -
+-- only through the security definer functions below. Supabase grants
+-- authenticated broad column privileges on public-schema tables by default
+-- (separate from, and in addition to, RLS's row-level "using"/"with check"
+-- clauses, which only ever restricted *which rows*, never *which columns*).
+-- Without this, a signed-in user could currently call
+-- supabaseClient.from('profiles').update({ coins: 999999 }) directly and it
+-- would succeed. Narrow it down to just the two columns that are
+-- legitimately client-writable today: username, and last_seen (written by
+-- presence.js's heartbeat).
+revoke update on public.profiles from authenticated;
+grant update (username, last_seen) on public.profiles to authenticated;
+
+-- Awards exactly one coin, at most once per rolling 24-hour window. Returns
+-- the new coin balance so the client doesn't need a separate refetch just to
+-- show the updated count. "Miss a day, miss that coin" falls out naturally
+-- from this being a rolling window with no banking - you can never have more
+-- than one check-in "pending" at a time.
+create or replace function public.claim_daily_checkin()
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  last_claim timestamptz;
+  new_coins integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select last_checkin_at into last_claim from public.profiles where id = uid for update;
+
+  if last_claim is not null and now() - last_claim < interval '24 hours' then
+    raise exception 'Already checked in today';
+  end if;
+
+  update public.profiles
+  set coins = coins + 1, last_checkin_at = now()
+  where id = uid
+  returning coins into new_coins;
+
+  return new_coins;
+end;
+$$;
+
+-- Buys an item at shop_items' server-side price (never a client-supplied
+-- price), records ownership in user_inventory, and returns the new coin
+-- balance. Does not auto-equip - equip_avatar()/equip_title() below handle
+-- that as a separate, free action.
+create or replace function public.purchase_item(p_item_id text)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  item_price integer;
+  current_coins integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select price into item_price from public.shop_items where id = p_item_id;
+  if item_price is null then
+    raise exception 'Item not found';
+  end if;
+
+  if exists (select 1 from public.user_inventory where user_id = uid and item_id = p_item_id) then
+    raise exception 'Item already owned';
+  end if;
+
+  select coins into current_coins from public.profiles where id = uid for update;
+  if current_coins < item_price then
+    raise exception 'Not enough coins';
+  end if;
+
+  update public.profiles set coins = coins - item_price where id = uid;
+  insert into public.user_inventory (user_id, item_id) values (uid, p_item_id);
+
+  return current_coins - item_price;
+end;
+$$;
+
+-- p_item_id may be null to unequip (revert to the default "?" avatar).
+-- Otherwise errors unless the caller actually owns that item and it's an
+-- avatar (not a title).
+create or replace function public.equip_avatar(p_item_id text)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if p_item_id is not null and not exists (
+    select 1 from public.user_inventory ui
+    join public.shop_items si on si.id = ui.item_id
+    where ui.user_id = uid and ui.item_id = p_item_id and si.type = 'avatar'
+  ) then
+    raise exception 'Avatar not owned';
+  end if;
+
+  update public.profiles set avatar_id = p_item_id where id = uid;
+end;
+$$;
+
+-- Same as equip_avatar() but for the title_id slot.
+create or replace function public.equip_title(p_item_id text)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if p_item_id is not null and not exists (
+    select 1 from public.user_inventory ui
+    join public.shop_items si on si.id = ui.item_id
+    where ui.user_id = uid and ui.item_id = p_item_id and si.type = 'title'
+  ) then
+    raise exception 'Title not owned';
+  end if;
+
+  update public.profiles set title_id = p_item_id where id = uid;
+end;
+$$;

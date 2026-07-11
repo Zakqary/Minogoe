@@ -15,6 +15,27 @@ function playerLink(id, name) {
   return `<a href="profile.html?user=${encodeURIComponent(id)}">${escapeHtml(name)}</a>`;
 }
 
+// Small <img> for a bought-and-equipped avatar, or a default "?" placeholder
+// when the player has none equipped (or the catalog hasn't loaded yet).
+function avatarHtml(avatarId, size = 24) {
+  const item = window.Catalog ? Catalog.get(avatarId) : null;
+  if (item && item.image_path) {
+    return `<img src="${escapeHtml(item.image_path)}" alt="" class="avatar-img" style="width:${size}px;height:${size}px;">`;
+  }
+  return `<span class="avatar-img avatar-default" style="width:${size}px;height:${size}px;">?</span>`;
+}
+
+// The equipped title's display text, or the default "Freshy" for players
+// who haven't bought/equipped one.
+function titleText(titleId) {
+  const item = window.Catalog ? Catalog.get(titleId) : null;
+  return item && item.title_text ? item.title_text : 'Freshy';
+}
+
+function titleBadgeHtml(titleId) {
+  return `<span class="title-badge">${escapeHtml(titleText(titleId))}</span>`;
+}
+
 function renderAuthWidget() {
   const el = document.getElementById('authWidget');
   const user = Auth.getUser();
@@ -22,7 +43,14 @@ function renderAuthWidget() {
 
   if (user) {
     el.innerHTML = `
-      <a href="profile.html" class="auth-username">${escapeHtml(profile ? profile.username : user.email)}</a>
+      <div class="auth-user-block">
+        <div class="auth-user-top">
+          ${avatarHtml(profile ? profile.avatar_id : null)}
+          <a href="profile.html" class="auth-username">${escapeHtml(profile ? profile.username : user.email)}</a>
+          ${profile ? titleBadgeHtml(profile.title_id) : ''}
+        </div>
+        ${profile ? `<div class="auth-coins">${profile.coins} coin${profile.coins === 1 ? '' : 's'}</div>` : ''}
+      </div>
       ${profile ? `<span class="auth-elo">ELO ${profile.elo_rating}</span>` : ''}
       <button id="signOutBtn">Log out</button>
     `;
@@ -110,3 +138,4 @@ function wireLoggedOutHandlers() {
 
 Auth.onAuthChange(renderAuthWidget);
 renderAuthWidget();
+if (window.Catalog) Catalog.ready().then(renderAuthWidget);

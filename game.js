@@ -103,6 +103,8 @@ const state = {
   connecting: false,  // true from the moment Connect is clicked until paired (or given up)
   opponentUserId: null,   // the connected peer's Supabase user id, if they're logged in
   opponentUsername: null, // the connected peer's username, if they're logged in
+  opponentAvatarId: null, // the connected peer's equipped avatar item id, if any
+  opponentTitleId: null,  // the connected peer's equipped title item id, if any
   gameStartedAt: null,
   initialHand: [],    // the pristine drawn hand, for replay reconstruction
   moveLog: [],        // ordered { player, shapeName, orientationIndex, r0, c0 } placements
@@ -238,6 +240,48 @@ function playerProfileId(playerNum) {
     return user ? user.id : null;
   }
   return null;
+}
+
+// The avatar/title item ids equipped by whoever's in a given player slot -
+// null for bot/guest slots (which have no profile), matching playerProfileId.
+function playerAvatarId(playerNum) {
+  if (state.online) {
+    if (playerNum === state.myPlayer) {
+      const profile = Auth.getProfile();
+      return profile ? profile.avatar_id : null;
+    }
+    return state.opponentAvatarId || null;
+  }
+  if (playerNum === 1) {
+    const profile = Auth.getProfile();
+    return profile ? profile.avatar_id : null;
+  }
+  return null;
+}
+
+function playerTitleId(playerNum) {
+  if (state.online) {
+    if (playerNum === state.myPlayer) {
+      const profile = Auth.getProfile();
+      return profile ? profile.title_id : null;
+    }
+    return state.opponentTitleId || null;
+  }
+  if (playerNum === 1) {
+    const profile = Auth.getProfile();
+    return profile ? profile.title_id : null;
+  }
+  return null;
+}
+
+// Combines the existing name link with an avatar image + title badge -
+// only for real accounts (bot/guest/local-hotseat-P2 have no profile, so
+// playerProfileId is null and they show as plain name text, same as before).
+function playerBadgeHtml(playerNum) {
+  const id = playerProfileId(playerNum);
+  const nameHtml = playerLink(id, playerLabel(playerNum));
+  if (!id) return nameHtml;
+  return `${avatarHtml(playerAvatarId(playerNum), 20)} ${nameHtml} ${titleBadgeHtml(playerTitleId(playerNum))}`;
 }
 
 function pickRandom(names, count) {
@@ -1410,8 +1454,8 @@ function render() {
     banner.textContent = `${playerLabel(state.turn)}'s turn`;
   }
 
-  document.getElementById('scoreLabel1').innerHTML = playerLink(playerProfileId(1), playerLabel(1));
-  document.getElementById('scoreLabel2').innerHTML = playerLink(playerProfileId(2), playerLabel(2));
+  document.getElementById('scoreLabel1').innerHTML = playerBadgeHtml(1);
+  document.getElementById('scoreLabel2').innerHTML = playerBadgeHtml(2);
   if (state.gameOver && state.forfeit) {
     document.getElementById('score1').textContent = state.winner === 1 ? 'W' : 'FF';
     document.getElementById('score2').textContent = state.winner === 2 ? 'W' : 'FF';
@@ -1776,6 +1820,8 @@ function handleRejoinReady() {
     type: 'identify',
     userId: Auth.getUser()?.id ?? null,
     username: myProfile ? myProfile.username : null,
+    avatarId: myProfile ? myProfile.avatar_id : null,
+    titleId: myProfile ? myProfile.title_id : null,
   });
 
   const iHaveLiveGame = state.gameStarted && !state.gameOver;
@@ -1918,6 +1964,8 @@ function handleNetReady() {
   state.myPlayer = Net.isHost ? 1 : 2;
   state.opponentUserId = null;
   state.opponentUsername = null;
+  state.opponentAvatarId = null;
+  state.opponentTitleId = null;
   state.pendingUndoRequest = false;
   state.incomingUndoRequest = false;
   document.getElementById('connectBtn').disabled = true;
@@ -1930,6 +1978,8 @@ function handleNetReady() {
     type: 'identify',
     userId: Auth.getUser()?.id ?? null,
     username: myProfile ? myProfile.username : null,
+    avatarId: myProfile ? myProfile.avatar_id : null,
+    titleId: myProfile ? myProfile.title_id : null,
   });
 
   if (Net.isHost) {
@@ -1994,6 +2044,8 @@ function handleNetDataInner(msg) {
   } else if (msg.type === 'identify') {
     state.opponentUserId = msg.userId;
     state.opponentUsername = msg.username;
+    state.opponentAvatarId = msg.avatarId ?? null;
+    state.opponentTitleId = msg.titleId ?? null;
     render();
   } else if (msg.type === 'chat') {
     const opponentPlayerNum = state.myPlayer === 1 ? 2 : 1;

@@ -1175,3 +1175,248 @@ h2, h3 {
     flex-wrap: wrap;
   }
 }
+
+/* ---------- Coins / avatars / titles ---------- */
+
+.auth-user-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.3;
+}
+
+.auth-user-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.auth-coins {
+  font-size: 11px;
+  color: var(--accent-hover);
+}
+
+.avatar-img {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.avatar-default {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.title-badge {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  padding: 2px 7px;
+  border-radius: 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .auth-coins {
+    font-size: 10px;
+  }
+}
+
+/* ---------- Shop page ---------- */
+
+.shop-page h3 {
+  margin-top: 24px;
+  margin-bottom: 10px;
+}
+
+.shop-balance {
+  font-size: 15px;
+  color: var(--text-dim);
+}
+
+.shop-error {
+  color: var(--danger-hover);
+  font-size: 13px;
+  min-height: 1em;
+  margin-top: 4px;
+}
+
+.shop-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.shop-item-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 140px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 14px 10px;
+  text-align: center;
+}
+
+.shop-item-card.equipped {
+  border-color: var(--accent);
+}
+
+.shop-item-preview {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.shop-item-preview.title-preview {
+  width: auto;
+  height: auto;
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.shop-item-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.shop-item-card button {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-body);
+}
+
+.shop-item-card button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.shop-item-card .shop-equipped-btn {
+  color: var(--success);
+  border-color: var(--success);
+  cursor: default;
+}
+
+.shop-unequip-btn {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-body);
+}
+
+.shop-unequip-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger-hover);
+}
+
+.leaderboard-player-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.profile-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- Daily check-in popup ---------- */
+
+.checkin-popup {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 14px 18px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  max-width: 240px;
+}
+
+.checkin-message {
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-right: 16px;
+}
+
+.checkin-claim-btn {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font-body);
+  font-weight: 600;
+}
+
+.checkin-claim-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.checkin-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px;
+}
+
+.checkin-dismiss:hover {
+  color: var(--text);
+}
+
+.checkin-error {
+  color: var(--danger-hover);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+@media (max-width: 900px) {
+  .checkin-popup {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    max-width: none;
+  }
+}

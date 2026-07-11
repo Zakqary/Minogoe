@@ -84,6 +84,7 @@ async function renderProfilePage() {
       <div class="stat"><div class="stat-value">${profile.wins}</div><div class="stat-label">Wins</div></div>
       <div class="stat"><div class="stat-value">${profile.losses}</div><div class="stat-label">Losses</div></div>
       <div class="stat"><div class="stat-value">${profile.ties}</div><div class="stat-label">Ties</div></div>
+      <div class="stat"><div class="stat-value">${coinIconHtml(20)} ${profile.coins}</div><div class="stat-label">Coins</div></div>
     </div>
     <h3>Recent Games</h3>
     <table class="games-table">

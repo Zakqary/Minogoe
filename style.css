@@ -1214,6 +1214,12 @@ h2, h3 {
   font-size: 12px;
 }
 
+.coin-icon {
+  display: inline-block;
+  vertical-align: middle;
+  object-fit: contain;
+}
+
 .title-badge {
   background: var(--accent-soft);
   color: var(--accent-hover);

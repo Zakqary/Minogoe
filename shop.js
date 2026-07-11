@@ -62,7 +62,7 @@ async function renderShopPage() {
   const titles = Catalog.all().filter((i) => i.type === 'title');
 
   container.innerHTML = `
-    <div class="shop-balance">You have <strong>${profile.coins}</strong> coin${profile.coins === 1 ? '' : 's'}.</div>
+    <div class="shop-balance">${coinIconHtml(18)} You have <strong>${profile.coins}</strong> coin${profile.coins === 1 ? '' : 's'}.</div>
     <div id="shopError" class="shop-error"></div>
 
     <h3>Profile Pictures</h3>

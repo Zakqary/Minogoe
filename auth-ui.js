@@ -36,6 +36,10 @@ function titleBadgeHtml(titleId) {
   return `<span class="title-badge">${escapeHtml(titleText(titleId))}</span>`;
 }
 
+function coinIconHtml(size = 14) {
+  return `<img src="assets/coin.png" alt="" class="coin-icon" style="width:${size}px;height:${size}px;">`;
+}
+
 function renderAuthWidget() {
   const el = document.getElementById('authWidget');
   const user = Auth.getUser();
@@ -49,7 +53,7 @@ function renderAuthWidget() {
           <a href="profile.html" class="auth-username">${escapeHtml(profile ? profile.username : user.email)}</a>
           ${profile ? titleBadgeHtml(profile.title_id) : ''}
         </div>
-        ${profile ? `<div class="auth-coins">${profile.coins} coin${profile.coins === 1 ? '' : 's'}</div>` : ''}
+        ${profile ? `<div class="auth-coins">${coinIconHtml()} ${profile.coins} coin${profile.coins === 1 ? '' : 's'}</div>` : ''}
       </div>
       ${profile ? `<span class="auth-elo">ELO ${profile.elo_rating}</span>` : ''}
       <button id="signOutBtn">Log out</button>

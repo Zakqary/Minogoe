@@ -42,9 +42,13 @@ function itemCardHtml(item, profile) {
   return `
     <div class="shop-item-card${equipped ? ' equipped' : ''}">
       ${item.notice ? `<div class="shop-item-notice">${escapeHtml(item.notice)}</div>` : ''}
-      ${preview}
-      <div class="shop-item-name">${escapeHtml(item.name)}</div>
-      ${action}
+      <div class="shop-item-row">
+        ${preview}
+        <div class="shop-item-info">
+          <div class="shop-item-name">${escapeHtml(item.name)}</div>
+        </div>
+        ${action}
+      </div>
     </div>
   `;
 }
@@ -77,28 +81,44 @@ async function renderShopPage() {
     <div class="shop-balance">${coinIconHtml(18)} You have <strong>${profile.coins}</strong> coin${profile.coins === 1 ? '' : 's'}.</div>
     <div id="shopError" class="shop-error"></div>
 
-    <h3>Profile Pictures</h3>
-    <div class="shop-grid">${avatars.map((i) => itemCardHtml(i, profile)).join('') || '<p>No avatars in the shop yet.</p>'}</div>
-
-    <h3>Titles</h3>
-    <div class="shop-grid">${titles.map((i) => itemCardHtml(i, profile)).join('') || '<p>No titles in the shop yet.</p>'}</div>
-
-    <h3>Garden Supplies</h3>
-    <div class="shop-grid">
-      <div class="shop-item-card">
-        <div class="pot-icon shop-item-preview"></div>
-        <div class="shop-item-name">Extra Pot</div>
-        <div class="shop-item-sub">You have ${profile.garden_pot_count}</div>
-        <button class="shop-buy-pot-btn">Buy for 10 coins</button>
+    <div class="shop-categories">
+      <div class="shop-category">
+        <h3>Profile Pictures</h3>
+        <div class="shop-grid">${avatars.map((i) => itemCardHtml(i, profile)).join('') || '<p>No avatars in the shop yet.</p>'}</div>
       </div>
-      <div class="shop-item-card">
-        <span class="shop-item-preview seed-pack-preview">&#127793;</span>
-        <div class="shop-item-name">Seed Pack</div>
-        <div class="shop-item-sub">You have ${profile.unopened_seed_packs || 0} unopened</div>
-        <button class="shop-buy-seedpack-btn">Buy for 10 coins</button>
+
+      <div class="shop-category">
+        <h3>Titles</h3>
+        <div class="shop-grid">${titles.map((i) => itemCardHtml(i, profile)).join('') || '<p>No titles in the shop yet.</p>'}</div>
+      </div>
+
+      <div class="shop-category">
+        <h3>Garden Supplies</h3>
+        <div class="shop-grid">
+          <div class="shop-item-card">
+            <div class="shop-item-row">
+              <div class="pot-icon shop-item-preview"></div>
+              <div class="shop-item-info">
+                <div class="shop-item-name">Extra Pot</div>
+                <div class="shop-item-sub">You have ${profile.garden_pot_count}</div>
+              </div>
+              <button class="shop-buy-pot-btn">Buy for 10 coins</button>
+            </div>
+          </div>
+          <div class="shop-item-card">
+            <div class="shop-item-row">
+              <span class="shop-item-preview seed-pack-preview">&#127793;</span>
+              <div class="shop-item-info">
+                <div class="shop-item-name">Seed Pack</div>
+                <div class="shop-item-sub">You have ${profile.unopened_seed_packs || 0} unopened</div>
+              </div>
+              <button class="shop-buy-seedpack-btn">Buy for 10 coins</button>
+            </div>
+          </div>
+        </div>
+        <div id="seedRevealMessage" class="shop-seed-reveal"></div>
       </div>
     </div>
-    <div id="seedRevealMessage" class="shop-seed-reveal"></div>
   `;
 
   wireShopButtons();

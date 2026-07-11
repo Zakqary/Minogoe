@@ -81,6 +81,20 @@ function capitalize(word) {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
+// Classic "loot rarity" text colors - lets a Mino/seed's name be read at a
+// glance without having to also read its rarity word next to it.
+const MINO_RARITY_COLOR = {
+  common: '#9a9a9a',
+  uncommon: '#6fbf73',
+  rare: '#5dade2',
+  epic: '#b06fd9',
+  legendary: '#ffd700',
+};
+
+function minoRarityColor(rarity) {
+  return MINO_RARITY_COLOR[rarity] || MINO_RARITY_COLOR.common;
+}
+
 // A small procedural SVG "creature" rather than illustrated art - there's
 // no art pipeline for 10 colors x 5 rarities x 4 stages x 10 modifiers the
 // way avatars have one (those are hand-supplied image files). Stage

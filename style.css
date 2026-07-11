@@ -1316,6 +1316,12 @@ h2, h3 {
   color: #f0d060;
 }
 
+/* Wider than the base .profile-page cap (640px) - three categories side by
+   side need more horizontal room than a single-column profile/garden page. */
+.shop-page {
+  max-width: 900px;
+}
+
 .shop-page h3 {
   margin-top: 24px;
   margin-bottom: 10px;
@@ -1333,32 +1339,63 @@ h2, h3 {
   margin-top: 4px;
 }
 
+/* All three categories sit side by side so every choice is visible at
+   once, with each category's items listed vertically underneath its own
+   heading instead of the previous single wide wrapping grid. */
+.shop-categories {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.shop-category {
+  flex: 1 1 240px;
+  min-width: 220px;
+}
+
+.shop-category h3 {
+  margin-top: 0;
+}
+
 .shop-grid {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .shop-item-card {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  width: 140px;
+  gap: 6px;
+  width: 100%;
   background: var(--surface);
   border: 1px solid var(--border-soft);
   border-radius: 10px;
-  padding: 14px 10px;
-  text-align: center;
+  padding: 8px 10px;
+  text-align: left;
 }
 
 .shop-item-card.equipped {
   border-color: var(--accent);
 }
 
+.shop-item-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shop-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
 .shop-item-preview {
-  width: 48px;
-  height: 48px;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
   border-radius: 50%;
   object-fit: cover;
   display: flex;
@@ -1370,14 +1407,14 @@ h2, h3 {
 .shop-item-preview.title-preview {
   width: auto;
   height: auto;
-  min-width: 48px;
-  min-height: 48px;
+  min-width: 38px;
+  min-height: 38px;
   border-radius: 10px;
   background: var(--accent-soft);
   color: var(--accent-hover);
   border: 1px solid transparent;
-  font-size: 13px;
-  padding: 6px 10px;
+  font-size: 12px;
+  padding: 5px 8px;
 }
 
 .shop-item-notice {
@@ -1395,9 +1432,14 @@ h2, h3 {
 .shop-item-name {
   font-size: 13px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .shop-item-card button {
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;

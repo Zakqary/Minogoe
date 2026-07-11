@@ -27,7 +27,7 @@ function potSlotHtml(mino, companionId) {
   return `
     <div class="garden-pot planted${isCompanion ? ' is-companion' : ''}">
       ${minoVisualHtml(mino, 56)}
-      <div class="garden-mino-name" data-id="${escapeHtml(mino.id)}" data-current="${escapeHtml(mino.name || '')}" title="Click to rename">
+      <div class="garden-mino-name" style="color:${minoRarityColor(mino.rarity)}" data-id="${escapeHtml(mino.id)}" data-current="${escapeHtml(mino.name || '')}" title="Click to rename">
         ${mino.name ? escapeHtml(mino.name) : 'Unnamed Mino'} &#9998;
       </div>
       <div class="garden-mino-sub">${escapeHtml(minoLabel(mino))}</div>
@@ -42,7 +42,7 @@ function seedCardHtml(seed, canPlant) {
   return `
     <div class="garden-seed-card">
       ${minoVisualHtml(seed, 40)}
-      <div class="garden-seed-label">${escapeHtml(minoLabel(seed))}</div>
+      <div class="garden-seed-label" style="color:${minoRarityColor(seed.rarity)}">${escapeHtml(minoLabel(seed))}</div>
       <button class="garden-plant-btn" data-id="${escapeHtml(seed.id)}" ${canPlant ? '' : 'disabled'}>Plant</button>
     </div>
   `;
@@ -144,7 +144,7 @@ async function openPackWithAnimation(cardEl) {
   cardEl.classList.remove('seed-pack-shaking');
   if (mino) {
     cardEl.classList.add('seed-pack-revealed');
-    cardEl.innerHTML = `${minoVisualHtml(mino, 44)}<div class="garden-seed-label">New: ${escapeHtml(minoLabel(mino))}!</div>`;
+    cardEl.innerHTML = `${minoVisualHtml(mino, 44)}<div class="garden-seed-label" style="color:${minoRarityColor(mino.rarity)}">New: ${escapeHtml(minoLabel(mino))}!</div>`;
   }
 
   await Auth.refreshProfile();

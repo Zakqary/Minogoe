@@ -484,23 +484,18 @@ async function saveScoreIfBest(timeMs) {
     document.getElementById('spSaveStatus').textContent = 'Sign in to save your time to the leaderboard.';
     return;
   }
-  const { data: existing } = await supabaseClient
-    .from('singleplayer_runs')
-    .select('id, time_ms')
-    .eq('user_id', user.id)
-    .maybeSingle();
-
-  if (!existing) {
-    await supabaseClient.from('singleplayer_runs').insert({ user_id: user.id, time_ms: timeMs });
-    document.getElementById('spSaveStatus').textContent = 'Saved to the leaderboard!';
-  } else if (timeMs < existing.time_ms) {
-    await supabaseClient.from('singleplayer_runs')
-      .update({ time_ms: timeMs, completed_at: new Date().toISOString() })
-      .eq('id', existing.id);
-    document.getElementById('spSaveStatus').textContent = 'New personal best - saved!';
-  } else {
-    document.getElementById('spSaveStatus').textContent = `Saved. Your best is still ${formatTime(existing.time_ms)}.`;
+  // The "is this actually better than my existing best" comparison happens
+  // server-side (submit_singleplayer_time) rather than client-side, so a
+  // DevTools user can't just insert/update their own row with a fabricated
+  // time_ms directly.
+  const { data: bestTimeMs, error } = await supabaseClient.rpc('submit_singleplayer_time', { p_time_ms: timeMs });
+  if (error) {
+    document.getElementById('spSaveStatus').textContent = 'Could not save your time: ' + error.message;
+    return;
   }
+  document.getElementById('spSaveStatus').textContent = bestTimeMs === timeMs
+    ? 'New personal best - saved!'
+    : `Saved. Your best is still ${formatTime(bestTimeMs)}.`;
   refreshLeaderboard();
 }
 

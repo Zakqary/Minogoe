@@ -1040,3 +1040,118 @@ begin
   where id = uid and companion_mino_id = p_mino_id;
 end;
 $$;
+
+-- ---------- Phase 18: harden games/singleplayer_runs against fabricated results ----------
+
+-- A client-submitted games row was previously trusted completely as long as
+-- the inserting user's own id appeared as player1_id or player2_id -
+-- nothing stopped naming an uninvolved account as the "opponent" (no
+-- consent required) or looping this to grind ELO/W-L/garden rewards
+-- arbitrarily via DevTools. These two constraints close the cheapest,
+-- no-downside gaps. A determined attacker controlling both named accounts
+-- can still do real damage - the actual fix for that (requiring both named
+-- players' clients to independently agree on a result before it's
+-- finalized) is a bigger redesign, tracked separately from this pass.
+alter table public.games drop constraint if exists games_distinct_players_check;
+alter table public.games add constraint games_distinct_players_check
+  check (player1_id is null or player2_id is null or player1_id <> player2_id);
+
+-- +1 headroom: game.js bakes a 1-point "moved second" handicap directly
+-- into score1/score2 (HANDICAP_POINTS), so a fully-enclosed board can
+-- legitimately total board_size^2 + 1, not just board_size^2.
+alter table public.games drop constraint if exists games_score_plausible_check;
+alter table public.games add constraint games_score_plausible_check
+  check (score1 >= 0 and score2 >= 0 and score1 + score2 <= board_size * board_size + 1);
+
+-- Rate-limits how often the same pair of accounts can record a ranked/casual
+-- result. This doesn't stop a determined attacker outright - every field on
+-- the row is still client-supplied - but it turns "spam thousands of fake
+-- wins instantly" into "grind slowly for days," a very different risk
+-- profile, especially combined with the self-match check above. Scoped to
+-- casual/ranked only (what actually feeds ELO and garden rewards) -
+-- private/bot games aren't rate-limited.
+create or replace function public.check_game_rate_limit()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p1 uuid;
+  p2 uuid;
+  recent_count integer;
+begin
+  if new.mode not in ('casual', 'ranked') or new.player1_id is null or new.player2_id is null then
+    return new;
+  end if;
+
+  -- Order-independent pair lookup, since which account ends up as
+  -- player1 vs player2 depends on who's the WebRTC "host" for that match,
+  -- not on which two accounts are actually playing.
+  p1 := least(new.player1_id, new.player2_id);
+  p2 := greatest(new.player1_id, new.player2_id);
+
+  select count(*) into recent_count
+  from public.games
+  where least(player1_id, player2_id) = p1
+    and greatest(player1_id, player2_id) = p2
+    and mode in ('casual', 'ranked')
+    and ended_at > now() - interval '30 seconds'
+    -- Excludes the legitimate case where both clients in the SAME match
+    -- independently attempt to record it (client_match_id's unique index,
+    -- Phase 15, is what's supposed to reject that one as a harmless
+    -- duplicate) - only a genuinely different match should count here.
+    and client_match_id is distinct from new.client_match_id;
+
+  if recent_count > 0 then
+    raise exception 'Recording games between the same two players too quickly';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_game_rate_limit on public.games;
+create trigger on_game_rate_limit
+  before insert on public.games
+  for each row
+  execute function public.check_game_rate_limit();
+
+-- Previously the client itself decided "is this better than my existing
+-- best" before inserting/updating singleplayer_runs directly - RLS only
+-- checked row ownership, not plausibility, so a user could set their own
+-- time_ms to anything (e.g. 1) via DevTools and top the speedrun
+-- leaderboard. Moves the "is this actually an improvement" comparison
+-- server-side, where it can't be skipped, and returns the resulting best
+-- time so the client can still show an accurate message.
+drop policy if exists "Users can insert their own singleplayer run" on public.singleplayer_runs;
+drop policy if exists "Users can update their own singleplayer run" on public.singleplayer_runs;
+
+create or replace function public.submit_singleplayer_time(p_time_ms integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_time integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_time_ms is null or p_time_ms <= 0 then
+    raise exception 'Invalid time';
+  end if;
+
+  select time_ms into existing_time from public.singleplayer_runs where user_id = uid for update;
+
+  if existing_time is null then
+    insert into public.singleplayer_runs (user_id, time_ms) values (uid, p_time_ms);
+    return p_time_ms;
+  elsif p_time_ms < existing_time then
+    update public.singleplayer_runs set time_ms = p_time_ms, completed_at = now() where user_id = uid;
+    return p_time_ms;
+  else
+    return existing_time;
+  end if;
+end;
+$$;

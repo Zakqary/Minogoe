@@ -3,11 +3,16 @@
 -- Safe to re-run any time - it upserts by id, so tweaking a price or name
 -- and re-running just updates the existing row.
 --
--- Requires schema.sql's Phase 12 (shop_items table) to have been run first.
+-- Requires schema.sql's Phase 12 (shop_items table) and Phase 13 (color/
+-- notice columns) to have been run first.
 --
 -- Avatars: drop the image file into assets/avatars/ (see the README there
 -- for size/format), then set image_path to "assets/avatars/<filename>".
--- Titles: no image needed, just set title_text to the words shown in-game.
+-- Titles: no image needed, just set title_text to the words shown in-game,
+-- and color to any CSS color (e.g. '#d4af37') - each title can be its own
+-- color. Leave color null to fall back to the site's default accent color.
+-- notice is optional on any item (avatar or title) - a short banner shown
+-- on that item's shop card, e.g. for a limited-time item.
 --
 -- To retire an item so it's no longer sold: remove its row below AND add
 -- its id to the "delete" list at the bottom of this file, then run the
@@ -19,19 +24,36 @@
 -- since the column has an ON DELETE SET NULL foreign key back to this
 -- table.
 
-insert into public.shop_items (id, type, name, price, image_path, title_text) values
-  ('title_champion', 'title', 'Champion', 15, null, 'Champion'),
-  ('avatar_red', 'avatar', 'Red', 20, 'assets/avatars/red.png', null)
+insert into public.shop_items (id, type, name, price, image_path, title_text, color, notice) values
+  ('title_GOAT', 'title', 'GOAT', 20, null, 'GOAT', '#d4af37', null),
+  ('title_GirlInAisle10', 'title', 'Girl in Aisle 10', 15, null, 'Girl in Aisle 10', '#e07bb5', null),
+  ('title_OG', 'title', 'OG', 5, null, 'OG', '#d1974a', 'No longer sold after 8/1/26!'),
+  ('title_Strategist', 'title', 'Strategist', 5, null, 'Strategist', '#5b8fd9', null),
+  ('title_Genius', 'title', 'Genius', 15, null, 'Genius', '#9b7fd9', null),
+  ('title_Gamer', 'title', 'Gamer', 5, null, 'Gamer', '#6fbf73', null),
+  ('title_Loaded', 'title', 'Loaded', 30, null, 'Loaded', '#e6c14a', null),
+  ('title_Sweaty', 'title', 'Sweaty', 3, null, 'Sweaty', '#4bc4c4', null),
+  ('title_LoverAndAFighter', 'title', 'Lover AND a Fighter', 25, null, 'Lover AND a Fighter', '#d95b6a', null),
+  ('avatar_red', 'avatar', 'Red', 2, 'assets/avatars/red.png', null, null, null),
+  ('avatar_blue', 'avatar', 'Blue', 2, 'assets/avatars/blue.png', null, null, null),
+  ('avatar_lilac', 'avatar', 'Lilac', 4, 'assets/avatars/lilac.png', null, null, null),
+  ('avatar_lime', 'avatar', 'Lime', 4, 'assets/avatars/lime.png', null, null, null),
+  ('avatar_monarch', 'avatar', 'Monarch', 20, 'assets/avatars/monarch.png', null, null, null),
+  ('avatar_hot', 'avatar', 'Hot', 20, 'assets/avatars/hot.png', null, null, null),
+  ('avatar_positive', 'avatar', 'Positive', 15, 'assets/avatars/positive.png', null, null, null),
+  ('avatar_territory', 'avatar', 'Territory', 15, 'assets/avatars/territory.png', null, null, null)
 on conflict (id) do update set
   type = excluded.type,
   name = excluded.name,
   price = excluded.price,
   image_path = excluded.image_path,
-  title_text = excluded.title_text;
+  title_text = excluded.title_text,
+  color = excluded.color,
+  notice = excluded.notice;
 
 -- Retired items - ids listed here (and removed from the insert above) are
--- actually removed from the shop. List is empty by default; add ids as you
--- retire things.
+-- actually removed from the shop. Add ids as you retire things.
 delete from public.shop_items where id in (
-  'avatar_example'
+  'avatar_example',
+  'title_champion'
 );

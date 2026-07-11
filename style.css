@@ -1180,15 +1180,8 @@ h2, h3 {
 
 .auth-user-block {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  line-height: 1.3;
-}
-
-.auth-user-top {
-  display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
 }
 
 .auth-coins {
@@ -1223,6 +1216,7 @@ h2, h3 {
 .title-badge {
   background: var(--accent-soft);
   color: var(--accent-hover);
+  border: 1px solid transparent;
   padding: 2px 7px;
   border-radius: 8px;
   font-size: 11px;
@@ -1296,8 +1290,21 @@ h2, h3 {
   border-radius: 10px;
   background: var(--accent-soft);
   color: var(--accent-hover);
+  border: 1px solid transparent;
   font-size: 13px;
   padding: 6px 10px;
+}
+
+.shop-item-notice {
+  width: 100%;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  line-height: 1.3;
 }
 
 .shop-item-name {
@@ -1325,23 +1332,6 @@ h2, h3 {
   color: var(--success);
   border-color: var(--success);
   cursor: default;
-}
-
-.shop-unequip-btn {
-  margin-top: 10px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface-2);
-  color: var(--text-dim);
-  cursor: pointer;
-  font-size: 12px;
-  font-family: var(--font-body);
-}
-
-.shop-unequip-btn:hover {
-  border-color: var(--danger);
-  color: var(--danger-hover);
 }
 
 .leaderboard-player-cell {

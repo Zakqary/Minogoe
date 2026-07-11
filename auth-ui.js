@@ -32,8 +32,17 @@ function titleText(titleId) {
   return item && item.title_text ? item.title_text : 'Freshy';
 }
 
+// Each title can carry its own color (shop_items.color) so sellable titles
+// don't all look the same - falls back to the site's default accent color.
+function titleColor(titleId) {
+  const item = window.Catalog ? Catalog.get(titleId) : null;
+  return (item && item.color) || '#e0a75c';
+}
+
 function titleBadgeHtml(titleId) {
-  return `<span class="title-badge">${escapeHtml(titleText(titleId))}</span>`;
+  const color = escapeHtml(titleColor(titleId));
+  const style = `color:${color}; background:color-mix(in srgb, ${color} 18%, transparent); border-color:color-mix(in srgb, ${color} 55%, transparent);`;
+  return `<span class="title-badge" style="${style}">${escapeHtml(titleText(titleId))}</span>`;
 }
 
 function coinIconHtml(size = 14) {
@@ -48,12 +57,10 @@ function renderAuthWidget() {
   if (user) {
     el.innerHTML = `
       <div class="auth-user-block">
-        <div class="auth-user-top">
-          ${avatarHtml(profile ? profile.avatar_id : null)}
-          <a href="profile.html" class="auth-username">${escapeHtml(profile ? profile.username : user.email)}</a>
-          ${profile ? titleBadgeHtml(profile.title_id) : ''}
-        </div>
-        ${profile ? `<div class="auth-coins">${coinIconHtml()} ${profile.coins} coin${profile.coins === 1 ? '' : 's'}</div>` : ''}
+        ${avatarHtml(profile ? profile.avatar_id : null)}
+        <a href="profile.html" class="auth-username">${escapeHtml(profile ? profile.username : user.email)}</a>
+        ${profile ? titleBadgeHtml(profile.title_id) : ''}
+        ${profile ? `<span class="auth-coins">${coinIconHtml()} ${profile.coins} coin${profile.coins === 1 ? '' : 's'}</span>` : ''}
       </div>
       ${profile ? `<span class="auth-elo">ELO ${profile.elo_rating}</span>` : ''}
       <button id="signOutBtn">Log out</button>

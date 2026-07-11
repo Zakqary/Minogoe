@@ -502,3 +502,42 @@ begin
   update public.profiles set title_id = p_item_id where id = uid;
 end;
 $$;
+
+-- ---------- Phase 13: title colors, item notices, always-owned defaults ----------
+
+alter table public.shop_items add column if not exists color text;   -- titles only, e.g. '#d4af37'
+alter table public.shop_items add column if not exists notice text;  -- optional banner shown on the item's shop card
+
+-- The "?" avatar and "Freshy" title every account already gets by default
+-- (previously just a null avatar_id/title_id special case) are now real,
+-- permanently free shop_items rows that everyone owns - this lets the shop
+-- offer them as normal Equip options alongside anything actually bought,
+-- instead of needing a separate "revert to default" button.
+insert into public.shop_items (id, type, name, price, image_path, title_text, color, notice) values
+  ('avatar_default', 'avatar', 'Default', 0, null, null, null, null),
+  ('title_freshy', 'title', 'Freshy', 0, null, 'Freshy', '#e0a75c', null)
+on conflict (id) do nothing;
+
+-- Grant both to every existing account...
+insert into public.user_inventory (user_id, item_id)
+select id, 'avatar_default' from public.profiles
+on conflict (user_id, item_id) do nothing;
+
+insert into public.user_inventory (user_id, item_id)
+select id, 'title_freshy' from public.profiles
+on conflict (user_id, item_id) do nothing;
+
+-- ...and to every new signup from now on.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.profiles (id, username)
+  values (new.id, new.raw_user_meta_data->>'username');
+  insert into public.user_inventory (user_id, item_id) values (new.id, 'avatar_default');
+  insert into public.user_inventory (user_id, item_id) values (new.id, 'title_freshy');
+  return new;
+end;
+$$;

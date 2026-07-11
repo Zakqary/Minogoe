@@ -1,5 +1,12 @@
 let ownedIds = new Set();
 
+// Every account owns these two by default (see schema.sql Phase 13) - the
+// shop's "equipped" check falls back to them when avatar_id/title_id is
+// null, so the default look shows as a normal Equipped item instead of a
+// separate revert-to-default special case.
+const DEFAULT_AVATAR_ID = 'avatar_default';
+const DEFAULT_TITLE_ID = 'title_freshy';
+
 async function loadOwnedIds(userId) {
   const { data } = await supabaseClient.from('user_inventory').select('item_id').eq('user_id', userId);
   ownedIds = new Set((data || []).map((r) => r.item_id));
@@ -7,7 +14,10 @@ async function loadOwnedIds(userId) {
 
 function itemCardHtml(item, profile) {
   const owned = ownedIds.has(item.id);
-  const equipped = item.type === 'avatar' ? profile.avatar_id === item.id : profile.title_id === item.id;
+  const equippedId = item.type === 'avatar'
+    ? (profile.avatar_id || DEFAULT_AVATAR_ID)
+    : (profile.title_id || DEFAULT_TITLE_ID);
+  const equipped = equippedId === item.id;
 
   let preview;
   if (item.type === 'avatar') {
@@ -15,7 +25,9 @@ function itemCardHtml(item, profile) {
       ? `<img src="${escapeHtml(item.image_path)}" alt="" class="shop-item-preview">`
       : `<span class="shop-item-preview avatar-default">?</span>`;
   } else {
-    preview = `<span class="shop-item-preview title-preview">${escapeHtml(item.title_text || item.name)}</span>`;
+    const color = escapeHtml(item.color || '#e0a75c');
+    const style = `color:${color}; background:color-mix(in srgb, ${color} 22%, transparent); border-color:color-mix(in srgb, ${color} 55%, transparent);`;
+    preview = `<span class="shop-item-preview title-preview" style="${style}">${escapeHtml(item.title_text || item.name)}</span>`;
   }
 
   let action;
@@ -29,16 +41,12 @@ function itemCardHtml(item, profile) {
 
   return `
     <div class="shop-item-card${equipped ? ' equipped' : ''}">
+      ${item.notice ? `<div class="shop-item-notice">${escapeHtml(item.notice)}</div>` : ''}
       ${preview}
       <div class="shop-item-name">${escapeHtml(item.name)}</div>
       ${action}
     </div>
   `;
-}
-
-function unequipButtonHtml(type, currentId) {
-  if (!currentId) return '';
-  return `<button class="shop-unequip-btn" data-type="${type}">Revert to default</button>`;
 }
 
 async function renderShopPage() {
@@ -67,11 +75,9 @@ async function renderShopPage() {
 
     <h3>Profile Pictures</h3>
     <div class="shop-grid">${avatars.map((i) => itemCardHtml(i, profile)).join('') || '<p>No avatars in the shop yet.</p>'}</div>
-    ${unequipButtonHtml('avatar', profile.avatar_id)}
 
     <h3>Titles</h3>
     <div class="shop-grid">${titles.map((i) => itemCardHtml(i, profile)).join('') || '<p>No titles in the shop yet.</p>'}</div>
-    ${unequipButtonHtml('title', profile.title_id)}
   `;
 
   wireShopButtons();
@@ -114,21 +120,6 @@ function wireShopButtons() {
     });
   }
 
-  for (const unequipBtn of document.querySelectorAll('.shop-unequip-btn')) {
-    unequipBtn.addEventListener('click', async () => {
-      showShopError('');
-      unequipBtn.disabled = true;
-      const fn = unequipBtn.dataset.type === 'avatar' ? 'equip_avatar' : 'equip_title';
-      const { error } = await supabaseClient.rpc(fn, { p_item_id: null });
-      if (error) {
-        showShopError(error.message);
-        unequipBtn.disabled = false;
-        return;
-      }
-      await Auth.refreshProfile();
-      renderShopPage();
-    });
-  }
 }
 
 Auth.onAuthChange(renderShopPage);

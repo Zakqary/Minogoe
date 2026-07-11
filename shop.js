@@ -86,7 +86,7 @@ async function renderShopPage() {
     <h3>Garden Supplies</h3>
     <div class="shop-grid">
       <div class="shop-item-card">
-        <span class="shop-item-preview pot-preview">&#127968;</span>
+        <div class="pot-icon shop-item-preview"></div>
         <div class="shop-item-name">Extra Pot</div>
         <div class="shop-item-sub">You have ${profile.garden_pot_count}</div>
         <button class="shop-buy-pot-btn">Buy for 10 coins</button>

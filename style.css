@@ -71,6 +71,26 @@ h2, h3 {
   border-bottom-color: var(--accent);
 }
 
+.site-nav a[href="shop.html"] {
+  color: #e6c14a;
+  text-shadow: 0 0 8px rgba(230, 193, 74, 0.55);
+}
+
+.site-nav a[href="shop.html"]:hover {
+  color: #f0d060;
+  border-bottom-color: #e6c14a;
+}
+
+.site-nav a[href="garden.html"] {
+  color: #6fbf73;
+  text-shadow: 0 0 8px rgba(111, 191, 115, 0.55);
+}
+
+.site-nav a[href="garden.html"]:hover {
+  color: #86d68a;
+  border-bottom-color: #6fbf73;
+}
+
 .nav-search {
   position: relative;
   display: inline-flex;
@@ -1600,9 +1620,19 @@ h2, h3 {
   border-style: dashed;
 }
 
-.garden-pot-icon {
-  font-size: 28px;
-  opacity: 0.6;
+.pot-icon {
+  display: inline-block;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #a86b42;
+  opacity: 0.85;
+}
+
+.shop-item-preview.pot-icon {
+  width: 48px;
+  height: 48px;
+  opacity: 1;
 }
 
 .garden-pot-label {
@@ -1696,7 +1726,6 @@ h2, h3 {
   color: var(--text-faint);
 }
 
-.pot-preview,
 .seed-pack-preview {
   font-size: 32px;
   line-height: 1;

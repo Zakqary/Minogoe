@@ -69,7 +69,7 @@ function potSlotHtml(mino) {
   if (!mino) {
     return `
       <div class="garden-pot empty">
-        <div class="garden-pot-icon">&#127940;</div>
+        <div class="pot-icon"></div>
         <div class="garden-pot-label">Empty pot</div>
       </div>
     `;

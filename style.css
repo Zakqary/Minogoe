@@ -1338,6 +1338,47 @@ h2, h3 {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+
+.leaderboard-player-cell a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* The singleplayer "Top Times" leaderboard lives in the narrow 240px
+   right-panel log box, not the wide profile-page container the main
+   leaderboard/profile tables use - avatar + username + title badge can
+   easily be wider than that, pushing the Time column outside the table.
+   Force fixed column widths and let the name/title truncate with an
+   ellipsis instead of overflowing. */
+#spLeaderboard .games-table {
+  table-layout: fixed;
+}
+
+#spLeaderboard .games-table th:first-child,
+#spLeaderboard .games-table td:first-child {
+  width: 16px;
+}
+
+#spLeaderboard .games-table th:last-child,
+#spLeaderboard .games-table td:last-child {
+  width: 52px;
+  white-space: nowrap;
+}
+
+#spLeaderboard .leaderboard-player-cell a {
+  flex: 1 1 auto;
+}
+
+#spLeaderboard .title-badge {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .profile-heading {

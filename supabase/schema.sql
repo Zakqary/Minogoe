@@ -819,32 +819,14 @@ begin
 end;
 $$;
 
-create or replace function public.buy_seed_pack()
-returns uuid
-language plpgsql
-security definer set search_path = public
-as $$
-declare
-  uid uuid := auth.uid();
-  current_coins integer;
-  pack_price constant integer := 10;
-  new_id uuid;
-begin
-  if uid is null then
-    raise exception 'Not authenticated';
-  end if;
-
-  select coins into current_coins from public.profiles where id = uid for update;
-  if current_coins < pack_price then
-    raise exception 'Not enough coins';
-  end if;
-
-  update public.profiles set coins = coins - pack_price where id = uid;
-  new_id := public.grant_random_seed(uid, true);
-
-  return new_id;
-end;
-$$;
+-- buy_seed_pack() originally lived here, returning uuid (granting a random
+-- seed immediately on purchase). Phase 17 replaced it entirely with an
+-- integer-returning version (granting a sealed pack to open later instead) -
+-- see Phase 17 below for the current definition. Not left here even as a
+-- duplicate no-op: since this whole file re-runs top-to-bottom every time,
+-- a lingering "returns uuid" redefinition would re-break the function on
+-- every single re-run after the first successful migration, erroring out
+-- before Phase 17's fix further down the file ever got a chance to execute.
 
 -- Growth, seed-drops, and adult gifts are all driven from here rather than
 -- from the client - a games row only ever gets inserted once per match

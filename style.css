@@ -1332,6 +1332,12 @@ h2, h3 {
   max-width: 900px;
 }
 
+/* Wider still - the garden page's main column and life-cycle sidebar sit
+   side by side (see .garden-layout below). */
+.garden-page {
+  max-width: 1080px;
+}
+
 .shop-page h3 {
   margin-top: 24px;
   margin-bottom: 10px;
@@ -1818,6 +1824,127 @@ h2, h3 {
   50% { filter: drop-shadow(0 0 14px #fff2a8); }
 }
 
+.garden-layout {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 24px;
+  align-items: start;
+}
+
+.garden-main,
+.garden-sidebar {
+  min-width: 0;
+}
+
+.garden-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0 22px;
+}
+
+.garden-stat-box {
+  flex: 1;
+  min-width: 110px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-top: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.garden-stat-box.stat-pots {
+  border-top-color: #6fbf73;
+}
+
+.garden-stat-box.stat-seeds {
+  border-top-color: #e6923a;
+}
+
+.garden-stat-box.stat-companion {
+  border-top-color: #ffd700;
+}
+
+.garden-lifecycle {
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.garden-lifecycle h3 {
+  margin-top: 0;
+}
+
+.garden-lifecycle-steps {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.garden-lifecycle-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+  width: 100%;
+  padding: 10px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+
+.garden-lifecycle-stage.stage-seed {
+  background: rgba(138, 90, 59, 0.1);
+  border-color: rgba(138, 90, 59, 0.25);
+}
+
+.garden-lifecycle-stage.stage-sapling {
+  background: rgba(111, 191, 115, 0.1);
+  border-color: rgba(111, 191, 115, 0.25);
+}
+
+.garden-lifecycle-stage.stage-adolescent {
+  background: rgba(59, 130, 196, 0.1);
+  border-color: rgba(59, 130, 196, 0.25);
+}
+
+.garden-lifecycle-stage.stage-adult {
+  background: rgba(255, 215, 0, 0.1);
+  border-color: rgba(255, 215, 0, 0.3);
+}
+
+.garden-lifecycle-stage-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.garden-lifecycle-stage-desc {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  line-height: 1.3;
+}
+
+.garden-lifecycle-arrow {
+  color: var(--text-faint);
+  font-size: 18px;
+  line-height: 1;
+  margin: 2px 0;
+}
+
+@media (max-width: 900px) {
+  .garden-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 .garden-pots {
   display: flex;
   flex-wrap: wrap;
@@ -1991,6 +2118,8 @@ h2, h3 {
 
 .seed-pack-card {
   cursor: default;
+  border-top: 3px solid #b06fd9;
+  background: linear-gradient(160deg, var(--surface), rgba(176, 111, 217, 0.07));
 }
 
 .seed-pack-icon {

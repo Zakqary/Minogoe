@@ -24,8 +24,12 @@ function potSlotHtml(mino, companionId) {
   const companionBtn = mino.stage === 'adult'
     ? `<button class="garden-companion-btn${isCompanion ? ' active' : ''}" data-id="${escapeHtml(mino.id)}" data-current="${isCompanion ? 'true' : 'false'}">${isCompanion ? '★ Companion' : 'Make Companion'}</button>`
     : '';
+  // The companion pot already gets its own gold border treatment below -
+  // an inline rarity-color top border here would fight with it, so only
+  // non-companion pots get the rarity accent stripe.
+  const rarityAccent = isCompanion ? '' : `style="border-top: 3px solid ${minoRarityColor(mino.rarity)};"`;
   return `
-    <div class="garden-pot planted${isCompanion ? ' is-companion' : ''}">
+    <div class="garden-pot planted${isCompanion ? ' is-companion' : ''}" ${rarityAccent}>
       ${minoVisualHtml(mino, 56)}
       <div class="garden-mino-name" style="color:${minoRarityColor(mino.rarity)}" data-id="${escapeHtml(mino.id)}" data-current="${escapeHtml(mino.name || '')}" title="Click to rename">
         ${mino.name ? escapeHtml(mino.name) : 'Unnamed Mino'} &#9998;
@@ -40,7 +44,7 @@ function potSlotHtml(mino, companionId) {
 
 function seedCardHtml(seed, canPlant) {
   return `
-    <div class="garden-seed-card">
+    <div class="garden-seed-card" style="border-top: 3px solid ${minoRarityColor(seed.rarity)};">
       ${minoVisualHtml(seed, 40)}
       <div class="garden-seed-label" style="color:${minoRarityColor(seed.rarity)}">${escapeHtml(minoLabel(seed))}</div>
       <button class="garden-plant-btn" data-id="${escapeHtml(seed.id)}" ${canPlant ? '' : 'disabled'}>Plant</button>
@@ -54,6 +58,54 @@ function seedPackCardHtml() {
       <div class="seed-pack-icon">&#127793;</div>
       <div class="garden-seed-label">Sealed Seed Pack</div>
       <button class="garden-open-pack-btn">Open</button>
+    </div>
+  `;
+}
+
+function gardenStatsHtml(plantedCount, potCount, waitingSeedCount, companionMino) {
+  return `
+    <div class="garden-stats">
+      <div class="garden-stat-box stat-pots">
+        <div class="stat-value">${plantedCount}/${potCount}</div>
+        <div class="stat-label">Pots Planted</div>
+      </div>
+      <div class="garden-stat-box stat-seeds">
+        <div class="stat-value">${waitingSeedCount}</div>
+        <div class="stat-label">Seeds Waiting</div>
+      </div>
+      <div class="garden-stat-box stat-companion">
+        ${companionMino ? minoVisualHtml(companionMino, 32) : '<div class="stat-value">&mdash;</div>'}
+        <div class="stat-label">${companionMino ? escapeHtml(minoLabel(companionMino)) : 'No Companion'}</div>
+      </div>
+    </div>
+  `;
+}
+
+// Illustrates the seed -> sapling -> adolescent -> adult progression using
+// the same procedural SVG minoVisualHtml() draws real Minos with, just with
+// a fixed sample color/rarity - so the shapes shown here always exactly
+// match what a real growing Mino looks like at each stage.
+const LIFE_STAGES = [
+  { stage: 'seed', name: 'Seed', desc: 'Freshly planted, waiting to sprout.' },
+  { stage: 'sapling', name: 'Sapling', desc: 'Leaves unfurl as it takes root.' },
+  { stage: 'adolescent', name: 'Adolescent', desc: 'Eyes open - starting to look alive.' },
+  { stage: 'adult', name: 'Adult', desc: 'Fully grown - can become your companion.' },
+];
+
+function lifeCycleSidebarHtml() {
+  const sample = { color: 'Verdant', rarity: 'common', modifier: null };
+  const steps = LIFE_STAGES.map((s, i) => `
+    ${i > 0 ? '<div class="garden-lifecycle-arrow">&darr;</div>' : ''}
+    <div class="garden-lifecycle-stage stage-${s.stage}">
+      ${minoVisualHtml({ ...sample, stage: s.stage }, 44)}
+      <div class="garden-lifecycle-stage-name">${s.name}</div>
+      <div class="garden-lifecycle-stage-desc">${escapeHtml(s.desc)}</div>
+    </div>
+  `).join('');
+  return `
+    <div class="garden-lifecycle">
+      <h3>Life Cycle</h3>
+      <div class="garden-lifecycle-steps">${steps}</div>
     </div>
   `;
 }
@@ -98,6 +150,7 @@ async function renderGardenPage() {
   const potCount = profile.garden_pot_count;
   const canPlant = planted.length < potCount;
   const companionId = profile.companion_mino_id || null;
+  const companionMino = companionId ? all.find((m) => m.id === companionId) || null : null;
   const packCount = profile.unopened_seed_packs || 0;
 
   const pots = [];
@@ -110,14 +163,23 @@ async function renderGardenPage() {
     : '';
 
   container.innerHTML = `
-    <div class="shop-balance">${coinIconHtml(18)} You have <strong>${profile.coins}</strong> coin${profile.coins === 1 ? '' : 's'}. Visit the <a href="shop.html">shop</a> for extra pots and seed packs.</div>
-    <div id="gardenError" class="shop-error"></div>
+    <div class="garden-layout">
+      <div class="garden-main">
+        <div class="shop-balance">${coinIconHtml(18)} You have <strong>${profile.coins}</strong> coin${profile.coins === 1 ? '' : 's'}. Visit the <a href="shop.html">shop</a> for extra pots and seed packs.</div>
+        <div id="gardenError" class="shop-error"></div>
 
-    <h3>Your Garden</h3>
-    <div class="garden-pots">${pots.join('')}</div>
+        ${gardenStatsHtml(planted.length, potCount, seeds.length + packCount, companionMino)}
 
-    <h3>Seed Inventory</h3>
-    <div class="garden-seed-inventory">${packCards}${seedCards}${inventoryEmpty}</div>
+        <h3>Your Garden</h3>
+        <div class="garden-pots">${pots.join('')}</div>
+
+        <h3>Seed Inventory</h3>
+        <div class="garden-seed-inventory">${packCards}${seedCards}${inventoryEmpty}</div>
+      </div>
+      <div class="garden-sidebar">
+        ${lifeCycleSidebarHtml()}
+      </div>
+    </div>
   `;
 
   wireGardenButtons();

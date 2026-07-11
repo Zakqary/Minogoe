@@ -1155,3 +1155,69 @@ begin
   end if;
 end;
 $$;
+
+-- ---------- Phase 19: seed drop rate 1-in-10 -> 1-in-8 human games ----------
+
+create or replace function public.handle_human_game_played()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p_id uuid;
+  m record;
+  gift_item record;
+begin
+  foreach p_id in array array[new.player1_id, new.player2_id] loop
+    if p_id is null then
+      continue;
+    end if;
+
+    update public.minos
+    set growth_progress = growth_progress + 1
+    where user_id = p_id and planted and stage <> 'adult';
+
+    update public.minos
+    set stage = case stage
+          when 'seed' then 'sapling'
+          when 'sapling' then 'adolescent'
+          when 'adolescent' then 'adult'
+          else stage
+        end,
+        growth_progress = 0
+    where user_id = p_id and planted and stage <> 'adult' and growth_progress >= 5;
+
+    if random() < 0.125 then
+      perform public.grant_random_seed(p_id, false);
+    end if;
+
+    -- Only advances last_gift_at on an actual hit (not every eligible
+    -- game) - that's what keeps this "rare" instead of a flat weekly
+    -- guarantee, while still averaging out to roughly once a week for a
+    -- normally-active player.
+    for m in
+      select * from public.minos
+      where user_id = p_id and planted and stage = 'adult'
+        and (last_gift_at is null or now() - last_gift_at >= interval '7 days')
+    loop
+      if random() < 0.25 then
+        select * into gift_item from public.shop_items
+        where mino_giftable
+          and id not in (select item_id from public.user_inventory where user_id = p_id)
+        order by random()
+        limit 1;
+
+        if gift_item.id is not null and random() < 0.8 then
+          insert into public.user_inventory (user_id, item_id) values (p_id, gift_item.id);
+        else
+          update public.profiles set coins = coins + (5 + floor(random() * 11)::integer) where id = p_id;
+        end if;
+
+        update public.minos set last_gift_at = now() where id = m.id;
+      end if;
+    end loop;
+  end loop;
+
+  return new;
+end;
+$$;

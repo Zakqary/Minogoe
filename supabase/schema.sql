@@ -1344,14 +1344,14 @@ as $$
   with first_moves as (
     select
       g.winner,
-      (elem->>'player')::int as player,
-      elem->>'shapeName' as shape_name,
+      (elem.value->>'player')::int as player,
+      elem.value->>'shapeName' as shape_name,
       row_number() over (
-        partition by g.id, (elem->>'player')::int
-        order by ordinality
+        partition by g.id, (elem.value->>'player')::int
+        order by elem.ord
       ) as rn
     from public.games g,
-         jsonb_array_elements(g.move_log) with ordinality as elem
+         jsonb_array_elements(g.move_log) with ordinality as elem(value, ord)
     where g.move_log is not null
       and g.player2_id is not null
   )

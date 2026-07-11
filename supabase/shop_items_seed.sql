@@ -27,7 +27,7 @@
 insert into public.shop_items (id, type, name, price, image_path, title_text, color, notice) values
   ('title_GOAT', 'title', 'GOAT', 20, null, 'GOAT', '#d4af37', null),
   ('title_GirlInAisle10', 'title', 'Girl in Aisle 10', 15, null, 'Girl in Aisle 10', '#e07bb5', null),
-  ('title_OG', 'title', 'OG', 1, null, 'OG', '#d1974a', 'No longer sold after 8/1/26!'),
+  ('title_OG', 'title', 'OG', 1, null, 'OG', '#ffffff', 'No longer sold after 8/1/26!'),
   ('title_Strategist', 'title', 'Strategist', 5, null, 'Strategist', '#5b8fd9', null),
   ('title_Genius', 'title', 'Genius', 15, null, 'Genius', '#9b7fd9', null),
   ('title_Gamer', 'title', 'Gamer', 5, null, 'Gamer', '#6fbf73', null),

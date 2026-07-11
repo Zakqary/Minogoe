@@ -981,11 +981,25 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   state.hover = null;
 
   switchTurn();
+  // Captured immediately after this move's own turn switch, before
+  // checkGameEnd() below - which can itself call switchTurn() one or more
+  // further times for automatic passes (a hand with no legal move left).
+  // Those auto-passes are deterministic from the now-synced board/hand
+  // state, so both clients apply them identically without needing a
+  // network message - but sending a plyCount that already includes them
+  // would jump by more than the +1 the receiver's isExpectedNextAction()
+  // ever expects, wrongly triggering a resync (this was actually breaking
+  // PvP games whenever a placement also emptied the opponent's remaining
+  // legal moves, e.g. near the end of a game - including, if it happened
+  // on the very last move, silently absorbing the finished game via a
+  // resync instead of ever calling endGame()/recordGameResult() locally,
+  // so the match never got saved).
+  const seq = state.plyCount;
   checkGameEnd();
   render();
 
   if (state.online && !fromRemote) {
-    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq: state.plyCount });
+    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq });
   }
 
   scheduleBotMove();

@@ -1357,9 +1357,9 @@ as $$
   )
   select
     shape_name,
-    count(*),
-    count(*) filter (where winner = player),
-    round(100.0 * count(*) filter (where winner = player) / count(*), 1)
+    count(*) as games_count,
+    count(*) filter (where winner = player) as win_count,
+    round(100.0 * count(*) filter (where winner = player) / count(*), 1) as win_rate
   from first_moves
   where rn = 1
   group by shape_name

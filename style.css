@@ -1368,26 +1368,57 @@ h2, h3 {
   margin: 10px 0 18px;
 }
 
+/* Styled as a miniature version of .shop-balance above it (same box
+   treatment, just smaller and clickable) rather than a plain text button,
+   so buying more coins reads as a natural extension of the balance
+   display instead of a visually unrelated control bolted on next to it. */
 .buy-coins-btn {
-  padding: 8px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 84px;
+  padding: 10px 16px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--surface-2);
   color: var(--text);
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
   font-family: var(--font-body);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.buy-coins-btn-amount {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.buy-coins-btn-price {
+  font-size: 12px;
+  color: var(--text-faint);
 }
 
 .buy-coins-btn:hover:not(:disabled) {
   border-color: var(--accent);
-  color: var(--accent-hover);
+  box-shadow: 0 0 12px rgba(209, 151, 74, 0.18);
+}
+
+.shop-theme .buy-coins-btn {
+  background: rgba(230, 193, 74, 0.08);
+  border-color: rgba(230, 193, 74, 0.25);
 }
 
 .shop-theme .buy-coins-btn:hover:not(:disabled) {
   border-color: #e6c14a;
-  color: #f0d060;
+  box-shadow: 0 0 16px rgba(230, 193, 74, 0.2);
+}
+
+.shop-theme .buy-coins-btn-price {
+  color: #d8b354;
 }
 
 /* All three categories sit side by side so every choice is visible at

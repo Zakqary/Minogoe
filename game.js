@@ -102,6 +102,14 @@ const state = {
   online: false,      // true once paired with a remote peer
   myPlayer: null,     // 1 or 2 when online; null in local hotseat mode
   connecting: false,  // true from the moment Connect is clicked until paired (or given up)
+  // True only while waiting in the casual/ranked queue for an opponent, as
+  // opposed to state.connecting (which also covers reconnecting to an
+  // ALREADY-existing match). Deliberately a separate flag: unlike
+  // reconnecting, there's no live match's board to freeze yet while
+  // merely searching, so a local hotseat/vs-bot game is free to keep
+  // running underneath the search - none of the board-interaction guards
+  // below check this flag, only state.connecting.
+  queueSearching: false,
   opponentUserId: null,   // the connected peer's Supabase user id, if they're logged in
   opponentUsername: null, // the connected peer's username, if they're logged in
   opponentAvatarId: null, // the connected peer's equipped avatar item id, if any
@@ -1341,7 +1349,14 @@ function showEloResult(myDelta) {
 function selectShape(shapeName) {
   if (state.gameOver || state.connecting) return;
   if (state.online && state.myPlayer !== state.turn) return;
-  state.selected = { shapeName, orientationIndex: 0 };
+  // Re-selecting the SAME piece that's already selected (e.g. picking a
+  // dragged-and-dropped piece back up to move it somewhere else - see
+  // wirePieceDrag()) keeps its current rotation instead of resetting to 0,
+  // so rotating a piece is never lost just by dragging it again.
+  const orientationIndex = (state.selected && state.selected.shapeName === shapeName)
+    ? state.selected.orientationIndex
+    : 0;
+  state.selected = { shapeName, orientationIndex };
   state.lastTapCell = null;
   recomputeHover();
   render();
@@ -1656,12 +1671,15 @@ function render() {
   document.getElementById('hotseatBtn').disabled = state.online || state.connecting;
   document.getElementById('vsBotBtn').disabled = state.online || state.connecting;
 
-  document.getElementById('casualQueueBtn').disabled = state.online || state.connecting;
-  document.getElementById('rankedQueueBtn').disabled = state.online || state.connecting;
+  document.getElementById('casualQueueBtn').disabled = state.online || state.connecting || state.queueSearching;
+  document.getElementById('rankedQueueBtn').disabled = state.online || state.connecting || state.queueSearching;
   // Only show Cancel while genuinely establishing a first connection - not
   // while state.connecting is true because we're mid-game waiting for a
   // disconnected opponent to reconnect (state.online is already true then).
-  document.getElementById('cancelConnectBtn').style.display = (state.connecting && !state.online) ? '' : 'none';
+  // Also shown for a queue search in progress, even though that doesn't
+  // set state.connecting (see queueSearching's own comment) - it's still
+  // a "first connection being established" from the queue's perspective.
+  document.getElementById('cancelConnectBtn').style.display = ((state.connecting || state.queueSearching) && !state.online) ? '' : 'none';
 
   document.getElementById('chatInput').disabled = !state.online;
   document.getElementById('chatSendBtn').disabled = !state.online;
@@ -2222,7 +2240,7 @@ function tryResumeActiveMatch(retriesLeft = 10) {
 function updateResumeMatchBanner() {
   const banner = document.getElementById('resumeMatchBanner');
   if (!banner) return;
-  banner.style.display = (!state.online && !state.connecting && hasActiveMatchRecord()) ? 'flex' : 'none';
+  banner.style.display = (!state.online && !state.connecting && !state.queueSearching && hasActiveMatchRecord()) ? 'flex' : 'none';
 }
 
 function handleNetReady() {
@@ -2235,7 +2253,11 @@ function handleNetReady() {
   clearTimeout(resyncFallbackTimer);
   state.online = true;
   state.connecting = false;
+  // If this arrived while a local hotseat/vs-bot game was running in the
+  // background during a queue search, it's abandoned here with no
+  // forfeit recorded - by design, see queueSearching's own comment.
   state.vsBot = false;
+  state.queueSearching = false;
   state.gameMode = Net.matchedMode;
   state.myPlayer = Net.isHost ? 1 : 2;
   state.opponentUserId = null;
@@ -2439,7 +2461,11 @@ function startQueue(queueType) {
   const eloRating = profile ? profile.elo_rating : 1200;
   const accessToken = Auth.getAccessToken();
 
-  state.connecting = true;
+  // Deliberately state.queueSearching, not state.connecting - there's no
+  // live match yet to freeze the board for, so a local hotseat/vs-bot game
+  // already in progress (or started after this point) keeps running
+  // normally while the search happens in the background.
+  state.queueSearching = true;
   render();
   setLobbyStatus(`Searching for a ${queueType} opponent...`);
   Net.connect({
@@ -2461,6 +2487,7 @@ document.getElementById('rankedQueueBtn').addEventListener('click', () => startQ
 document.getElementById('cancelConnectBtn').addEventListener('click', () => {
   Net.cancelQueue();
   state.connecting = false;
+  state.queueSearching = false;
   setLobbyStatus('Cancelled.');
   render();
 });

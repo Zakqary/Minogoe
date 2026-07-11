@@ -2,11 +2,14 @@ let ownedIds = new Set();
 
 // Fixed coin packages - must match the COIN_PACKAGES map in the
 // create-checkout-session Edge Function exactly (that's the copy that
-// actually decides the price; this one is display-only).
+// actually decides the price; this one is display-only). Split into
+// price/coins (rather than one combined label string) so each button can
+// be laid out like a miniature version of the coin-balance display above
+// it - coin icon + amount, price as a subtitle.
 const COIN_PACKAGES = [
-  { key: 'small', label: '$1 - 10 coins' },
-  { key: 'medium', label: '$5 - 60 coins' },
-  { key: 'large', label: '$10 - 150 coins' },
+  { key: 'small', price: '$1', coins: 10 },
+  { key: 'medium', price: '$5', coins: 60 },
+  { key: 'large', price: '$10', coins: 150 },
 ];
 
 // Set by consumeCheckoutRedirectParam() after a Stripe Checkout redirect -
@@ -164,7 +167,12 @@ async function renderShopPage() {
     <div class="shop-balance">${coinIconHtml(18)} You have <strong>${profile.coins}</strong> coin${profile.coins === 1 ? '' : 's'}.</div>
     ${checkoutStatusText ? `<div class="shop-checkout-status">${escapeHtml(checkoutStatusText)}</div>` : ''}
     <div class="buy-coins-block">
-      ${COIN_PACKAGES.map((p) => `<button class="buy-coins-btn" data-package="${p.key}">${escapeHtml(p.label)}</button>`).join('')}
+      ${COIN_PACKAGES.map((p) => `
+        <button class="buy-coins-btn" data-package="${p.key}">
+          <span class="buy-coins-btn-amount">${coinIconHtml(20)} ${p.coins}</span>
+          <span class="buy-coins-btn-price">${escapeHtml(p.price)}</span>
+        </button>
+      `).join('')}
     </div>
     <div id="shopError" class="shop-error"></div>
 

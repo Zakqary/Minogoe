@@ -589,3 +589,23 @@ begin
   return current_coins - item_price;
 end;
 $$;
+
+-- ---------- Phase 15: dedupe game recording so a mid-match session drop on one side doesn't lose the result ----------
+
+-- Previously only one side (the host, or the joiner if the host wasn't
+-- logged in AT CONNECT TIME) ever attempted to record a finished online
+-- match. If that preferred side's session became invalid mid-match (e.g. a
+-- browser clearing cookies/storage), neither side ended up recording it -
+-- the side that lost its session correctly skipped (no longer logged in),
+-- but the other side's "is the host still logged in" check was based on a
+-- stale snapshot from when the match started, so it skipped too. Now both
+-- sides independently attempt to record if THEY are currently logged in;
+-- this unique constraint on the shared per-match id (Net.matchId, the same
+-- id the signaling server already uses to pair the two clients) makes a
+-- double-insert harmless in the normal case where both are still logged
+-- in - whichever arrives first wins, the other is simply rejected.
+alter table public.games add column if not exists client_match_id text;
+
+create unique index if not exists games_client_match_id_key
+  on public.games (client_match_id)
+  where client_match_id is not null;

@@ -508,7 +508,7 @@ async function refreshLeaderboard() {
   const container = document.getElementById('spLeaderboard');
   const { data, error } = await supabaseClient
     .from('singleplayer_runs')
-    .select('time_ms, profiles(id, username)')
+    .select('time_ms, profiles(id, username, avatar_id, title_id)')
     .order('time_ms', { ascending: true })
     .limit(20);
 
@@ -517,10 +517,12 @@ async function refreshLeaderboard() {
     return;
   }
 
+  await Catalog.ready();
+
   const rows = (data || []).map((row, i) => `
     <tr>
       <td>${i + 1}</td>
-      <td><a href="profile.html?user=${encodeURIComponent(row.profiles.id)}">${escapeHtml(row.profiles.username)}</a></td>
+      <td class="leaderboard-player-cell">${avatarHtml(row.profiles.avatar_id, 20)} <a href="profile.html?user=${encodeURIComponent(row.profiles.id)}">${escapeHtml(row.profiles.username)}</a> ${titleBadgeHtml(row.profiles.title_id)}</td>
       <td>${formatTime(row.time_ms)}</td>
     </tr>
   `).join('');

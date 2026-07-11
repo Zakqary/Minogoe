@@ -283,7 +283,12 @@ function playerTitleId(playerNum) {
 function playerBadgeHtml(playerNum) {
   const id = playerProfileId(playerNum);
   const nameHtml = playerLink(id, playerLabel(playerNum));
-  if (!id) return nameHtml;
+  // Before any game has actually started, player 1 already resolves to the
+  // signed-in account (so the scoreboard can show their real name while
+  // choosing a mode) - but showing their equipped avatar/title that early
+  // reads as presumptuous, since no match (and no real "player 1 vs 2") has
+  // been decided yet. Cosmetics only show once a game is actually underway.
+  if (!id || !state.gameStarted) return nameHtml;
   return `${avatarHtml(playerAvatarId(playerNum), 20)} ${nameHtml} ${titleBadgeHtml(playerTitleId(playerNum))}`;
 }
 
@@ -1216,13 +1221,18 @@ async function recordGameResult(winner, forfeit) {
   } else {
     if (!state.online) return;
     const me = Auth.getUser();
-    const amILoggedIn = !!me;
-    // Only one side should insert. Prefer the host; if the host isn't
-    // logged in but the joiner is, the joiner records instead, so a game
-    // against a guest host still lands in the logged-in joiner's history.
-    const hostIsLoggedIn = Net.isHost ? amILoggedIn : (state.opponentUserId !== null);
-    const iShouldRecord = Net.isHost ? amILoggedIn : (amILoggedIn && !hostIsLoggedIn);
-    if (!iShouldRecord) return;
+    // Both sides independently attempt to record if THEY are currently
+    // logged in, instead of only ever having one "preferred" side (the
+    // host) try - that used a snapshot of whether the other player was
+    // logged in from back when the match started, so a session lost mid-
+    // match (e.g. a browser clearing cookies/storage) meant neither side
+    // ended up recording it: the side that lost its session correctly
+    // skips, but the other side's stale "is the host still logged in"
+    // check kept it from recording too. client_match_id's unique
+    // constraint (schema.sql Phase 15) makes both sides attempting this
+    // harmless in the normal case where both are still logged in -
+    // whichever insert lands first wins, the other is just rejected.
+    if (!me) return;
 
     const player1_id = state.myPlayer === 1 ? me.id : state.opponentUserId;
     const player2_id = state.myPlayer === 2 ? me.id : state.opponentUserId;
@@ -1239,12 +1249,16 @@ async function recordGameResult(winner, forfeit) {
       move_log: state.moveLog,
       board_size: BOARD_SIZE,
       started_at: state.gameStartedAt,
+      client_match_id: Net.matchId || null,
     };
   }
 
   const { data, error } = await supabaseClient.from('games').insert(row).select('id').single();
   if (error) {
-    log('Could not save game result: ' + error.message);
+    // A unique-violation on client_match_id just means the other player
+    // (also still logged in) already recorded this exact match first -
+    // not a real failure, since both sides now attempt this on purpose.
+    if (error.code !== '23505') log('Could not save game result: ' + error.message);
     return;
   }
   log('Game result saved to your match history.');
@@ -2310,6 +2324,29 @@ document.getElementById('resumeMatchBtn').addEventListener('click', () => tryRes
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.online) {
     Net.checkConnectionNow();
+  }
+});
+
+// Navigating away and then back (browser back/forward button) commonly
+// restores the page from the back-forward cache instead of doing a fresh
+// load - the entire JS state (including state.online still being true)
+// gets frozen and restored exactly as it was, but the browser closes the
+// real WebSocket/RTCPeerConnection first, so none of this session's
+// connect-time setup or Auth.onAuthChange(tryResumeActiveMatch) below ever
+// reruns, and the board is left looking "connected" with a dead
+// connection underneath - with no reconnect ever offered. pageshow's
+// `persisted` flag is exactly how a bfcache restore is distinguished from
+// a normal load (which already runs all of the init logic below on its
+// own). If we were mid-match, treat the connection as stale and reuse the
+// same rejoin path a dropped connection already goes through; otherwise
+// fall back to the localStorage-based resume check, in case there's a
+// record from a match that ended (or was left) while this page was cached.
+window.addEventListener('pageshow', (e) => {
+  if (!e.persisted) return;
+  if (state.online) {
+    handleConnectionStale();
+  } else {
+    tryResumeActiveMatch();
   }
 });
 

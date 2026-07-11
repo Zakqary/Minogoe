@@ -1261,3 +1261,126 @@ begin
   end if;
 end;
 $$;
+
+-- ---------- Phase 21: public "Stats" page ----------
+
+-- Every table read here (profiles, games) already has a public "select using
+-- (true)" RLS policy, so these are plain read-only aggregate functions - no
+-- security definer needed. Marked stable since they only read, which lets
+-- Postgres cache the result within a single query/transaction.
+
+-- A pvp game is one with a real human on both sides - player2_id is only
+-- ever null for 'bot' mode games (see the games table's own comment), so
+-- this one condition cleanly covers casual/ranked/private matches without
+-- needing to enumerate every non-bot mode by name.
+create or replace function public.get_platform_stats()
+returns table (
+  registered_users bigint,
+  games_played bigint,
+  pvp_games_played bigint,
+  total_hours_played numeric
+)
+language sql
+stable
+as $$
+  select
+    (select count(*) from public.profiles),
+    (select count(*) from public.games),
+    (select count(*) from public.games where player2_id is not null),
+    (
+      select coalesce(round(sum(
+        case
+          -- started_at has been recorded since this table's very first
+          -- phase, but a handful of rows (very old games, or ones where a
+          -- client disconnected mid-game and the row was only finalized
+          -- long after play actually stopped) end up with an implausible
+          -- duration either way - fall back to a typical game's length
+          -- instead of letting a few outliers skew the total.
+          when extract(epoch from (ended_at - started_at)) between 10 and 1800
+            then extract(epoch from (ended_at - started_at))
+          else 300
+        end
+      ) / 3600.0, 1), 0)
+      from public.games
+    );
+$$;
+
+-- Every match gives player2 a small head-start (see HANDICAP_POINTS in
+-- game.js) specifically to offset player1 having the first move - this
+-- shows whether that handicap actually lands close to an even 50/50.
+create or replace function public.get_p1_p2_win_rates()
+returns table (
+  p1_wins bigint,
+  p2_wins bigint,
+  ties bigint,
+  total_games bigint
+)
+language sql
+stable
+as $$
+  select
+    count(*) filter (where winner = 1),
+    count(*) filter (where winner = 2),
+    count(*) filter (where winner is null),
+    count(*)
+  from public.games
+  where player2_id is not null;
+$$;
+
+-- For every pvp game with a recorded move log, finds each player's very
+-- first placement (rn = 1 within that game+player) and groups win rate by
+-- the shape they opened with. Ties count toward games_count but not
+-- win_count, same as a normal win-rate definition.
+create or replace function public.get_first_piece_win_rates()
+returns table (
+  shape_name text,
+  games_count bigint,
+  win_count bigint,
+  win_rate numeric
+)
+language sql
+stable
+as $$
+  with first_moves as (
+    select
+      g.winner,
+      (elem->>'player')::int as player,
+      elem->>'shapeName' as shape_name,
+      row_number() over (
+        partition by g.id, (elem->>'player')::int
+        order by ordinality
+      ) as rn
+    from public.games g,
+         jsonb_array_elements(g.move_log) with ordinality as elem
+    where g.move_log is not null
+      and g.player2_id is not null
+  )
+  select
+    shape_name,
+    count(*),
+    count(*) filter (where winner = player),
+    round(100.0 * count(*) filter (where winner = player) / count(*), 1)
+  from first_moves
+  where rn = 1
+  group by shape_name
+  order by win_rate desc;
+$$;
+
+-- Ties are excluded (winner is null) since there's no winner/loser to
+-- average on either side of a tied game.
+create or replace function public.get_score_averages()
+returns table (
+  avg_winner_score numeric,
+  avg_loser_score numeric,
+  sample_size bigint
+)
+language sql
+stable
+as $$
+  select
+    round(avg(case when winner = 1 then score1 else score2 end), 2),
+    round(avg(case when winner = 1 then score2 else score1 end), 2),
+    count(*)
+  from public.games
+  where player2_id is not null and winner is not null;
+$$;

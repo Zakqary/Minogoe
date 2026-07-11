@@ -15,10 +15,19 @@ function playerLink(id, name) {
   return `<a href="profile.html?user=${encodeURIComponent(id)}">${escapeHtml(name)}</a>`;
 }
 
+// A top-level `const Catalog = ...` (in catalog.js) never becomes a
+// property of `window` - only `var`/function declarations do - so
+// `window.Catalog` is always undefined even once Catalog is fully loaded.
+// Guard against catalog.js simply not being on the page (or not loaded
+// yet) via `typeof` instead, which checks the real binding.
+function catalogGet(id) {
+  return (typeof Catalog !== 'undefined' && Catalog) ? Catalog.get(id) : null;
+}
+
 // Small <img> for a bought-and-equipped avatar, or a default "?" placeholder
 // when the player has none equipped (or the catalog hasn't loaded yet).
 function avatarHtml(avatarId, size = 24) {
-  const item = window.Catalog ? Catalog.get(avatarId) : null;
+  const item = catalogGet(avatarId);
   if (item && item.image_path) {
     return `<img src="${escapeHtml(item.image_path)}" alt="" class="avatar-img" style="width:${size}px;height:${size}px;">`;
   }
@@ -28,14 +37,14 @@ function avatarHtml(avatarId, size = 24) {
 // The equipped title's display text, or the default "Freshy" for players
 // who haven't bought/equipped one.
 function titleText(titleId) {
-  const item = window.Catalog ? Catalog.get(titleId) : null;
+  const item = catalogGet(titleId);
   return item && item.title_text ? item.title_text : 'Freshy';
 }
 
 // Each title can carry its own color (shop_items.color) so sellable titles
 // don't all look the same - falls back to the site's default accent color.
 function titleColor(titleId) {
-  const item = window.Catalog ? Catalog.get(titleId) : null;
+  const item = catalogGet(titleId);
   return (item && item.color) || '#e0a75c';
 }
 
@@ -149,4 +158,4 @@ function wireLoggedOutHandlers() {
 
 Auth.onAuthChange(renderAuthWidget);
 renderAuthWidget();
-if (window.Catalog) Catalog.ready().then(renderAuthWidget);
+if (typeof Catalog !== 'undefined') Catalog.ready().then(renderAuthWidget);

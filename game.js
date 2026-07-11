@@ -1939,6 +1939,20 @@ function handleRejoinReady() {
   document.getElementById('connectBtn').disabled = true;
   document.getElementById('roomInput').disabled = true;
 
+  // Net.isRejoin is server-driven and true for BOTH peers whenever either
+  // one reconnects (the signaling server broadcasts the same 'ready' to
+  // both slots) - but only ONE side should actually broadcast its state as
+  // authoritative. Net.selfInitiatedRejoin is local instead: true only for
+  // the peer that actually just called Net.rejoin() itself. A same-page
+  // reconnect (e.g. handleConnectionStale() after a mobile tab-out, as
+  // opposed to a full page reload) never resets state.gameStarted, so
+  // without this check both peers could believe "I have a live game" and
+  // each fire off their own resync at once - whichever arrived second would
+  // win the race and could clobber a perfectly fine board with a stale one
+  // from the side that just reconnected.
+  const iInitiatedThisRejoin = Net.selfInitiatedRejoin;
+  Net.clearSelfInitiatedRejoin();
+
   // Re-send identify - if I'm the one who just reloaded, state.opponentUserId
   // is back to null and recordGameResult() needs the real value.
   const myProfile = Auth.getProfile();
@@ -1953,7 +1967,7 @@ function handleRejoinReady() {
   });
 
   const iHaveLiveGame = state.gameStarted && !state.gameOver;
-  if (iHaveLiveGame) {
+  if (iHaveLiveGame && !iInitiatedThisRejoin) {
     setLobbyStatus('Opponent reconnected!');
     log('Opponent reconnected.');
     Net.send({ type: 'resync', ...serializeFullState() });

@@ -14,7 +14,14 @@ const WebSocket = require('ws');
 const PORT = process.env.PORT || 8080;
 const SUPABASE_URL = 'https://kokygjmttluthboxckct.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_aH7g-hhPpt-1or4nBP6UvA_bZkS13Td';
-const RECONNECT_GRACE_MS = 30000;
+// Was 30s - too short for a realistic mobile recovery (reload the page,
+// re-establish the Supabase session, reopen the signaling socket, THEN
+// attempt the rejoin), especially right after coming back from being
+// backgrounded, where connectivity is often momentarily poor. A too-short
+// grace period means the room gets deleted (and the rejoin permanently
+// rejected as "no longer available") before the client even gets a chance
+// to try.
+const RECONNECT_GRACE_MS = 60000;
 
 // roomCode -> { mode, slots: [slot, slot] }
 // slot: { socket (null while disconnected), userId (null for private rooms),

@@ -28,6 +28,14 @@ const Net = (() => {
   let matchedMode = 'private';
   let matchId = null;
   let isRejoin = false;
+  // Unlike isRejoin (server-driven - true for BOTH peers whenever either one
+  // reconnects, since the signaling server broadcasts the same 'ready' to
+  // both slots), this is purely local: true only for the peer that actually
+  // just called rejoin() itself, distinguishing "I'm the one recovering
+  // from a dropped connection" from "I'm the stable peer just being
+  // notified my opponent reconnected." One-shot - the caller clears it via
+  // clearSelfInitiatedRejoin() once it's been acted on.
+  let selfInitiatedRejoin = false;
 
   // Application-level liveness check on the data channel itself, separate
   // from (and faster/more reliable than) both the signaling server's own
@@ -303,6 +311,7 @@ const Net = (() => {
     matchedMode = 'private';
     matchId = null;
     isRejoin = false;
+    selfInitiatedRejoin = false;
 
     openSocket(serverUrl, () => {
       callbacks.onStatus && callbacks.onStatus('Connected to signaling server...');
@@ -318,6 +327,7 @@ const Net = (() => {
     connected = false;
     matchedMode = 'private';
     isRejoin = false;
+    selfInitiatedRejoin = true;
 
     openSocket(serverUrl, () => {
       callbacks.onStatus && callbacks.onStatus('Reconnecting to your match...');
@@ -346,6 +356,10 @@ const Net = (() => {
     }
   }
 
+  function clearSelfInitiatedRejoin() {
+    selfInitiatedRejoin = false;
+  }
+
   return {
     connect,
     rejoin,
@@ -353,10 +367,12 @@ const Net = (() => {
     cancelQueue,
     leaveRoom,
     checkConnectionNow,
+    clearSelfInitiatedRejoin,
     get isHost() { return isHost; },
     get connected() { return connected; },
     get matchedMode() { return matchedMode; },
     get matchId() { return matchId; },
     get isRejoin() { return isRejoin; },
+    get selfInitiatedRejoin() { return selfInitiatedRejoin; },
   };
 })();

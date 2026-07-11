@@ -1,5 +1,20 @@
 let ownedIds = new Set();
 
+// Fixed coin packages - must match the COIN_PACKAGES map in the
+// create-checkout-session Edge Function exactly (that's the copy that
+// actually decides the price; this one is display-only).
+const COIN_PACKAGES = [
+  { key: 'small', label: '$1 - 10 coins' },
+  { key: 'medium', label: '$5 - 60 coins' },
+  { key: 'large', label: '$10 - 150 coins' },
+];
+
+// Set by consumeCheckoutRedirectParam() after a Stripe Checkout redirect -
+// kept as a variable (not written directly to the DOM) so it survives
+// renderShopPage() re-rendering the whole #shopContent innerHTML during the
+// post-purchase coin-balance polling below.
+let checkoutStatusText = '';
+
 // Every account owns these two by default (see schema.sql Phase 13) - the
 // shop's "equipped" check falls back to them when avatar_id/title_id is
 // null, so the default look shows as a normal Equipped item instead of a
@@ -53,6 +68,43 @@ function itemCardHtml(item, profile) {
   `;
 }
 
+// Coins are only ever actually granted by the signature-verified
+// stripe-webhook Edge Function, which runs slightly AFTER Stripe redirects
+// the browser back here - so the balance shown on the very first render
+// right after a successful checkout may still be stale. Polls a few times
+// so it catches up without the player needing to manually refresh.
+function consumeCheckoutRedirectParam() {
+  const params = new URLSearchParams(location.search);
+  const status = params.get('checkout');
+  if (!status) return;
+
+  // Strip the query param immediately so a manual page refresh later
+  // doesn't re-show this message.
+  const url = new URL(location.href);
+  url.searchParams.delete('checkout');
+  history.replaceState({}, '', url);
+
+  if (status === 'success') {
+    checkoutStatusText = 'Payment received! Your coins should appear in a moment...';
+    pollForCoinsUpdate();
+  } else if (status === 'cancelled') {
+    checkoutStatusText = 'Checkout cancelled - no charge was made.';
+    setTimeout(() => { checkoutStatusText = ''; renderShopPage(); }, 8000);
+  }
+}
+
+function pollForCoinsUpdate(attempt = 0) {
+  if (attempt >= 5) {
+    checkoutStatusText = '';
+    renderShopPage();
+    return;
+  }
+  setTimeout(async () => {
+    await refreshAfterMutation();
+    pollForCoinsUpdate(attempt + 1);
+  }, 2000);
+}
+
 async function renderShopPage() {
   const container = document.getElementById('shopContent');
   const user = Auth.getUser();
@@ -60,6 +112,8 @@ async function renderShopPage() {
     container.innerHTML = '<p>Sign in (top right) to visit the shop.</p>';
     return;
   }
+
+  consumeCheckoutRedirectParam();
 
   await Catalog.ready();
   const profile = Auth.getProfile();
@@ -79,6 +133,10 @@ async function renderShopPage() {
 
   container.innerHTML = `
     <div class="shop-balance">${coinIconHtml(18)} You have <strong>${profile.coins}</strong> coin${profile.coins === 1 ? '' : 's'}.</div>
+    ${checkoutStatusText ? `<div class="shop-checkout-status">${escapeHtml(checkoutStatusText)}</div>` : ''}
+    <div class="buy-coins-block">
+      ${COIN_PACKAGES.map((p) => `<button class="buy-coins-btn" data-package="${p.key}">${escapeHtml(p.label)}</button>`).join('')}
+    </div>
     <div id="shopError" class="shop-error"></div>
 
     <div class="shop-categories">
@@ -141,6 +199,22 @@ async function refreshAfterMutation() {
 }
 
 function wireShopButtons() {
+  for (const btn of document.querySelectorAll('.buy-coins-btn')) {
+    btn.addEventListener('click', async () => {
+      showShopError('');
+      btn.disabled = true;
+      const { data, error } = await supabaseClient.functions.invoke('create-checkout-session', {
+        body: { package: btn.dataset.package },
+      });
+      if (error || !data?.url) {
+        showShopError(error ? error.message : 'Could not start checkout.');
+        btn.disabled = false;
+        return;
+      }
+      window.location.href = data.url;
+    });
+  }
+
   for (const btn of document.querySelectorAll('.shop-buy-btn')) {
     btn.addEventListener('click', async () => {
       showShopError('');

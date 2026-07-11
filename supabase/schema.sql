@@ -1203,3 +1203,61 @@ begin
   return new;
 end;
 $$;
+
+-- ---------- Phase 20: buy coins with real money (Stripe Checkout) ----------
+
+-- One row per successfully-processed Stripe Checkout session. The unique
+-- constraint on stripe_session_id is what makes grant_coin_purchase() below
+-- idempotent - Stripe redelivers webhook events on retry, and this makes a
+-- redelivery a no-op instead of double-granting coins.
+create table if not exists public.coin_purchases (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  stripe_session_id text not null unique,
+  package_id text not null,
+  coins_granted integer not null,
+  amount_cents integer not null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.coin_purchases enable row level security;
+
+drop policy if exists "Users can view their own purchases" on public.coin_purchases;
+create policy "Users can view their own purchases"
+  on public.coin_purchases for select
+  using (auth.uid() = user_id);
+
+-- No insert/update/delete policy for authenticated - only the stripe-webhook
+-- Edge Function ever writes here, via the service-role key (which bypasses
+-- RLS entirely regardless of policy).
+
+-- Called by the stripe-webhook Edge Function only, after it has already
+-- verified the Stripe webhook signature - this function itself trusts its
+-- caller completely (same as every other security definer function here,
+-- it's the CALLER's job - the webhook - to have verified the request before
+-- ever getting this far). Wraps the purchase record + coin grant in one
+-- atomic operation so a Stripe webhook redelivery can never grant coins
+-- twice: the insert either succeeds (first time seeing this session) or
+-- conflicts and no-ops (redelivery), and the coin grant only happens when
+-- the insert actually took effect.
+create or replace function public.grant_coin_purchase(
+  p_user_id uuid,
+  p_stripe_session_id text,
+  p_package_id text,
+  p_coins integer,
+  p_amount_cents integer
+)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.coin_purchases (user_id, stripe_session_id, package_id, coins_granted, amount_cents)
+  values (p_user_id, p_stripe_session_id, p_package_id, p_coins, p_amount_cents)
+  on conflict (stripe_session_id) do nothing;
+
+  if found then
+    update public.profiles set coins = coins + p_coins where id = p_user_id;
+  end if;
+end;
+$$;

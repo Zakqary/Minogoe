@@ -1339,6 +1339,41 @@ h2, h3 {
   margin-top: 4px;
 }
 
+.shop-checkout-status {
+  font-size: 13px;
+  color: var(--accent-hover);
+  margin: 8px 0 0;
+}
+
+.buy-coins-block {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 18px;
+}
+
+.buy-coins-btn {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-body);
+}
+
+.buy-coins-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.shop-theme .buy-coins-btn:hover:not(:disabled) {
+  border-color: #e6c14a;
+  color: #f0d060;
+}
+
 /* All three categories sit side by side so every choice is visible at
    once, with each category's items listed vertically underneath its own
    heading instead of the previous single wide wrapping grid. */

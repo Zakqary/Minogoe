@@ -78,7 +78,11 @@ Deno.serve(async (req) => {
       }],
       client_reference_id: user.id,
       metadata: { package_id: body.package, coins: String(pkg.coins) },
-      success_url: `${SITE_URL}/shop.html?checkout=success`,
+      // The `coins` param here is purely a display hint for the post-
+      // checkout popup - it never grants anything itself (that's still
+      // only ever done by the signature-verified webhook), so there's
+      // nothing to gain by tampering with it.
+      success_url: `${SITE_URL}/shop.html?checkout=success&coins=${pkg.coins}`,
       cancel_url: `${SITE_URL}/shop.html?checkout=cancelled`,
     });
 

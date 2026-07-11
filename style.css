@@ -916,6 +916,16 @@ h2, h3 {
   border-radius: 7px;
   padding: 4px;
   cursor: pointer;
+  touch-action: none;
+}
+
+.piece-drag-ghost {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  opacity: 0.85;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.5));
 }
 
 .hand.inactive .piece-icon {
@@ -1527,7 +1537,9 @@ h2, h3 {
 
 #spLeaderboard .games-table th:last-child,
 #spLeaderboard .games-table td:last-child {
-  width: 52px;
+  width: 64px;
+  padding-left: 4px;
+  padding-right: 10px;
   white-space: nowrap;
 }
 
@@ -2073,6 +2085,55 @@ h2, h3 {
   .mino-seed-toast {
     left: 12px;
     right: 12px;
+    max-width: none;
+  }
+}
+
+/* ---------- Coin purchase confirmation popup ---------- */
+
+.coin-purchase-toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 150;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 14px 40px 14px 18px;
+  box-shadow: var(--shadow-md);
+  max-width: 320px;
+}
+
+.coin-purchase-toast-message {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.coin-purchase-toast-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px;
+}
+
+.coin-purchase-toast-dismiss:hover {
+  color: var(--text);
+}
+
+@media (max-width: 900px) {
+  .coin-purchase-toast {
+    left: 12px;
+    right: 12px;
+    transform: none;
     max-width: none;
   }
 }

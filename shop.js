@@ -78,19 +78,39 @@ function consumeCheckoutRedirectParam() {
   const status = params.get('checkout');
   if (!status) return;
 
-  // Strip the query param immediately so a manual page refresh later
-  // doesn't re-show this message.
+  // coins here is purely a display hint the Edge Function put on the
+  // success_url (see create-checkout-session) - it never grants anything
+  // itself, so there's nothing to gain by tampering with it in the URL bar.
+  const coins = Number(params.get('coins'));
+
+  // Strip the query params immediately so a manual page refresh later
+  // doesn't re-show this popup.
   const url = new URL(location.href);
   url.searchParams.delete('checkout');
+  url.searchParams.delete('coins');
   history.replaceState({}, '', url);
 
   if (status === 'success') {
-    checkoutStatusText = 'Payment received! Your coins should appear in a moment...';
+    if (Number.isFinite(coins) && coins > 0) showCoinPurchaseToast(coins);
     pollForCoinsUpdate();
   } else if (status === 'cancelled') {
     checkoutStatusText = 'Checkout cancelled - no charge was made.';
     setTimeout(() => { checkoutStatusText = ''; renderShopPage(); }, 8000);
   }
+}
+
+function showCoinPurchaseToast(coins) {
+  if (document.getElementById('coinPurchaseToast')) return;
+  const el = document.createElement('div');
+  el.id = 'coinPurchaseToast';
+  el.className = 'coin-purchase-toast';
+  el.innerHTML = `
+    <button id="coinPurchaseToastDismiss" class="coin-purchase-toast-dismiss" aria-label="Dismiss">&times;</button>
+    <div class="coin-purchase-toast-message">${coinIconHtml(20)} Successfully purchased ${coins} coin${coins === 1 ? '' : 's'}!</div>
+  `;
+  document.body.appendChild(el);
+  document.getElementById('coinPurchaseToastDismiss').addEventListener('click', () => el.remove());
+  setTimeout(() => el.remove(), 8000);
 }
 
 function pollForCoinsUpdate(attempt = 0) {
@@ -107,6 +127,15 @@ function pollForCoinsUpdate(attempt = 0) {
 
 async function renderShopPage() {
   const container = document.getElementById('shopContent');
+  // Auth resolves asynchronously - without this check, the very first
+  // render (right after page load, before the first onAuthStateChange
+  // event fires) would see getUser()/getProfile() both still null and
+  // briefly flash "sign in" or "could not load your profile" even for an
+  // already-logged-in user, before the real state arrives a moment later.
+  if (!Auth.isInitialized) {
+    container.innerHTML = '<p>Loading...</p>';
+    return;
+  }
   const user = Auth.getUser();
   if (!user) {
     container.innerHTML = '<p>Sign in (top right) to visit the shop.</p>';

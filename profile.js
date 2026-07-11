@@ -17,6 +17,15 @@ async function renderProfilePage() {
     }
     profile = data;
   } else {
+    // Auth resolves asynchronously - without this check, the very first
+    // render (right after page load, before the first onAuthStateChange
+    // event fires) would see getUser()/getProfile() both still null and
+    // briefly flash "sign in" or "could not load your profile" even for an
+    // already-logged-in user, before the real state arrives a moment later.
+    if (!Auth.isInitialized) {
+      container.innerHTML = '<p>Loading...</p>';
+      return;
+    }
     const user = Auth.getUser();
     if (!user) {
       container.innerHTML = '<p>Sign in (top right) to see your profile.</p>';

@@ -1,2 +1,7 @@
 node_modules/
 *.log
+
+# Supabase CLI's local project-link cache (created by `supabase link`) -
+# machine-local state, not project config, and includes a pooler
+# connection string that shouldn't be committed.
+supabase/.temp/

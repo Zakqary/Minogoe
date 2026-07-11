@@ -110,6 +110,16 @@ const state = {
   opponentCompanion: null, // the connected peer's chosen companion Mino ({ color, rarity, modifier, stage }), if any
   introShown: false,  // whether the match intro card has already been shown this match
   gameStartedAt: null,
+  // Counts which game *within this connection* this is (1 = the first game,
+  // 2 = the first rematch, etc.) - only ever set by the host (via newGame()
+  // or the 'newgame' message) and adopted as-is by the joiner, never
+  // independently incremented on that side, so both peers always agree on
+  // the same value for the same game. Combined with Net.matchId to build a
+  // per-GAME client_match_id (see recordGameResult()) - matchId alone is
+  // the same for every rematch in a session, which used to make every
+  // rematch after the first collide with it and get silently rejected as
+  // a "duplicate" of the first game.
+  gameSequence: 0,
   initialHand: [],    // the pristine drawn hand, for replay reconstruction
   moveLog: [],        // ordered { player, shapeName, orientationIndex, r0, c0 } placements
   lastMove: null,     // { shapeName, orientationIndex, r0, c0, player } - for the on-board highlight
@@ -174,6 +184,7 @@ function serializeFullState() {
     initialHand: state.initialHand,
     lastMove: state.lastMove,
     gameStartedAt: state.gameStartedAt,
+    gameSequence: state.gameSequence,
     scoringCells: state.scoringCells,
   };
 }
@@ -193,6 +204,7 @@ function applyFullState(msg) {
   state.initialHand = msg.initialHand;
   state.lastMove = msg.lastMove;
   state.gameStartedAt = msg.gameStartedAt;
+  state.gameSequence = msg.gameSequence;
   state.scoringCells = msg.scoringCells;
   state.selected = null;
   state.hover = null;
@@ -403,7 +415,7 @@ function drawHand() {
   ];
 }
 
-function newGame(remoteHand) {
+function newGame(remoteHand, remoteSequence) {
   const isRemote = remoteHand !== undefined;
 
   if (state.connecting && !isRemote) return;
@@ -412,6 +424,10 @@ function newGame(remoteHand) {
     log('Only the host can start a new game - ask them to click New Game.');
     return;
   }
+
+  // The host assigns the next sequence number itself; the joiner just
+  // adopts whatever the host sent, so both sides always agree.
+  state.gameSequence = isRemote ? remoteSequence : state.gameSequence + 1;
 
   state.gameStarted = true;
   state.board = new Int8Array(BOARD_SIZE * BOARD_SIZE);
@@ -454,7 +470,7 @@ function newGame(remoteHand) {
   render();
 
   if (state.online && Net.isHost && !isRemote) {
-    Net.send({ type: 'newgame', hand });
+    Net.send({ type: 'newgame', hand, gameSequence: state.gameSequence });
   }
 
   scheduleBotMove(); // no-op unless this is a vs Bot game where the bot won the coin flip to go first
@@ -465,7 +481,10 @@ function newGame(remoteHand) {
 // another ranked game with no say in it. Private rooms keep the old
 // instant/host-only behavior (newGame() above still enforces host-only there).
 function requestNewGame() {
-  if (state.connecting || !state.gameStarted) return;
+  // Can't start (or ask for) a rematch until the current game has actually
+  // ended - otherwise an abandoned in-progress game never reaches a real
+  // conclusion and can never be recorded (no winner was ever decided).
+  if (state.connecting || !state.gameStarted || !state.gameOver) return;
 
   if (!state.online || (state.gameMode !== 'casual' && state.gameMode !== 'ranked')) {
     newGame();
@@ -1269,7 +1288,11 @@ async function recordGameResult(winner, forfeit) {
       move_log: state.moveLog,
       board_size: BOARD_SIZE,
       started_at: state.gameStartedAt,
-      client_match_id: Net.matchId || null,
+      // Net.matchId alone is the same for every rematch within this
+      // connection - appending gameSequence makes this unique PER GAME, so
+      // a rematch's result isn't wrongly rejected as a duplicate of the
+      // first game (see state.gameSequence's definition for the full story).
+      client_match_id: Net.matchId ? `${Net.matchId}-${state.gameSequence}` : null,
     };
   }
 
@@ -1611,7 +1634,7 @@ function render() {
   canvas.classList.toggle('placing', !!state.selected && !state.gameOver);
 
   document.getElementById('rotateBtn').disabled = state.connecting || !state.gameStarted;
-  document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted || state.pendingNewGameRequest;
+  document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted || !state.gameOver || state.pendingNewGameRequest;
   document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
     || state.history.length === 0 || state.pendingUndoRequest;
   const tooEarlyToPass = state.gameStarted && !state.gameOver && !opponentHandEmpty();
@@ -1672,6 +1695,100 @@ function drawShapeIcon(canvasEl, coords) {
   }
 }
 
+// ---------- Mobile drag-to-place ----------
+// Touch users can already tap a piece then tap the board twice (see the
+// canvas touchstart handler below), but dragging a piece straight from the
+// hand tray onto the board is the more natural mobile gesture. Tracks a
+// single in-progress drag at a time; a touch that never moves past
+// DRAG_THRESHOLD_PX is just treated as a plain tap-to-select instead.
+let pieceDrag = null; // { shapeName, startX, startY, moved, ghostEl }
+const DRAG_THRESHOLD_PX = 8;
+
+function createDragGhost(shapeName) {
+  const ghost = document.createElement('div');
+  ghost.className = 'piece-drag-ghost';
+  const c = document.createElement('canvas');
+  drawShapeIcon(c, BASE_SHAPES[shapeName]);
+  ghost.appendChild(c);
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
+function updateDragGhost(ghostEl, clientX, clientY) {
+  if (!ghostEl) return;
+  // Offset above the finger so the piece itself isn't hidden underneath it.
+  ghostEl.style.left = `${clientX}px`;
+  ghostEl.style.top = `${clientY - 60}px`;
+}
+
+// Shared with mouse/tap hover - just derives state.mouseRC from a raw touch
+// point instead of a mousemove event, then reuses the exact same
+// recomputeHover()/drawBoard() the rest of the board interaction already
+// relies on for the live placement preview.
+function updateBoardHoverFromPoint(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const overBoard = clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+  state.mouseRC = overBoard ? getBoardCell(clientX, clientY) : null;
+  recomputeHover();
+  drawBoard();
+}
+
+function finishPieceDrag(clientX, clientY) {
+  updateBoardHoverFromPoint(clientX, clientY);
+  const canPlaceHere = state.selected && state.hover && state.hover.valid
+    && !state.gameOver && !state.connecting
+    && !(state.online && state.myPlayer !== state.turn);
+  if (canPlaceHere) {
+    commitPlacement(state.selected.shapeName, state.selected.orientationIndex, state.hover.r0, state.hover.c0);
+  } else {
+    state.hover = null;
+    drawBoard();
+  }
+}
+
+function wirePieceDrag(item, name) {
+  item.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    pieceDrag = { shapeName: name, startX: e.touches[0].clientX, startY: e.touches[0].clientY, moved: false, ghostEl: null };
+  }, { passive: false });
+
+  item.addEventListener('touchmove', (e) => {
+    if (!pieceDrag || pieceDrag.shapeName !== name) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (!pieceDrag.moved && Math.hypot(touch.clientX - pieceDrag.startX, touch.clientY - pieceDrag.startY) > DRAG_THRESHOLD_PX) {
+      pieceDrag.moved = true;
+      selectShape(pieceDrag.shapeName);
+      pieceDrag.ghostEl = createDragGhost(pieceDrag.shapeName);
+    }
+    if (pieceDrag.moved) {
+      updateDragGhost(pieceDrag.ghostEl, touch.clientX, touch.clientY);
+      updateBoardHoverFromPoint(touch.clientX, touch.clientY);
+    }
+  }, { passive: false });
+
+  item.addEventListener('touchend', (e) => {
+    if (!pieceDrag || pieceDrag.shapeName !== name) return;
+    if (pieceDrag.moved) {
+      const touch = e.changedTouches[0];
+      finishPieceDrag(touch.clientX, touch.clientY);
+      if (pieceDrag.ghostEl) pieceDrag.ghostEl.remove();
+    } else {
+      // Never moved past the threshold - a plain tap, same as a click.
+      selectShape(name);
+    }
+    pieceDrag = null;
+  });
+
+  item.addEventListener('touchcancel', () => {
+    if (!pieceDrag || pieceDrag.shapeName !== name) return;
+    if (pieceDrag.ghostEl) pieceDrag.ghostEl.remove();
+    state.hover = null;
+    drawBoard();
+    pieceDrag = null;
+  });
+}
+
 function renderHand(elId, hand, player) {
   const counts = {};
   for (const s of hand) counts[s] = (counts[s] || 0) + 1;
@@ -1705,6 +1822,7 @@ function renderHand(elId, hand, player) {
 
     if (isActive) {
       item.addEventListener('click', () => selectShape(name));
+      wirePieceDrag(item, name);
     }
     el.appendChild(item);
   }
@@ -2111,6 +2229,7 @@ function handleNetReady() {
   state.opponentEloRating = null;
   state.opponentCompanion = null;
   state.introShown = false;
+  state.gameSequence = 0;
   state.pendingUndoRequest = false;
   state.incomingUndoRequest = false;
   document.getElementById('connectBtn').disabled = true;
@@ -2166,7 +2285,7 @@ function isExpectedNextAction(seq) {
 
 function handleNetDataInner(msg) {
   if (msg.type === 'newgame') {
-    newGame(msg.hand);
+    newGame(msg.hand, msg.gameSequence);
   } else if (msg.type === 'move') {
     if (!isExpectedNextAction(msg.seq)) { requestResync(); return; }
     commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true, msg.t);

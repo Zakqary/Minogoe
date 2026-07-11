@@ -64,5 +64,12 @@ const Auth = (() => {
     getUser: () => currentUser,
     getProfile: () => currentProfile,
     getAccessToken: () => currentSession?.access_token ?? null,
+    // Pages that render a "sign in" prompt or a "could not load your
+    // profile" error based on getUser()/getProfile() need this to tell
+    // "auth genuinely hasn't resolved yet" apart from "resolved, and you're
+    // signed out" / "resolved, and something's actually wrong" - otherwise
+    // they flash the wrong message for the brief window before the very
+    // first onAuthStateChange event fires.
+    get isInitialized() { return initialized; },
   };
 })();

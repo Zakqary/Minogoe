@@ -933,7 +933,10 @@ alter table public.profiles add column if not exists companion_mino_id uuid refe
 -- Buying a pack no longer grants a seed immediately - it just adds a sealed
 -- pack to inventory, so the client can show an "open when you're ready"
 -- animation instead of an instant reveal. See open_seed_pack() below for the
--- actual grant.
+-- actual grant. Postgres won't let create-or-replace change a function's
+-- return type (this one used to return uuid), so the old definition has to
+-- be dropped first.
+drop function if exists public.buy_seed_pack();
 create or replace function public.buy_seed_pack()
 returns integer
 language plpgsql

@@ -50,6 +50,36 @@ async function renderProfilePage() {
     .gt('elo_rating', profile.elo_rating);
   const rank = rankError ? null : (higherEloCount ?? 0) + 1;
 
+  // Only meaningful when looking at someone ELSE's profile while signed
+  // in - there's no "vs yourself" record to show otherwise.
+  const myUserId = Auth.getUser()?.id ?? null;
+  let headToHeadHtml = '';
+  if (myUserId && myUserId !== userId) {
+    const { data: h2hGames } = await supabaseClient
+      .from('games')
+      .select('player1_id, winner')
+      .or(`and(player1_id.eq.${myUserId},player2_id.eq.${userId}),and(player1_id.eq.${userId},player2_id.eq.${myUserId})`);
+
+    if (h2hGames && h2hGames.length > 0) {
+      let myWins = 0, myLosses = 0, myTies = 0;
+      for (const g of h2hGames) {
+        const iWasP1 = g.player1_id === myUserId;
+        if (g.winner == null) myTies++;
+        else if ((g.winner === 1) === iWasP1) myWins++;
+        else myLosses++;
+      }
+      headToHeadHtml = `
+        <h3>Your Head-to-Head vs ${escapeHtml(profile.username)}</h3>
+        <div class="profile-stats">
+          <div class="stat"><div class="stat-value">${h2hGames.length}</div><div class="stat-label">Games</div></div>
+          <div class="stat"><div class="stat-value">${myWins}</div><div class="stat-label">Your Wins</div></div>
+          <div class="stat"><div class="stat-value">${myLosses}</div><div class="stat-label">Your Losses</div></div>
+          <div class="stat"><div class="stat-value">${myTies}</div><div class="stat-label">Ties</div></div>
+        </div>
+      `;
+    }
+  }
+
   const { data: games, error } = await supabaseClient
     .from('games')
     .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
@@ -96,17 +126,36 @@ async function renderProfilePage() {
     ? `<span class="profile-companion" title="${escapeHtml(minoLabel(profile.companion))}${profile.companion.name ? ' - ' + escapeHtml(profile.companion.name) : ''}">${minoVisualHtml(profile.companion, 32)}</span>`
     : '';
 
+  // pvp_*/bot_* split out a vs-bot practice game from a "regular" game
+  // against a real opponent (schema.sql Phase 23) - shown as two clearly
+  // separate stat rows instead of blending them into one number the way
+  // games_played/wins/losses/ties (still used as-is elsewhere, e.g. the
+  // leaderboard) do. The bot row only appears once there's actually
+  // something to show, so most profiles aren't cluttered with a zeroed-
+  // out row for a mode they've never touched.
+  const botStatsHtml = profile.bot_games_played > 0 ? `
+    <h3>vs Bot</h3>
+    <div class="profile-stats">
+      <div class="stat"><div class="stat-value">${profile.bot_games_played}</div><div class="stat-label">Games</div></div>
+      <div class="stat"><div class="stat-value">${profile.bot_wins}</div><div class="stat-label">Wins</div></div>
+      <div class="stat"><div class="stat-value">${profile.bot_losses}</div><div class="stat-label">Losses</div></div>
+      <div class="stat"><div class="stat-value">${profile.bot_ties}</div><div class="stat-label">Ties</div></div>
+    </div>
+  ` : '';
+
   container.innerHTML = `
     <h2 class="profile-heading">${avatarHtml(profile.avatar_id, 36)} ${escapeHtml(profile.username)} ${titleBadgeHtml(profile.title_id)} ${companionHtml}</h2>
     ${joinedText ? `<div class="profile-joined">Account created on ${escapeHtml(joinedText)}</div>` : ''}
     <div class="profile-stats">
       <div class="stat"><div class="stat-value">${rank != null ? '#' + rank : '-'}</div><div class="stat-label">Rank</div></div>
       <div class="stat"><div class="stat-value">${profile.elo_rating}</div><div class="stat-label">ELO</div></div>
-      <div class="stat"><div class="stat-value">${profile.games_played}</div><div class="stat-label">Games</div></div>
-      <div class="stat"><div class="stat-value">${profile.wins}</div><div class="stat-label">Wins</div></div>
-      <div class="stat"><div class="stat-value">${profile.losses}</div><div class="stat-label">Losses</div></div>
-      <div class="stat"><div class="stat-value">${profile.ties}</div><div class="stat-label">Ties</div></div>
+      <div class="stat"><div class="stat-value">${profile.pvp_games_played}</div><div class="stat-label">Games</div></div>
+      <div class="stat"><div class="stat-value">${profile.pvp_wins}</div><div class="stat-label">Wins</div></div>
+      <div class="stat"><div class="stat-value">${profile.pvp_losses}</div><div class="stat-label">Losses</div></div>
+      <div class="stat"><div class="stat-value">${profile.pvp_ties}</div><div class="stat-label">Ties</div></div>
     </div>
+    ${botStatsHtml}
+    ${headToHeadHtml}
     <h3>Recent Games</h3>
     <table class="games-table">
       <thead><tr><th>Date</th><th>Mode</th><th>Opponent</th><th>Score</th><th>Result</th><th></th></tr></thead>

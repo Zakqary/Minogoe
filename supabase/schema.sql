@@ -1482,3 +1482,103 @@ begin
   update public.profiles set pending_pack_notifications = 0 where id = uid;
 end;
 $$;
+
+-- ---------- Phase 23: split pvp stats from vs-bot stats on profiles ----------
+
+-- games_played/wins/losses/ties mix every mode together, including 'bot'
+-- practice games against no real opponent - the profile page shows those
+-- as a separate, clearly-labeled "vs Bot" line instead of silently
+-- inflating "regular" stats. Additive only: games_played/wins/losses/ties
+-- themselves are untouched, so the leaderboard and anything else already
+-- reading them (all-modes combined) keeps working exactly as before.
+alter table public.profiles add column if not exists pvp_games_played integer not null default 0;
+alter table public.profiles add column if not exists pvp_wins integer not null default 0;
+alter table public.profiles add column if not exists pvp_losses integer not null default 0;
+alter table public.profiles add column if not exists pvp_ties integer not null default 0;
+
+alter table public.profiles add column if not exists bot_games_played integer not null default 0;
+alter table public.profiles add column if not exists bot_wins integer not null default 0;
+alter table public.profiles add column if not exists bot_losses integer not null default 0;
+alter table public.profiles add column if not exists bot_ties integer not null default 0;
+
+create or replace function public.handle_game_recorded()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if new.player1_id is not null then
+    update public.profiles
+    set games_played = games_played + 1,
+        wins = wins + case when new.winner = 1 then 1 else 0 end,
+        losses = losses + case when new.winner = 2 then 1 else 0 end,
+        ties = ties + case when new.winner is null then 1 else 0 end,
+        pvp_games_played = pvp_games_played + case when new.player2_id is not null then 1 else 0 end,
+        pvp_wins = pvp_wins + case when new.player2_id is not null and new.winner = 1 then 1 else 0 end,
+        pvp_losses = pvp_losses + case when new.player2_id is not null and new.winner = 2 then 1 else 0 end,
+        pvp_ties = pvp_ties + case when new.player2_id is not null and new.winner is null then 1 else 0 end,
+        bot_games_played = bot_games_played + case when new.mode = 'bot' then 1 else 0 end,
+        bot_wins = bot_wins + case when new.mode = 'bot' and new.winner = 1 then 1 else 0 end,
+        bot_losses = bot_losses + case when new.mode = 'bot' and new.winner = 2 then 1 else 0 end,
+        bot_ties = bot_ties + case when new.mode = 'bot' and new.winner is null then 1 else 0 end
+    where id = new.player1_id;
+  end if;
+
+  -- player2_id is only ever set for a real pvp opponent (never 'bot' mode,
+  -- which always leaves it null) - no bot_* increments needed here.
+  if new.player2_id is not null then
+    update public.profiles
+    set games_played = games_played + 1,
+        wins = wins + case when new.winner = 2 then 1 else 0 end,
+        losses = losses + case when new.winner = 1 then 1 else 0 end,
+        ties = ties + case when new.winner is null then 1 else 0 end,
+        pvp_games_played = pvp_games_played + 1,
+        pvp_wins = pvp_wins + case when new.winner = 2 then 1 else 0 end,
+        pvp_losses = pvp_losses + case when new.winner = 1 then 1 else 0 end,
+        pvp_ties = pvp_ties + case when new.winner is null then 1 else 0 end
+    where id = new.player2_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Backfill from existing games so anyone with history before this
+-- migration doesn't show zeros - safe to re-run, always recomputes from
+-- source rather than incrementing (same style as Phase 10's ranked backfill).
+update public.profiles p
+set pvp_games_played = coalesce(pv.games, 0),
+    pvp_wins = coalesce(pv.wins, 0),
+    pvp_losses = coalesce(pv.losses, 0),
+    pvp_ties = coalesce(pv.ties, 0)
+from (
+  select player_id,
+         count(*) as games,
+         sum(case when winner = player_num then 1 else 0 end) as wins,
+         sum(case when winner is not null and winner <> player_num then 1 else 0 end) as losses,
+         sum(case when winner is null then 1 else 0 end) as ties
+  from (
+    select player1_id as player_id, 1 as player_num, winner from public.games where player1_id is not null and player2_id is not null
+    union all
+    select player2_id as player_id, 2 as player_num, winner from public.games where player2_id is not null
+  ) per_player
+  group by player_id
+) pv
+where p.id = pv.player_id;
+
+update public.profiles p
+set bot_games_played = coalesce(bt.games, 0),
+    bot_wins = coalesce(bt.wins, 0),
+    bot_losses = coalesce(bt.losses, 0),
+    bot_ties = coalesce(bt.ties, 0)
+from (
+  select player1_id as player_id,
+         count(*) as games,
+         sum(case when winner = 1 then 1 else 0 end) as wins,
+         sum(case when winner = 2 then 1 else 0 end) as losses,
+         sum(case when winner is null then 1 else 0 end) as ties
+  from public.games
+  where mode = 'bot' and player1_id is not null
+  group by player1_id
+) bt
+where p.id = bt.player_id;

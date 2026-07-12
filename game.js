@@ -1061,10 +1061,27 @@ function checkGameEnd() {
   }
 }
 
+// A new move or pass supersedes any undo-request still sitting unanswered
+// from before it - the top of state.history is about to change out from
+// under it, so accepting it now would undo the WRONG thing (whatever just
+// landed, not whatever the original request was actually about). Called
+// from both commitPlacement() and manualPass(), on both the local and the
+// remote-applied side (they both run this same code), so a stale request
+// silently disappears for both players - this is what stops later
+// accepting an old request from undoing your own just-played move by
+// accident, instead of leaving an "accept" banner sitting there forever.
+function expireStaleUndoRequest() {
+  if (!state.pendingUndoRequest && !state.incomingUndoRequest) return;
+  state.pendingUndoRequest = false;
+  state.incomingUndoRequest = false;
+  log('An outstanding undo request expired since a new move was made.');
+}
+
 function manualPass(fromRemote = false) {
   if (state.gameOver) return;
   if (state.online && !fromRemote && state.myPlayer !== state.turn) return;
 
+  expireStaleUndoRequest();
   const player = state.turn;
   state.history.push(snapshotState());
   log(`${playerLabel(player)} passes their turn.`);
@@ -1103,6 +1120,7 @@ function requestPass() {
 function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false, t = Date.now()) {
   if (state.online && !fromRemote && state.myPlayer !== state.turn) return;
 
+  expireStaleUndoRequest();
   state.history.push(snapshotState());
 
   const player = state.turn;

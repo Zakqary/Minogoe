@@ -1110,37 +1110,54 @@ h2, h3 {
 /* ---------- Mobile (<=900px): everything below is additive only. No rule
    above this point is touched, so desktop is pixel-identical to before. ---------- */
 @media (max-width: 900px) {
+  /* Board and hand tray sit side by side in one row (not stacked), so both
+     the board and enough of your own pieces to actually play are visible
+     together without scrolling the page - the board shrinks to make room
+     (it's a fixed 1:1 shape, so a narrower column also makes it shorter,
+     which is exactly what keeps this row from overflowing the viewport
+     height too). Everything else (mode/queue buttons, scoreboard,
+     controls, rules/log/chat) is secondary to actually placing a piece
+     mid-game, so it stays reachable by scrolling below this row instead
+     of competing for the same space. */
   .app {
-    flex-direction: column;
-    align-items: center;
-    padding: 12px;
-    gap: 16px;
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-areas:
+      "board hands"
+      "right right";
+    align-items: start;
+    padding: 10px;
+    gap: 10px;
   }
 
-  .side-panel,
   .board-panel,
+  .side-panel,
   .right-panel {
     width: 100%;
-    max-width: 520px;
+    max-width: none;
   }
 
   .board-panel {
-    order: 1;
+    grid-area: board;
   }
 
   .side-panel {
-    order: 2;
+    grid-area: hands;
   }
 
   .right-panel {
-    order: 3;
+    grid-area: right;
   }
 
   /* Within the side panel, surface the piece hands first so players don't
      have to scroll past mode/queue buttons to reach them from the board.
-     Scoped to .side-panel so this doesn't also reorder replay.html's hands. */
+     Scoped to .side-panel so this doesn't also reorder replay.html's hands.
+     Stacked (not side by side like desktop) so each hand gets this
+     already-narrow column's full width to wrap icons into, instead of
+     splitting it in half again. */
   .side-panel .hands {
     order: -1;
+    flex-direction: column;
   }
 
   .board-wrapper {
@@ -1155,6 +1172,28 @@ h2, h3 {
     height: auto;
     touch-action: none;
     display: block;
+  }
+
+  .turn-banner {
+    font-size: 14px;
+    padding: 5px 10px;
+  }
+
+  .turn-timer {
+    font-size: 12px;
+    padding: 5px 8px;
+  }
+
+  .selection-info {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+
+  /* Redundant once you have the floating rotate button and can just drag a
+     piece onto the board - mostly desktop-oriented instructions (keyboard/
+     scroll-wheel rotate) that only cost vertical space here. */
+  .rotate-hint {
+    display: none;
   }
 
   /* Sits just below the board's bottom-right corner instead of on top of

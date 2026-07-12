@@ -35,7 +35,15 @@ const BASE_SHAPES = {
 };
 
 const PENTOMINO_NAMES = Object.keys(BASE_SHAPES).filter((n) => n.startsWith('P_'));
-const TETROMINO_NAMES = Object.keys(BASE_SHAPES).filter((n) => n.startsWith('Q_'));
+// Q_Z is Q_S mirrored, and Q_J is Q_L mirrored - since a piece can already
+// be flipped in play (see generateOrientations()'s mirror step below), a
+// piece named "Q_S" already covers every orientation "Q_Z" would too, and
+// vice versa (same for Q_L/Q_J). Drawing both as separate pool entries
+// silently doubled that one physical tetromino's odds relative to
+// Q_I/Q_O/Q_T, which have no mirror partner - see the matching comment in
+// game.js for the fuller explanation (this file has its own copy of
+// BASE_SHAPES/ORIENTATIONS since it doesn't load game.js at all).
+const TETROMINO_NAMES = ['Q_I', 'Q_O', 'Q_T', 'Q_S', 'Q_L'];
 const TROMINO_NAMES = Object.keys(BASE_SHAPES).filter((n) => n.startsWith('R_'));
 
 function normalize(coords) {

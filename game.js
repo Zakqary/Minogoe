@@ -39,7 +39,17 @@ const BASE_SHAPES = {
 };
 
 const PENTOMINO_NAMES = Object.keys(BASE_SHAPES).filter(n => n.startsWith('P_'));
-const TETROMINO_NAMES = Object.keys(BASE_SHAPES).filter(n => n.startsWith('Q_'));
+// Q_Z is Q_S mirrored, and Q_J is Q_L mirrored - since every piece can
+// already be flipped in play (see generateOrientations()'s mirror step
+// below), a hand piece named "Q_S" already covers every orientation
+// "Q_Z" would too, and vice versa (same for Q_L/Q_J). Drawing both as
+// separate hand entries silently doubled that one physical tetromino's
+// odds of turning up in a hand relative to Q_I/Q_O/Q_T, which have no
+// mirror partner. Q_Z/Q_J deliberately stay defined in BASE_SHAPES
+// itself (just excluded from the drawable pool here) so an already-dealt
+// hand or in-flight opponent move from before this fix still renders and
+// validates correctly.
+const TETROMINO_NAMES = ['Q_I', 'Q_O', 'Q_T', 'Q_S', 'Q_L'];
 const TROMINO_NAMES = Object.keys(BASE_SHAPES).filter(n => n.startsWith('R_'));
 
 function normalize(coords) {
@@ -1152,6 +1162,17 @@ function performUndo() {
     applySnapshot(state.history.pop());
   }
 
+  // If the bot went first this game and this undo was for its very first
+  // move, there's no earlier human turn to fall back to - the snapshot
+  // above just restored the game's actual starting state (bot's turn),
+  // and the check right before this one is a no-op since there's nothing
+  // left in history to pop. scheduleBotMove() is normally only ever
+  // triggered right after a move/pass commits, so without this the game
+  // would otherwise sit frozen on the bot's turn forever.
+  if (state.vsBot && !state.gameOver && state.turn === 2) {
+    scheduleBotMove();
+  }
+
   state.selected = null;
   state.hover = null;
   log('Last move undone.');
@@ -1212,6 +1233,8 @@ function endGame(reason, forcedWinner) {
   stopTurnTimer();
   clearInterval(reconnectCountdownTimer);
   clearTimeout(resyncFallbackTimer);
+  clearTimeout(timeoutConfirmTimer);
+  timeoutConfirmTimer = null;
   if (state.online) {
     Net.leaveRoom();
     clearActiveMatch();
@@ -1513,10 +1536,39 @@ function timeoutForfeit() {
 // the waiting player's own timer shares the same deadline, so it can declare
 // the timeout independently instead of waiting forever on a message that may
 // never arrive.
+//
+// A single dropped 'move' message looks IDENTICAL to a real timeout from
+// here - the opponent may have moved perfectly fine on their end, with only
+// the message telling us about it lost in transit. Left unchecked, this can
+// make both sides' independently-ticking timers expire waiting on each
+// other at once, each concluding the other one ran out of time and each
+// recording themselves as the winner. Rather than trusting local silence
+// alone, confirm directly with the opponent's own client via a fresh resync
+// before ending the game - see the 'resync' handler's use of
+// timeoutConfirmTimer for how a confirmed still-their-turn vs. an actually-
+// already-moved opponent are told apart.
+const TIMEOUT_CONFIRM_GRACE_MS = 5000;
+let timeoutConfirmTimer = null;
+
 function timeoutOpponentForfeit() {
   if (state.gameOver) return;
   const forfeitingPlayer = state.turn;
-  const winner = state.myPlayer;
+  setLobbyStatus("Confirming your opponent's turn timed out...");
+  Net.send({ type: 'resync-request' });
+
+  clearTimeout(timeoutConfirmTimer);
+  timeoutConfirmTimer = setTimeout(() => {
+    timeoutConfirmTimer = null;
+    // No resync came back at all within the grace window - the connection
+    // is genuinely gone, not just one dropped message. Finalize with what
+    // we already believed.
+    finalizeOpponentTimeoutForfeit(forfeitingPlayer);
+  }, TIMEOUT_CONFIRM_GRACE_MS);
+}
+
+function finalizeOpponentTimeoutForfeit(forfeitingPlayer) {
+  if (state.gameOver) return;
+  const winner = forfeitingPlayer === 1 ? 2 : 1;
   if (state.online) Net.send({ type: 'forfeit', forfeitingPlayer });
   endGame(`${playerLabel(forfeitingPlayer)} ran out of time.`, winner);
 }
@@ -2369,8 +2421,37 @@ function handleNetDataInner(msg) {
     clearTimeout(resyncFallbackTimer);
     clearTimeout(resyncRequestTimeoutId);
     state.connecting = false;
-    applyFullState(msg);
-    log('Reconnected — game state restored.');
+
+    const wasAwaitingTimeoutConfirm = !!timeoutConfirmTimer;
+    clearTimeout(timeoutConfirmTimer);
+    timeoutConfirmTimer = null;
+
+    if (msg.plyCount < state.plyCount) {
+      // We're actually the more-advanced side here - the peer is the one
+      // who's behind (e.g. they never received one of OUR moves). Send
+      // ours back instead of accepting theirs, so they catch up instead
+      // of us regressing to a state we've already moved past. Never
+      // finalize a suspected opponent-timeout in this branch either: if
+      // they're behind, they simply don't know it's their turn yet, so
+      // ending the game now would be exactly the wrong call.
+      Net.send({ type: 'resync', ...serializeFullState() });
+    } else {
+      const turnBefore = state.turn;
+      applyFullState(msg);
+      if (wasAwaitingTimeoutConfirm) {
+        if (state.turn === turnBefore) {
+          // Confirmed directly with the opponent's own client, moments
+          // ago, that they genuinely still haven't moved - not just a
+          // dropped message. Safe to declare the timeout now.
+          finalizeOpponentTimeoutForfeit(state.turn);
+          return;
+        }
+        log("Your opponent's move had actually gone through - resuming.");
+      } else {
+        log('Reconnected — game state restored.');
+      }
+    }
+
     setLobbyStatus(`Connected! You are Player ${state.myPlayer}. (${state.gameMode})`);
     render();
   } else if (msg.type === 'newgame-request') {

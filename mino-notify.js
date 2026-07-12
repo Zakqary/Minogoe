@@ -1,32 +1,26 @@
 // Small toast (same pattern as checkin.js) that surfaces a game-reward
-// seed the next time the player loads any page, since the trigger that
-// grants it (schema.sql Phase 16) runs entirely server-side with no way to
-// push a notification to an open tab. Purchased seed packs already show
-// their own reveal inline in the shop, so those are inserted pre-marked
-// seen and never show up here.
-async function checkForNewSeeds() {
+// seed pack the next time the player loads any page, since the trigger
+// that grants it (schema.sql Phase 22) runs entirely server-side with no
+// way to push a notification to an open tab. Purchased seed packs already
+// show their own reveal inline in the shop and never touch this counter.
+function checkForNewPacks() {
   const user = Auth.getUser();
-  if (!user) return;
-  const { data, error } = await supabaseClient
-    .from('minos')
-    .select('*')
-    .eq('user_id', user.id)
-    .eq('seen', false);
-  if (error || !data || data.length === 0) return;
-  showSeedToast(data);
+  const profile = Auth.getProfile();
+  if (!user || !profile || !profile.pending_pack_notifications) return;
+  showPackToast(profile.pending_pack_notifications);
 }
 
-function removeSeedToast() {
+function removePackToast() {
   const el = document.getElementById('minoSeedToast');
   if (el) el.remove();
 }
 
-function showSeedToast(seeds) {
+function showPackToast(count) {
   if (document.getElementById('minoSeedToast')) return;
 
-  const summary = seeds.length === 1
-    ? `You found a ${seeds[0].rarity}${seeds[0].modifier ? ' ' + seeds[0].modifier : ''} ${seeds[0].color} seed!`
-    : `You found ${seeds.length} new seeds!`;
+  const summary = count === 1
+    ? 'You found a sealed seed pack!'
+    : `You found ${count} sealed seed packs!`;
 
   const el = document.createElement('div');
   el.id = 'minoSeedToast';
@@ -34,16 +28,14 @@ function showSeedToast(seeds) {
   el.innerHTML = `
     <button id="minoSeedToastDismiss" class="mino-seed-toast-dismiss" aria-label="Dismiss">&times;</button>
     <div class="mino-seed-toast-message">&#127793; ${escapeHtml(summary)}</div>
-    <div class="mino-seed-toast-sub">Plant it in your <a href="garden.html">garden</a>.</div>
+    <div class="mino-seed-toast-sub">Open it in your <a href="garden.html">garden</a>.</div>
   `;
   document.body.appendChild(el);
 
   document.getElementById('minoSeedToastDismiss').addEventListener('click', async () => {
-    removeSeedToast();
-    for (const seed of seeds) {
-      await supabaseClient.rpc('mark_mino_seen', { p_mino_id: seed.id });
-    }
+    removePackToast();
+    await supabaseClient.rpc('acknowledge_pack_notifications');
   });
 }
 
-Auth.onAuthChange(checkForNewSeeds);
+Auth.onAuthChange(checkForNewPacks);

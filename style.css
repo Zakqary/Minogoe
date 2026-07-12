@@ -493,18 +493,37 @@ h2, h3 {
   width: 100%;
 }
 
+/* 3 columns (side/board/hands+right), with the hands tray stacked above
+   the right column's rules/log rather than living in the side column -
+   named areas so .hands can be a plain sibling of the other 3 panels in
+   the HTML (order in the markup doesn't matter here) while still sharing
+   a column with .right-panel underneath it. */
 .app {
-  display: flex;
+  display: grid;
+  grid-template-columns: 320px auto 240px;
+  grid-template-areas:
+    "side board hands"
+    "side board right";
   justify-content: center;
+  align-items: start;
   gap: 20px;
   padding: 20px;
-  align-items: flex-start;
-  flex-wrap: wrap;
 }
 
-.side-panel { order: 1; }
-.board-panel { order: 2; }
-.right-panel { order: 3; }
+.side-panel { grid-area: side; }
+.board-panel { grid-area: board; }
+.hands { grid-area: hands; }
+.right-panel { grid-area: right; }
+
+/* Opt back into the original arrangement (hands stacked under the mode/
+   queue/controls column, left of the board) via the checkbox next to the
+   hand tray - see the #handsPositionToggle wiring at the bottom of
+   game.js. Desktop only; mobile's board+hands layout is unaffected. */
+.app.classic-hands {
+  grid-template-areas:
+    "side  board right"
+    "hands board right";
+}
 
 .board-panel {
   display: flex;
@@ -882,7 +901,26 @@ h2, h3 {
 
 .hands {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hands-row {
+  display: flex;
   gap: 10px;
+}
+
+.hands-position-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.hands-position-toggle input {
+  cursor: pointer;
 }
 
 .hand {
@@ -1124,6 +1162,7 @@ h2, h3 {
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
     grid-template-areas:
       "board hands"
+      "side  side"
       "right right";
     align-items: start;
     padding: 10px;
@@ -1132,7 +1171,8 @@ h2, h3 {
 
   .board-panel,
   .side-panel,
-  .right-panel {
+  .right-panel,
+  .hands {
     width: 100%;
     max-width: none;
   }
@@ -1141,23 +1181,29 @@ h2, h3 {
     grid-area: board;
   }
 
-  .side-panel {
+  .hands {
     grid-area: hands;
+  }
+
+  .side-panel {
+    grid-area: side;
   }
 
   .right-panel {
     grid-area: right;
   }
 
-  /* Within the side panel, surface the piece hands first so players don't
-     have to scroll past mode/queue buttons to reach them from the board.
-     Scoped to .side-panel so this doesn't also reorder replay.html's hands.
-     Stacked (not side by side like desktop) so each hand gets this
+  /* Stacked (not side by side like desktop) so each hand gets this
      already-narrow column's full width to wrap icons into, instead of
      splitting it in half again. */
-  .side-panel .hands {
-    order: -1;
+  .hands-row {
     flex-direction: column;
+  }
+
+  /* The desktop-only left/right toggle doesn't apply here - mobile's
+     board+hands layout is already fixed/optimized on its own. */
+  .hands-position-toggle {
+    display: none;
   }
 
   .board-wrapper {

@@ -2659,6 +2659,27 @@ window.addEventListener('pageshow', (e) => {
   }
 });
 
+// ---------- Desktop hand-tray position preference ----------
+// A checkbox (next to the hand tray itself) rather than a fixed choice -
+// added right after moving the tray to the right/above the rules panel
+// by default, since it wasn't clear that's actually better for everyone.
+// Persisted so it sticks across visits; purely a CSS class toggle (see
+// .app.classic-hands), no effect on mobile's own fixed layout.
+const HANDS_POSITION_KEY = 'minogoe_handsOnRight';
+const handsPositionToggle = document.getElementById('handsPositionToggle');
+if (handsPositionToggle) {
+  const appEl = document.querySelector('.app');
+  const saved = localStorage.getItem(HANDS_POSITION_KEY);
+  const handsOnRight = saved === null ? true : saved === 'true';
+  handsPositionToggle.checked = handsOnRight;
+  appEl.classList.toggle('classic-hands', !handsOnRight);
+
+  handsPositionToggle.addEventListener('change', () => {
+    localStorage.setItem(HANDS_POSITION_KEY, String(handsPositionToggle.checked));
+    appEl.classList.toggle('classic-hands', !handsPositionToggle.checked);
+  });
+}
+
 // ---------- Init ----------
 render();
 updateResumeMatchBanner(); // show immediately if we have a record, even before auth resolves

@@ -447,6 +447,21 @@ function newGame(remoteHand, remoteSequence) {
   // adopts whatever the host sent, so both sides always agree.
   state.gameSequence = isRemote ? remoteSequence : state.gameSequence + 1;
 
+  // Alternates who's "player 1" (goes first, no handicap) each rematch
+  // within this same connection. Net.isHost is fixed for the whole
+  // connection, and online games always start player 1 first - without
+  // this, whoever happened to connect as host would go first (and dodge
+  // the handicap) in literally every rematch, forever. Both sides land on
+  // the same answer since they always agree on gameSequence. Not
+  // meaningful for vsBot (already randomizes who starts via its own coin
+  // flip below) or hotseat (no concept of "which human is which player").
+  if (state.online) {
+    const hostIsPlayerOne = state.gameSequence % 2 === 1;
+    state.myPlayer = Net.isHost
+      ? (hostIsPlayerOne ? 1 : 2)
+      : (hostIsPlayerOne ? 2 : 1);
+  }
+
   state.gameStarted = true;
   state.board = new Int8Array(BOARD_SIZE * BOARD_SIZE);
   const hand = remoteHand || drawHand();

@@ -51,7 +51,12 @@ function renderLeaderboard() {
   const container = document.getElementById('leaderboardContent');
   if (!players) return;
 
-  const sorted = [...players].sort((a, b) => {
+  // "Ranked matches only" should mean an actual ranked leaderboard - a
+  // player who's never queued ranked at all has nothing to rank on and
+  // just clutters the list with a 0/0/0/0 row.
+  const visible = rankedOnly ? players.filter((p) => p.ranked_games_played > 0) : players;
+
+  const sorted = [...visible].sort((a, b) => {
     const field = fieldFor(sortKey);
     let av = a[field], bv = b[field];
     if (typeof av === 'string') { av = av.toLowerCase(); bv = bv.toLowerCase(); }

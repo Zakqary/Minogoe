@@ -1337,6 +1337,16 @@ async function recordGameResult(winner, forfeit) {
   }
   log('Game result saved to your match history.');
 
+  // Casual/ranked games can grant a random seed pack server-side
+  // (schema.sql Phase 22, via the on_human_game_played trigger), but
+  // Auth.getProfile()'s cached copy is otherwise never refetched mid-
+  // session - without this, mino-notify.js's toast would only ever
+  // appear on the NEXT full page load, not right after the game that
+  // actually earned it. checkForNewPacks() is defined in mino-notify.js;
+  // guarded since not every page that loads game.js also loads that one.
+  await Auth.refreshProfile();
+  if (typeof checkForNewPacks === 'function') checkForNewPacks();
+
   if (row.mode === 'ranked') {
     // The elo_delta_p1/p2 columns are populated by a separate AFTER INSERT
     // trigger (a follow-up UPDATE), so they won't be present on the row we

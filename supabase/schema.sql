@@ -1651,3 +1651,25 @@ begin
   return new;
 end;
 $$;
+
+-- ---------- Phase 25: allow anonymous/guest bot-mode games to be recorded ----------
+
+-- A guest's practice game against the bot is still a real game of
+-- Minogoe - recent.js/profile.js/replay.js already all render a null
+-- player1_id as "Guest" (and player2_id is always null for bot mode
+-- regardless of who's logged in), so the only thing stopping this was
+-- RLS: the original policy required auth.uid() to match one of the
+-- player id columns, which an anonymous request (auth.uid() is null) can
+-- never satisfy even when both columns are also null. Carves out exactly
+-- one narrow exception - a fully-anonymous mode='bot' row - rather than
+-- loosening the check for any other case. No reward is at stake either
+-- way (handle_game_recorded()/on_human_game_played already only touch a
+-- profile when player1_id/player2_id is actually set), so there's
+-- nothing meaningful to gain by spamming fake rows here.
+drop policy if exists "Participants can insert their own games" on public.games;
+create policy "Participants can insert their own games"
+  on public.games for insert
+  with check (
+    auth.uid() = player1_id or auth.uid() = player2_id
+    or (mode = 'bot' and player1_id is null and player2_id is null)
+  );

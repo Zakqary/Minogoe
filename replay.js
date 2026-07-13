@@ -315,7 +315,7 @@ async function loadReplay() {
   board = new Int8Array(boardSize * boardSize);
 
   const p1Name = data.player1 ? data.player1.username : 'Guest';
-  const p2Name = data.player2 ? data.player2.username : 'Guest';
+  const p2Name = data.player2 ? data.player2.username : (data.mode === 'bot' ? 'Bot' : 'Guest');
   const resultText = data.winner == null
     ? 'Tie'
     : `${data.winner === 1 ? p1Name : p2Name} won${data.forfeit ? ' by forfeit' : ''}`;

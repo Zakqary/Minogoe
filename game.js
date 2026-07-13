@@ -138,6 +138,15 @@ const state = {
   // rematch after the first collide with it and get silently rejected as
   // a "duplicate" of the first game.
   gameSequence: 0,
+  // Decided once per connection (a coin flip, by the host, right when a
+  // match is actually found - see handleNetReady()) rather than always
+  // defaulting to "host is player 1" - otherwise whoever the signaling
+  // server happened to seat as host (e.g. whoever queued first) always
+  // got to go first (and dodge the handicap) in the opening game of every
+  // single match. Shared with the joiner via the 'newgame' message and
+  // combined with gameSequence's parity (see computeMyPlayerForCurrentGame())
+  // to keep alternating fairly across rematches from that random start.
+  hostIsPlayerOneBase: true,
   initialHand: [],    // the pristine drawn hand, for replay reconstruction
   moveLog: [],        // ordered { player, shapeName, orientationIndex, r0, c0 } placements
   lastMove: null,     // { shapeName, orientationIndex, r0, c0, player } - for the on-board highlight
@@ -203,6 +212,7 @@ function serializeFullState() {
     lastMove: state.lastMove,
     gameStartedAt: state.gameStartedAt,
     gameSequence: state.gameSequence,
+    hostIsPlayerOneBase: state.hostIsPlayerOneBase,
     scoringCells: state.scoringCells,
   };
 }
@@ -223,6 +233,12 @@ function applyFullState(msg) {
   state.lastMove = msg.lastMove;
   state.gameStartedAt = msg.gameStartedAt;
   state.gameSequence = msg.gameSequence;
+  state.hostIsPlayerOneBase = msg.hostIsPlayerOneBase;
+  // state.myPlayer isn't part of this payload (it depends on Net.isHost,
+  // which is the one thing that legitimately differs between the two
+  // peers) - recomputed locally instead, now that gameSequence and
+  // hostIsPlayerOneBase have just been caught up to the sender's.
+  if (state.online) state.myPlayer = computeMyPlayerForCurrentGame();
   state.scoringCells = msg.scoringCells;
   state.selected = null;
   state.hover = null;
@@ -234,6 +250,22 @@ function applyFullState(msg) {
 }
 
 function idx(r, c) { return r * BOARD_SIZE + c; }
+
+// Which real player is "player 1" for the CURRENT game - online only.
+// hostIsPlayerOneBase is a per-connection coin flip (decided once, by the
+// host, when the match is first found); gameSequence's parity alternates
+// it fairly from there across rematches (odd games use the base as-is,
+// even games flip it) - see hostIsPlayerOneBase's own comment on state
+// for why this isn't simply "host is always player 1". Shared by
+// newGame(), applyFullState() (after a resync), and handleRejoinReady().
+function computeMyPlayerForCurrentGame() {
+  const hostIsPlayerOneThisGame = (state.gameSequence % 2 === 1)
+    ? state.hostIsPlayerOneBase
+    : !state.hostIsPlayerOneBase;
+  return Net.isHost
+    ? (hostIsPlayerOneThisGame ? 1 : 2)
+    : (hostIsPlayerOneThisGame ? 2 : 1);
+}
 
 // Whoever didn't move first gets the handicap point - always player 2 except
 // in vs Bot games, where the starting player (and so the handicap recipient)
@@ -433,7 +465,7 @@ function drawHand() {
   ];
 }
 
-function newGame(remoteHand, remoteSequence) {
+function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase) {
   const isRemote = remoteHand !== undefined;
 
   if (state.connecting && !isRemote) return;
@@ -446,20 +478,16 @@ function newGame(remoteHand, remoteSequence) {
   // The host assigns the next sequence number itself; the joiner just
   // adopts whatever the host sent, so both sides always agree.
   state.gameSequence = isRemote ? remoteSequence : state.gameSequence + 1;
+  if (isRemote) state.hostIsPlayerOneBase = remoteHostIsPlayerOneBase;
 
-  // Alternates who's "player 1" (goes first, no handicap) each rematch
-  // within this same connection. Net.isHost is fixed for the whole
-  // connection, and online games always start player 1 first - without
-  // this, whoever happened to connect as host would go first (and dodge
-  // the handicap) in literally every rematch, forever. Both sides land on
-  // the same answer since they always agree on gameSequence. Not
-  // meaningful for vsBot (already randomizes who starts via its own coin
-  // flip below) or hotseat (no concept of "which human is which player").
+  // Alternates who's "player 1" (goes first, no handicap) each rematch,
+  // starting from the random coin flip decided once for this connection
+  // (see hostIsPlayerOneBase's comment on state) rather than always
+  // "host is player 1" - not meaningful for vsBot (already randomizes who
+  // starts via its own coin flip below) or hotseat (no concept of "which
+  // human is which player").
   if (state.online) {
-    const hostIsPlayerOne = state.gameSequence % 2 === 1;
-    state.myPlayer = Net.isHost
-      ? (hostIsPlayerOne ? 1 : 2)
-      : (hostIsPlayerOne ? 2 : 1);
+    state.myPlayer = computeMyPlayerForCurrentGame();
   }
 
   state.gameStarted = true;
@@ -503,7 +531,7 @@ function newGame(remoteHand, remoteSequence) {
   render();
 
   if (state.online && Net.isHost && !isRemote) {
-    Net.send({ type: 'newgame', hand, gameSequence: state.gameSequence });
+    Net.send({ type: 'newgame', hand, gameSequence: state.gameSequence, hostIsPlayerOneBase: state.hostIsPlayerOneBase });
   }
 
   scheduleBotMove(); // no-op unless this is a vs Bot game where the bot won the coin flip to go first
@@ -1306,11 +1334,15 @@ function endGame(reason, forcedWinner) {
 async function recordGameResult(winner, forfeit) {
   let row = null;
   if (state.vsBot) {
+    // Recorded either way, logged in or not - a guest's practice game
+    // against the bot is still a real game of Minogoe, and schema.sql's
+    // insert policy allows a fully-anonymous mode='bot' row through
+    // specifically for this (recent.js/profile.js/replay.js already all
+    // render a null player1_id as "Guest").
     const me = Auth.getUser();
-    if (!me) return; // must be logged in to save a bot match
     row = {
       mode: 'bot',
-      player1_id: me.id,
+      player1_id: me ? me.id : null,
       player2_id: null,
       score1: state.score1,
       score2: state.score2,
@@ -2182,7 +2214,14 @@ function handleRejoinReady() {
   state.connecting = false;
   state.vsBot = false;
   state.gameMode = Net.matchedMode;
-  state.myPlayer = Net.isHost ? 1 : 2;
+  // A provisional value for whichever side just reloaded (its in-memory
+  // gameSequence/hostIsPlayerOneBase are back to defaults until the
+  // resync below catches them up, which recomputes this correctly) - for
+  // the side that DIDN'T reload, its own gameSequence/hostIsPlayerOneBase
+  // are still accurate from before the disconnect, so this already lands
+  // on the right, possibly-swapped-from-game-1 answer instead of
+  // clobbering it back to a naive "host is always player 1".
+  state.myPlayer = computeMyPlayerForCurrentGame();
   document.getElementById('connectBtn').disabled = true;
   document.getElementById('roomInput').disabled = true;
 
@@ -2363,6 +2402,11 @@ function handleNetReady() {
   state.opponentCompanion = null;
   state.introShown = false;
   state.gameSequence = 0;
+  // Coin flip for who's player 1 in the FIRST game of this match - only
+  // the host's value ends up used (sent to the joiner in newGame()'s
+  // 'newgame' message once it's called below), but harmless to set on
+  // both sides since it's about to be overwritten either way.
+  state.hostIsPlayerOneBase = Math.random() < 0.5;
   state.pendingUndoRequest = false;
   state.incomingUndoRequest = false;
   document.getElementById('connectBtn').disabled = true;
@@ -2418,7 +2462,7 @@ function isExpectedNextAction(seq) {
 
 function handleNetDataInner(msg) {
   if (msg.type === 'newgame') {
-    newGame(msg.hand, msg.gameSequence);
+    newGame(msg.hand, msg.gameSequence, msg.hostIsPlayerOneBase);
   } else if (msg.type === 'move') {
     if (!isExpectedNextAction(msg.seq)) { requestResync(); return; }
     commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true, msg.t);

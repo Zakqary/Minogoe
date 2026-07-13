@@ -554,6 +554,19 @@ h2, h3 {
     "hands board right";
 }
 
+/* Singleplayer has no .hands tray at all (its "current piece" display
+   lives inside .side-panel instead) - with nothing assigned to the shared
+   grid's "hands" row-1 cell, .board-panel/.side-panel (which both span
+   both rows, since "board"/"side" appear in each row of the shared
+   template) still have their combined height auto-split across the two
+   rows by the browser, pushing .right-panel - which only occupies row 2 -
+   down to start partway down the board for no real reason. Collapsing to
+   a single row puts every panel back on the same top-aligned baseline. */
+.app.singleplayer-app {
+  grid-template-areas: "side board right";
+  grid-template-rows: auto;
+}
+
 .board-panel {
   display: flex;
   flex-direction: column;

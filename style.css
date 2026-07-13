@@ -2252,6 +2252,11 @@ h2, h3 {
   color: var(--text-dim);
 }
 
+.garden-mino-coin-rate {
+  font-size: 11px;
+  color: #e0c568;
+}
+
 .garden-digup-btn {
   margin-top: 6px;
   padding: 5px 10px;
@@ -2454,6 +2459,19 @@ h2, h3 {
     right: 12px;
     max-width: none;
   }
+}
+
+/* Stacked above the seed-pack toast's default position (rather than beside
+   it) so the two never overlap regardless of viewport width, in the rare
+   case both fire on the same page load. */
+.mino-gift-toast {
+  bottom: 100px;
+  max-width: 300px;
+}
+
+.mino-gift-toast-line {
+  font-size: 13px;
+  margin-top: 4px;
 }
 
 /* ---------- Coin purchase confirmation popup ---------- */

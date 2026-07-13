@@ -36,6 +36,7 @@ function potSlotHtml(mino, companionId) {
       </div>
       <div class="garden-mino-sub">${escapeHtml(minoLabel(mino))}</div>
       <div class="garden-mino-stage">${capitalize(mino.stage)} &middot; ${progressText}</div>
+      <div class="garden-mino-coin-rate" title="Chance this Mino drops coins after a casual/ranked game, once it's fully grown">&#129689; ${mino.coin_drop_rate}%/game</div>
       ${companionBtn}
       <button class="garden-digup-btn" data-id="${escapeHtml(mino.id)}">Dig Up</button>
     </div>
@@ -47,6 +48,7 @@ function seedCardHtml(seed, canPlant) {
     <div class="garden-seed-card" style="border-top: 3px solid ${minoRarityColor(seed.rarity)};">
       ${minoVisualHtml(seed, 40)}
       <div class="garden-seed-label" style="color:${minoRarityColor(seed.rarity)}">${escapeHtml(minoLabel(seed))}</div>
+      <div class="garden-mino-coin-rate" title="Chance this Mino drops coins after a casual/ranked game, once it's fully grown">&#129689; ${seed.coin_drop_rate}%/game</div>
       <button class="garden-plant-btn" data-id="${escapeHtml(seed.id)}" ${canPlant ? '' : 'disabled'}>Plant</button>
     </div>
   `;

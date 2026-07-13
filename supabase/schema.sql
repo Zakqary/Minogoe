@@ -2317,3 +2317,192 @@ begin
   end if;
 end;
 $$;
+
+-- ---------- Phase 34: rarer/announced Mino gifts, per-mino coin drop rate ----------
+
+-- Every coin/item gift a Mino has ever given, so the client can toast about
+-- it the next time any page loads - previously handle_human_game_played()
+-- granted these completely silently (no client-visible signal at all), so a
+-- player could easily rack up titles/coins from their garden and never
+-- notice. Same acknowledge-on-dismiss pattern as pending_pack_notifications,
+-- just with real per-gift detail (which mino, what it gave) instead of a
+-- bare counter, since "you got a title" needs to say which one.
+create table if not exists public.mino_gifts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  mino_id uuid references public.minos(id) on delete set null,
+  gift_type text not null check (gift_type in ('coins', 'item')),
+  coins_amount integer,  -- set only for gift_type = 'coins'
+  item_id text references public.shop_items(id) on delete set null,  -- set only for gift_type = 'item'
+  acknowledged boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+alter table public.mino_gifts enable row level security;
+
+drop policy if exists "Users can view their own mino gifts" on public.mino_gifts;
+create policy "Users can view their own mino gifts"
+  on public.mino_gifts for select
+  using (auth.uid() = user_id);
+
+-- No insert/update/delete policy - only handle_human_game_played() (grants)
+-- and acknowledge_mino_gifts() (marks read) below ever write here.
+
+-- Rolled once, at seed-grant time, from the mino's rarity band - NOT
+-- reachable by the player's own actions afterward (dig_up_mino() resets
+-- stage/growth_progress back to seed form, but deliberately never touches
+-- this column - see its own definition further up this file). Ranges
+-- ascend with rarity: common 0.1-1%, uncommon 1-2%, rare 2-3%, epic 3-4%,
+-- legendary 4-5% - legendary is the only tier that can ever roll above 4%.
+create or replace function public.random_mino_coin_rate(p_rarity text)
+returns numeric
+language sql
+as $$
+  select round((
+    case p_rarity
+      when 'common' then 0.1 + random() * 0.9
+      when 'uncommon' then 1.0 + random() * 1.0
+      when 'rare' then 2.0 + random() * 1.0
+      when 'epic' then 3.0 + random() * 1.0
+      when 'legendary' then 4.0 + random() * 1.0
+      else 0.1
+    end
+  )::numeric, 2);
+$$;
+
+-- Nullable initially (not "not null default ..."), specifically so the
+-- backfill below only ever rolls a rate for a row that doesn't already
+-- have one - on every re-run after the first, every row already has a
+-- value (either from that first backfill, or from grant_random_seed()
+-- always supplying one at insert time going forward), so this becomes a
+-- true no-op instead of re-rolling everyone's rate on every schema re-run.
+alter table public.minos add column if not exists coin_drop_rate numeric;
+update public.minos set coin_drop_rate = public.random_mino_coin_rate(rarity) where coin_drop_rate is null;
+alter table public.minos alter column coin_drop_rate set not null;
+
+-- Rolls coin_drop_rate from the SAME rarity this seed is being granted, so
+-- the two are always consistent (never a legendary mino stuck with a
+-- common-tier rate or vice versa).
+create or replace function public.grant_random_seed(p_user_id uuid, p_seen boolean)
+returns uuid
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  new_id uuid;
+  rolled_rarity text := public.random_mino_rarity();
+begin
+  insert into public.minos (user_id, color, rarity, modifier, seen, coin_drop_rate)
+  values (p_user_id, public.random_mino_color(), rolled_rarity, public.random_mino_modifier(), p_seen, public.random_mino_coin_rate(rolled_rarity))
+  returning id into new_id;
+  return new_id;
+end;
+$$;
+
+create or replace function public.acknowledge_mino_gifts()
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  update public.mino_gifts set acknowledged = true where user_id = uid and not acknowledged;
+end;
+$$;
+
+-- Reworked gift logic for every planted adult Mino, each human game:
+--   - Coins: rolled INDEPENDENTLY every eligible game, at that specific
+--     mino's own coin_drop_rate (0.1-5%, per the comment on that column) -
+--     no cooldown, since the rate itself is now the only rarity lever this
+--     needs (a legendary mino at ~4.5% already only pays out roughly once
+--     every 20-odd games on average).
+--   - Items (avatars/titles): a flat, much rarer 2% roll, but only once
+--     last_gift_at's existing 7-day cooldown has elapsed - items keep that
+--     extra throttle on top of their low odds specifically to stay a rare
+--     event even for someone playing constantly. Of an item hit, only 1 in
+--     4 tries for a title first (falling back to an avatar if none are
+--     available to give) - titles end up roughly 4x rarer than avatars,
+--     addressing that titles specifically felt too common before.
+-- Both kinds are logged to mino_gifts for the client to toast about.
+create or replace function public.handle_human_game_played()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p_id uuid;
+  m record;
+  gift_item record;
+  coins_granted integer;
+  wants_title boolean;
+begin
+  foreach p_id in array array[new.player1_id, new.player2_id] loop
+    if p_id is null then
+      continue;
+    end if;
+
+    update public.minos
+    set growth_progress = growth_progress + 1
+    where user_id = p_id and planted and stage <> 'adult';
+
+    update public.minos
+    set stage = case stage
+          when 'seed' then 'sapling'
+          when 'sapling' then 'adolescent'
+          when 'adolescent' then 'adult'
+          else stage
+        end,
+        growth_progress = 0
+    where user_id = p_id and planted and stage <> 'adult' and growth_progress >= 10;
+
+    if random() < 0.1 then
+      update public.profiles
+      set unopened_seed_packs = unopened_seed_packs + 1,
+          pending_pack_notifications = pending_pack_notifications + 1
+      where id = p_id;
+    end if;
+
+    for m in
+      select * from public.minos
+      where user_id = p_id and planted and stage = 'adult'
+    loop
+      if (m.last_gift_at is null or now() - m.last_gift_at >= interval '7 days') and random() < 0.02 then
+        wants_title := random() < 0.25;
+        select * into gift_item from public.shop_items
+        where mino_giftable and type = case when wants_title then 'title' else 'avatar' end
+          and id not in (select item_id from public.user_inventory where user_id = p_id)
+        order by random()
+        limit 1;
+
+        if gift_item.id is null then
+          -- Preferred type had nothing left to give - fall back to
+          -- whichever giftable type actually has an unowned item.
+          select * into gift_item from public.shop_items
+          where mino_giftable
+            and id not in (select item_id from public.user_inventory where user_id = p_id)
+          order by random()
+          limit 1;
+        end if;
+
+        if gift_item.id is not null then
+          insert into public.user_inventory (user_id, item_id) values (p_id, gift_item.id);
+          insert into public.mino_gifts (user_id, mino_id, gift_type, item_id) values (p_id, m.id, 'item', gift_item.id);
+          update public.minos set last_gift_at = now() where id = m.id;
+        end if;
+      end if;
+
+      if random() < m.coin_drop_rate / 100.0 then
+        coins_granted := 5 + floor(random() * 11)::integer;
+        update public.profiles set coins = coins + coins_granted where id = p_id;
+        insert into public.mino_gifts (user_id, mino_id, gift_type, coins_amount) values (p_id, m.id, 'coins', coins_granted);
+      end if;
+    end loop;
+  end loop;
+
+  return new;
+end;
+$$;

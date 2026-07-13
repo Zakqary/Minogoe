@@ -2205,17 +2205,17 @@ from (
 ) pf
 where p.id = pf.player_id;
 
--- ---------- Phase 33: singleplayer "Golf" mode (minimize captured territory) ----------
+-- ---------- Phase 33: singleplayer "Eogonim" mode (minimize captured territory) ----------
 
 -- singleplayer_runs previously held exactly one row per user (one global
 -- best time, Speedrun-only). Adding a second mode means a user can now have
 -- one best PER mode - mode defaults to 'speedrun' so every pre-existing row
 -- is correctly tagged without a separate backfill. time_ms is only
--- meaningful for speedrun and score only for golf (lower is better in both,
--- just different units - milliseconds vs. captured squares), so each is
--- nullable and the check constraint below keeps exactly one of the two set
--- per row rather than trusting every future insert to get that right.
-alter table public.singleplayer_runs add column if not exists mode text not null default 'speedrun' check (mode in ('speedrun', 'golf'));
+-- meaningful for speedrun and score only for eogonim (lower is better in
+-- both, just different units - milliseconds vs. captured squares), so each
+-- is nullable and the check constraint below keeps exactly one of the two
+-- set per row rather than trusting every future insert to get that right.
+alter table public.singleplayer_runs add column if not exists mode text not null default 'speedrun' check (mode in ('speedrun', 'eogonim'));
 alter table public.singleplayer_runs alter column time_ms drop not null;
 alter table public.singleplayer_runs add column if not exists score integer;
 
@@ -2227,12 +2227,12 @@ alter table public.singleplayer_runs drop constraint if exists singleplayer_runs
 alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
   check (
     (mode = 'speedrun' and time_ms is not null and score is null)
-    or (mode = 'golf' and score is not null and time_ms is null)
+    or (mode = 'eogonim' and score is not null and time_ms is null)
   );
 
--- Re-scoped to mode = 'speedrun' explicitly now that a user can also have a
--- golf row - previously "where user_id = uid" alone was unambiguous since
--- speedrun was the only mode that existed.
+-- Re-scoped to mode = 'speedrun' explicitly now that a user can also have an
+-- eogonim row - previously "where user_id = uid" alone was unambiguous
+-- since speedrun was the only mode that existed.
 create or replace function public.submit_singleplayer_time(p_time_ms integer)
 returns integer
 language plpgsql
@@ -2264,7 +2264,7 @@ end;
 $$;
 
 -- Same "server decides if it's actually an improvement" discipline as
--- submit_singleplayer_time() - a golf score is a captured-square count
+-- submit_singleplayer_time() - an eogonim score is a captured-square count
 -- (lower is better, 0 is a perfect run), entirely client-computed from a
 -- client-only board simulation, so this can't verify the number is
 -- "correct" the way a server-authoritative game could - only that it's
@@ -2286,13 +2286,13 @@ begin
     raise exception 'Invalid score';
   end if;
 
-  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'golf' for update;
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'eogonim' for update;
 
   if existing_score is null then
-    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'golf', p_score);
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'eogonim', p_score);
     return p_score;
   elsif p_score < existing_score then
-    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'golf';
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'eogonim';
     return p_score;
   else
     return existing_score;

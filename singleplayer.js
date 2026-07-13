@@ -1,16 +1,21 @@
-// Singleplayer speedrun mode. Deliberately self-contained rather than
-// importing from game.js - the board model here has three cell states and a
-// cascading capture/removal mechanic that doesn't map onto the 2-player
-// state machine, so shape/orientation generation is duplicated (same
-// approach replay.js already takes, for the same reason).
-
-// Board size varies by mode (Speedrun: 9x9, Golf: 8x8) - see BOARD_SIZES
-// and setMode() below - so this is reassigned rather than a const.
+// Singleplayer modes. Deliberately self-contained rather than importing
+// from game.js - shape/orientation generation is duplicated (same approach
+// replay.js already takes, for the same reason). Two modes share this file:
+//   - Speedrun: a cascading capture/removal mechanic all its own (enclose a
+//     small pocket and the walling pieces vanish, freeing the space back
+//     up) - see runCaptureCascade().
+//   - Eogonim: scored like a real Minogoe match instead - pieces never
+//     disappear, and a fully-enclosed empty pocket of ANY size counts as
+//     captured territory (see computeCapturedCount(), which mirrors
+//     game.js's computeFinalScores() minus the two-player owner-conflict
+//     case, since there's only ever one color here).
+// Board size varies by mode (Speedrun: 9x9, Eogonim: 10x10) - see
+// BOARD_SIZES and setMode() below - so this is reassigned rather than a const.
 let BOARD_SIZE = 9;
-const BOARD_SIZES = { speedrun: 9, golf: 8 };
+const BOARD_SIZES = { speedrun: 9, eogonim: 10 };
 const CELL_PX = 52;
-const MAX_CAPTURE_SIZE = 4; // enclosures bigger than this don't count
-const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, golf has no preview
+const MAX_CAPTURE_SIZE = 4; // speedrun only - enclosures bigger than this don't count. Eogonim has no size cap, matching real Minogoe scoring.
+const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, eogonim has no preview
 
 // ---------- Shapes ----------
 const BASE_SHAPES = {
@@ -76,16 +81,19 @@ for (const name of Object.keys(BASE_SHAPES)) ORIENTATIONS[name] = generateOrient
 function idx(r, c) { return r * BOARD_SIZE + c; }
 
 // ---------- State ----------
-// board cell values: 0 = empty, 1 = placed (uncaptured piece), 2 = captured (permanent)
+// board cell values: 0 = empty, 1 = placed. Speedrun also uses 2 = captured
+// (permanent, cleared of its walling pieces) - eogonim never sets a cell to
+// 2 at all, since pieces there never disappear; its captured count is only
+// ever a computed number (see computeCapturedCount()), not a board state.
 const state = {
-  mode: 'speedrun', // 'speedrun' | 'golf' - persists across resetBoardState(), only setMode() changes it
+  mode: 'speedrun', // 'speedrun' | 'eogonim' - persists across resetBoardState(), only setMode() changes it
   board: new Uint8Array(BOARD_SIZE * BOARD_SIZE),
   pieceIdAt: new Int32Array(BOARD_SIZE * BOARD_SIZE),
   pieceCells: new Map(), // pieceId -> number[] of cell indices
   nextPieceId: 1,
   running: false,
   finished: false,
-  failed: false, // speedrun only - golf has no fail state, every ending is a valid (scored) result
+  failed: false, // speedrun only - eogonim has no fail state, every ending is a valid (scored) result
   selected: null, // { shapeName, orientationIndex } - the current piece being placed
   pieceQueue: [], // shapeNames coming up after the current piece, length LOOKAHEAD_COUNT - speedrun only
   mouseRC: null,
@@ -93,7 +101,7 @@ const state = {
   lastTapCell: null,
   startTime: null,
   finalTimeMs: null,
-  totalCaptured: 0, // running count of captured squares this run - golf's score, tracked in speedrun too but unused there
+  totalCaptured: 0, // running captured-territory count - this is eogonim's score. Also incremented by speedrun's cascade, but never displayed there.
 };
 
 function resetBoardState() {
@@ -214,6 +222,44 @@ function runCaptureCascade() {
   return changed;
 }
 
+// Eogonim's scoring - mirrors game.js's computeFinalScores() but for a
+// single color: every empty region gets flood-filled, and if it borders
+// ANY placed piece (board edges don't count as a border at all - going
+// off-board just contributes nothing), the whole region is captured
+// territory, no matter its size. A region touching zero pieces at all
+// (fully open board, or a pocket nothing has been placed next to yet)
+// isn't decided either way. Unlike runCaptureCascade(), this never mutates
+// state.board - pieces don't disappear in this mode, so it's just a
+// read-only tally, cheap enough (100 cells at most) to recompute fresh
+// after every placement for a live "Captured" count.
+function computeCapturedCount(board) {
+  const visited = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
+  let captured = 0;
+  for (let i = 0; i < board.length; i++) {
+    if (board[i] === 0 && !visited[i]) {
+      const region = [i];
+      visited[i] = 1;
+      let qi = 0;
+      let touchesAnyPiece = false;
+      while (qi < region.length) {
+        const cur = region[qi++];
+        const r = Math.floor(cur / BOARD_SIZE), c = cur % BOARD_SIZE;
+        for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+          if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+          const nidx = idx(nr, nc);
+          if (board[nidx] === 0) {
+            if (!visited[nidx]) { visited[nidx] = 1; region.push(nidx); }
+          } else {
+            touchesAnyPiece = true;
+          }
+        }
+      }
+      if (touchesAnyPiece) captured += region.length;
+    }
+  }
+  return captured;
+}
+
 // The board is complete once no empty (0) cells remain - NOT once every
 // cell is specifically captured (2). A piece that exactly fills the last
 // remaining gap (leaving nothing empty behind it to enclose) never
@@ -243,7 +289,7 @@ function startRun() {
 
 // Speedrun pulls the current piece from the front of the lookahead queue and
 // refills the back of it, so the next LOOKAHEAD_COUNT pieces are always
-// visible in advance. Golf has no preview at all - each piece is drawn
+// visible in advance. Eogonim has no preview at all - each piece is drawn
 // fresh, right when it's handed to you.
 function spawnNextPiece() {
   const shapeName = state.mode === 'speedrun' ? state.pieceQueue.shift() : drawWeightedPiece();
@@ -252,7 +298,7 @@ function spawnNextPiece() {
   recomputeHover();
   if (!hasAnyLegalMove(shapeName, state.board)) {
     if (state.mode === 'speedrun') failRun();
-    else finishGolfRun();
+    else finishEogonimRun();
     return;
   }
   render();
@@ -275,16 +321,27 @@ function commitPlacement(r0, c0) {
   state.selected = null;
   state.hover = null;
 
-  runCaptureCascade();
+  // Speedrun's cascade mutates the board (captures + removes the walling
+  // pieces); eogonim scores like a real Minogoe match instead - pieces stay
+  // put forever, so its "captured" total is just recomputed fresh here for
+  // the live display, with no board mutation at all.
+  if (state.mode === 'speedrun') {
+    runCaptureCascade();
+  } else {
+    state.totalCaptured = computeCapturedCount(state.board);
+  }
 
   if (isBoardComplete()) {
-    // Cosmetic: any cells still sitting at "placed" (1) rather than
-    // "captured" (2) at this point are only in that state because they
-    // directly filled the last gap with nothing left over to enclose -
-    // color them in like the rest of the board for the finished view.
-    for (let i = 0; i < state.board.length; i++) if (state.board[i] === 1) state.board[i] = 2;
-    if (state.mode === 'speedrun') finishRun();
-    else finishGolfRun();
+    if (state.mode === 'speedrun') {
+      // Cosmetic: any cells still sitting at "placed" (1) rather than
+      // "captured" (2) at this point are only in that state because they
+      // directly filled the last gap with nothing left over to enclose -
+      // color them in like the rest of the board for the finished view.
+      for (let i = 0; i < state.board.length; i++) if (state.board[i] === 1) state.board[i] = 2;
+      finishRun();
+    } else {
+      finishEogonimRun();
+    }
     return;
   }
   spawnNextPiece();
@@ -308,16 +365,16 @@ function finishRun() {
   saveScoreIfBest(state.finalTimeMs);
 }
 
-// Golf has no separate "failed" ending - running out of legal placements
+// Eogonim has no separate "failed" ending - running out of legal placements
 // (the usual way a run ends, since you're never given a choice to pass) and
 // filling the board completely are both just "the run is over," scored the
 // same way either way.
-function finishGolfRun() {
+function finishEogonimRun() {
   state.running = false;
   state.finished = true;
   state.failed = false;
   render();
-  saveGolfScoreIfBest(state.totalCaptured);
+  saveEogonimScoreIfBest(state.totalCaptured);
 }
 
 // ---------- Rotation / hover ----------
@@ -379,17 +436,17 @@ function setMode(mode) {
 }
 
 function updateModeUI() {
-  const isGolf = state.mode === 'golf';
-  document.getElementById('spTabSpeedrun').classList.toggle('active', !isGolf);
-  document.getElementById('spTabGolf').classList.toggle('active', isGolf);
-  document.getElementById('spModeTitle').textContent = isGolf ? 'Golf' : 'Speedrun';
-  document.getElementById('spUpcomingLabel').style.display = isGolf ? 'none' : '';
-  document.getElementById('spUpcomingPieces').style.display = isGolf ? 'none' : '';
-  document.getElementById('spRulesSpeedrun').style.display = isGolf ? 'none' : '';
-  document.getElementById('spRulesGolf').style.display = isGolf ? '' : 'none';
-  document.getElementById('spLeaderboardTitle').textContent = isGolf ? 'Lowest Scores' : 'Top Times';
+  const isEogonim = state.mode === 'eogonim';
+  document.getElementById('spTabSpeedrun').classList.toggle('active', !isEogonim);
+  document.getElementById('spTabEogonim').classList.toggle('active', isEogonim);
+  document.getElementById('spModeTitle').textContent = isEogonim ? 'Eogonim' : 'Speedrun';
+  document.getElementById('spUpcomingLabel').style.display = isEogonim ? 'none' : '';
+  document.getElementById('spUpcomingPieces').style.display = isEogonim ? 'none' : '';
+  document.getElementById('spRulesSpeedrun').style.display = isEogonim ? 'none' : '';
+  document.getElementById('spRulesEogonim').style.display = isEogonim ? '' : 'none';
+  document.getElementById('spLeaderboardTitle').textContent = isEogonim ? 'Lowest Scores' : 'Top Times';
   document.getElementById('spSaveStatus').textContent = '';
-  document.getElementById('spTimer').textContent = isGolf ? 'Captured: 0' : formatTime(0);
+  document.getElementById('spTimer').textContent = isEogonim ? 'Captured: 0' : formatTime(0);
 }
 
 // ---------- Rendering ----------
@@ -444,18 +501,18 @@ function render() {
   startBtn.textContent = (state.running || state.finished) ? 'Restart' : 'Start';
 
   document.getElementById('spTabSpeedrun').disabled = state.running;
-  document.getElementById('spTabGolf').disabled = state.running;
+  document.getElementById('spTabEogonim').disabled = state.running;
 
-  if (state.mode === 'golf') {
+  if (state.mode === 'eogonim') {
     document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured}`;
   }
 
   if (!state.running && !state.finished) {
     banner.textContent = 'Click Start to begin';
-    pieceInfo.textContent = state.mode === 'golf'
+    pieceInfo.textContent = state.mode === 'eogonim'
       ? "You'll get one random piece at a time, with no preview of what's coming - keep your captured territory as low as possible."
       : "You'll get one random piece at a time - place it anywhere it fits.";
-  } else if (state.mode === 'golf' && state.finished) {
+  } else if (state.mode === 'eogonim' && state.finished) {
     banner.textContent = `Run over — captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
     pieceInfo.textContent = 'Click Restart to try for a lower score.';
   } else if (state.finished && state.failed) {
@@ -556,7 +613,7 @@ document.addEventListener('keydown', (e) => {
 document.getElementById('mobileRotateBtn').addEventListener('click', rotateSelected);
 document.getElementById('spStartBtn').addEventListener('click', startRun);
 document.getElementById('spTabSpeedrun').addEventListener('click', () => setMode('speedrun'));
-document.getElementById('spTabGolf').addEventListener('click', () => setMode('golf'));
+document.getElementById('spTabEogonim').addEventListener('click', () => setMode('eogonim'));
 
 // ---------- Leaderboard ----------
 async function saveScoreIfBest(timeMs) {
@@ -582,7 +639,7 @@ async function saveScoreIfBest(timeMs) {
 
 // Same server-decides-if-it's-better discipline as saveScoreIfBest(), via
 // submit_singleplayer_score() instead of submit_singleplayer_time().
-async function saveGolfScoreIfBest(score) {
+async function saveEogonimScoreIfBest(score) {
   const user = Auth.getUser();
   if (!user) {
     document.getElementById('spSaveStatus').textContent = 'Sign in to save your score to the leaderboard.';
@@ -601,8 +658,8 @@ async function saveGolfScoreIfBest(score) {
 
 async function refreshLeaderboard() {
   const container = document.getElementById('spLeaderboard');
-  const isGolf = state.mode === 'golf';
-  const scoreColumn = isGolf ? 'score' : 'time_ms';
+  const isEogonim = state.mode === 'eogonim';
+  const scoreColumn = isEogonim ? 'score' : 'time_ms';
   const { data, error } = await supabaseClient
     .from('singleplayer_runs')
     .select(`${scoreColumn}, profiles(id, username, avatar_id, title_id)`)
@@ -621,13 +678,13 @@ async function refreshLeaderboard() {
     <tr>
       <td>${i + 1}</td>
       <td class="leaderboard-player-cell">${avatarHtml(row.profiles.avatar_id, 20)} <a href="profile.html?user=${encodeURIComponent(row.profiles.id)}">${escapeHtml(row.profiles.username)}</a> ${titleBadgeHtml(row.profiles.title_id)}</td>
-      <td>${isGolf ? row.score : formatTime(row.time_ms)}</td>
+      <td>${isEogonim ? row.score : formatTime(row.time_ms)}</td>
     </tr>
   `).join('');
 
   container.innerHTML = `
     <table class="games-table">
-      <thead><tr><th>#</th><th>Player</th><th>${isGolf ? 'Score' : 'Time'}</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>${isEogonim ? 'Score' : 'Time'}</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="3">No runs yet - be the first!</td></tr>'}</tbody>
     </table>
   `;

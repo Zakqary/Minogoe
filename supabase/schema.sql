@@ -1690,3 +1690,36 @@ alter table public.games alter column score2 type numeric using score2::numeric;
 alter table public.games drop constraint if exists games_score_plausible_check;
 alter table public.games add constraint games_score_plausible_check
   check (score1 >= 0 and score2 >= 0 and score1 + score2 <= board_size * board_size + 0.5);
+
+-- ---------- Phase 27: fold ties into player 1's win rate on the Stats page ----------
+
+-- A tie was only ever possible when player1's raw (pre-handicap)
+-- territory exceeded player2's by exactly the handicap amount - the ONLY
+-- pvp game state that used to land exactly even after player2's bonus was
+-- added. Since Phase 26 dropped that bonus to 0.5 (never a whole-number
+-- gap, since territory counts are always whole numbers), that exact
+-- equality is no longer reachable - winner is never null for a pvp game
+-- decided by territory anymore, going forward. For the historical rows
+-- that still have winner is null from before that change, player1 is
+-- retroactively credited the win here: with a smaller 0.5 bonus, those
+-- exact-tie games would have stayed a player1 lead instead of being
+-- pulled level. This only changes how get_p1_p2_win_rates() reports past
+-- results on the Stats page - the underlying games rows, replays, and
+-- every other stat are untouched.
+drop function if exists public.get_p1_p2_win_rates();
+create or replace function public.get_p1_p2_win_rates()
+returns table (
+  p1_wins bigint,
+  p2_wins bigint,
+  total_games bigint
+)
+language sql
+stable
+as $$
+  select
+    count(*) filter (where winner = 1 or winner is null),
+    count(*) filter (where winner = 2),
+    count(*)
+  from public.games
+  where player2_id is not null;
+$$;

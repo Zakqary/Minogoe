@@ -126,11 +126,9 @@ async function renderStatsPage() {
   if (pp.total_games > 0) {
     const p1Pct = (100 * pp.p1_wins) / pp.total_games;
     const p2Pct = (100 * pp.p2_wins) / pp.total_games;
-    const tiePct = (100 * pp.ties) / pp.total_games;
     p1p2Chart = `
       ${barRowHtml('Player 1', p1Pct, `${p1Pct.toFixed(1)}%`, '#5b7fd9')}
       ${barRowHtml('Player 2', p2Pct, `${p2Pct.toFixed(1)}%`, '#d97a52')}
-      ${barRowHtml('Tie', tiePct, `${tiePct.toFixed(1)}%`, '#9a9a9a')}
     `;
   } else {
     p1p2Chart = '<p class="stats-chart-empty">Not enough pvp games recorded yet.</p>';

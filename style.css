@@ -1096,6 +1096,17 @@ h2, h3 {
   box-shadow: var(--shadow-sm);
 }
 
+/* The singleplayer leaderboard has no internal scroll region of its own
+   (unlike .log, which scrolls within the shared 420px cap) - its table
+   just grows with content directly, so the same 420px max-height that
+   works fine for the in-game chat/log box was clipping/overflowing once
+   the table reached a full 10 rows. Capped at 10 rows server-side now
+   (singleplayer.js), so there's no risk of this growing unbounded -
+   sizing to content instead of a fixed cap is the simplest fix. */
+.sp-leaderboard-panel {
+  max-height: none;
+}
+
 .log-panel h3 { margin: 0 0 6px; font-size: 13px; color: var(--text-dim); }
 
 .log {

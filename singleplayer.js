@@ -665,7 +665,7 @@ async function refreshLeaderboard() {
     .select(`${scoreColumn}, profiles(id, username, avatar_id, title_id)`)
     .eq('mode', state.mode)
     .order(scoreColumn, { ascending: true })
-    .limit(20);
+    .limit(10);
 
   if (error) {
     container.innerHTML = `<p>Could not load leaderboard: ${escapeHtml(error.message)}</p>`;

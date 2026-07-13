@@ -214,6 +214,7 @@ function serializeFullState() {
     gameSequence: state.gameSequence,
     hostIsPlayerOneBase: state.hostIsPlayerOneBase,
     scoringCells: state.scoringCells,
+    turnDeadline: state.turnDeadline,
   };
 }
 
@@ -247,6 +248,18 @@ function applyFullState(msg) {
   state.history = []; // undo history doesn't survive a reconnect
   state.pendingUndoRequest = false;
   state.incomingUndoRequest = false;
+
+  // Restore the SENDER's actual in-progress turn deadline rather than
+  // leaving it to handleTurnTransition() to compute a fresh one - that path
+  // treats any turn it hasn't seen before as brand new and hands out a full
+  // fresh timer, which is exactly wrong right after a reconnect (the turn
+  // may already be, say, 45 seconds into a 60-second clock). Marking this
+  // turn as already-observed here (matching handleTurnTransition()'s own
+  // key) suppresses that reset; resumeTurnTimerTicking() then just starts
+  // the countdown ticking against the restored deadline instead.
+  state.turnDeadline = msg.turnDeadline ?? null;
+  lastObservedTurnKey = `${state.turn}-${state.plyCount}-${state.gameOver}`;
+  resumeTurnTimerTicking();
 }
 
 function idx(r, c) { return r * BOARD_SIZE + c; }
@@ -1599,14 +1612,26 @@ function tickTurnTimer() {
   el.classList.toggle('turn-timer-warning', secs <= 10);
 }
 
+// Starts (or restarts) the ticking interval against whatever deadline is
+// already sitting in state.turnDeadline, without recomputing it - shared by
+// restartTurnTimerIfNeeded() (a genuinely new turn, fresh full-length
+// deadline) and applyFullState() (a resync, which restores the peer's real
+// remaining deadline and just needs the display/timeout-check loop resumed
+// against it).
+function resumeTurnTimerTicking() {
+  if (turnTimerInterval) { clearInterval(turnTimerInterval); turnTimerInterval = null; }
+  if (!state.turnDeadline || state.gameOver) return;
+  turnTimerInterval = setInterval(tickTurnTimer, 250);
+  tickTurnTimer();
+}
+
 function restartTurnTimerIfNeeded() {
   stopTurnTimer();
   if (state.gameOver || !state.online) return;
   const limitSec = TURN_TIME_LIMITS[state.gameMode];
   if (!limitSec) return;
   state.turnDeadline = Date.now() + limitSec * 1000;
-  turnTimerInterval = setInterval(tickTurnTimer, 250);
-  tickTurnTimer();
+  resumeTurnTimerTicking();
 }
 
 function timeoutForfeit() {

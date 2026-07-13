@@ -1305,27 +1305,17 @@ as $$
     );
 $$;
 
--- Every match gives player2 a small head-start (see HANDICAP_POINTS in
--- game.js) specifically to offset player1 having the first move - this
--- shows whether that handicap actually lands close to an even 50/50.
-create or replace function public.get_p1_p2_win_rates()
-returns table (
-  p1_wins bigint,
-  p2_wins bigint,
-  ties bigint,
-  total_games bigint
-)
-language sql
-stable
-as $$
-  select
-    count(*) filter (where winner = 1),
-    count(*) filter (where winner = 2),
-    count(*) filter (where winner is null),
-    count(*)
-  from public.games
-  where player2_id is not null;
-$$;
+-- get_p1_p2_win_rates() originally lived here, returning
+-- (p1_wins, p2_wins, ties, total_games). Phase 27 replaced it entirely
+-- with a ties-free 3-column version (folding historical ties into
+-- p1_wins) - see Phase 27 below for the current definition. Not left
+-- here even as a duplicate no-op: since this whole file re-runs top-to-
+-- bottom every time, a lingering 4-column redefinition would re-break
+-- the function (via "cannot change return type of existing function") on
+-- every single re-run after the first successful migration, erroring out
+-- before Phase 27's fix further down the file ever got a chance to
+-- execute - the exact same class of bug buy_seed_pack() hit back in
+-- Phase 16/17.
 
 -- For every pvp game with a recorded move log, finds each player's very
 -- first placement (rn = 1 within that game+player) and groups win rate by

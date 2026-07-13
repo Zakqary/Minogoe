@@ -561,10 +561,17 @@ h2, h3 {
    template) still have their combined height auto-split across the two
    rows by the browser, pushing .right-panel - which only occupies row 2 -
    down to start partway down the board for no real reason. Collapsing to
-   a single row puts every panel back on the same top-aligned baseline. */
-.app.singleplayer-app {
-  grid-template-areas: "side board right";
-  grid-template-rows: auto;
+   a single row puts every panel back on the same top-aligned baseline.
+   Desktop only (min-width matches the mobile breakpoint's max-width just
+   below) - .singleplayer-app's two-class selector otherwise outweighs the
+   single-class .app rule inside the mobile media query below regardless
+   of source order, silently overriding mobile's entire board/hands/side/
+   right stacking layout with this desktop-only single-row one. */
+@media (min-width: 901px) {
+  .app.singleplayer-app {
+    grid-template-areas: "side board right";
+    grid-template-rows: auto;
+  }
 }
 
 .board-panel {

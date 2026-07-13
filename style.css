@@ -327,12 +327,22 @@ h2, h3 {
 
 .profile-stats {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 12px;
   margin: 16px 0 24px;
 }
 
 .stat {
-  flex: 1;
+  /* flex-basis of 100px (rather than plain flex:1) lets a wide row like the
+     8-box pvp summary wrap onto a second line instead of every box being
+     squeezed below its min-content width and overflowing the container to
+     the right - flex:1 alone won't shrink boxes past their text's natural
+     width, it just lets the row spill out instead. justify-content:center
+     above then keeps a leftover partial row (e.g. 3 boxes on their own
+     line) centered instead of stuck against the left edge. */
+  flex: 1 1 100px;
+  max-width: 160px;
   background: var(--surface);
   border: 1px solid var(--border-soft);
   border-radius: 10px;
@@ -778,14 +788,15 @@ h2, h3 {
 
 .sp-upcoming-pieces {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .sp-upcoming-pieces canvas {
   background: var(--surface-2);
-  border-radius: 5px;
-  padding: 3px;
-  opacity: 0.75;
+  border-radius: 6px;
+  padding: 5px;
+  opacity: 0.85;
 }
 
 #connectBtn:hover:not(:disabled), #casualQueueBtn:hover:not(:disabled),

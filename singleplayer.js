@@ -341,8 +341,7 @@ canvas.width = BOARD_SIZE * CELL_PX;
 canvas.height = BOARD_SIZE * CELL_PX;
 const ctx = canvas.getContext('2d');
 
-function drawShapeIcon(canvasEl, coords) {
-  const px = 8;
+function drawShapeIcon(canvasEl, coords, px = 8) {
   const maxR = Math.max(...coords.map((p) => p[0])) + 1;
   const maxC = Math.max(...coords.map((p) => p[1])) + 1;
   canvasEl.width = maxC * px;
@@ -418,7 +417,10 @@ function render() {
       const item = document.createElement('div');
       item.className = 'sp-upcoming-item';
       const c = document.createElement('canvas');
-      drawShapeIcon(c, BASE_SHAPES[shapeName]);
+      // Bigger than the default 8px/cell (used for the current-piece icon
+      // and elsewhere) - these are the pieces players most need to plan
+      // ahead around, so they're worth the extra visual weight.
+      drawShapeIcon(c, BASE_SHAPES[shapeName], 14);
       item.appendChild(c);
       upcomingEl.appendChild(item);
     }

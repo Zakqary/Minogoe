@@ -1673,3 +1673,20 @@ create policy "Participants can insert their own games"
     auth.uid() = player1_id or auth.uid() = player2_id
     or (mode = 'bot' and player1_id is null and player2_id is null)
   );
+
+-- ---------- Phase 26: lower player 2's handicap from a full point to half a point ----------
+
+-- HANDICAP_POINTS in game.js dropped from 1 to 0.5, so a game's final
+-- score can now legitimately be a half-point (e.g. 45.5) - score1/score2
+-- need to accept that instead of erroring on every single ranked/casual
+-- insert going forward (an integer column rejects a non-integer value
+-- outright, it doesn't silently round it). Existing whole-number rows are
+-- unaffected by widening the type.
+alter table public.games alter column score1 type numeric using score1::numeric;
+alter table public.games alter column score2 type numeric using score2::numeric;
+
+-- Tightened headroom to match (was +1, sized for a full-point handicap -
+-- see the games_score_plausible_check comment further up in Phase 18).
+alter table public.games drop constraint if exists games_score_plausible_check;
+alter table public.games add constraint games_score_plausible_check
+  check (score1 >= 0 and score2 >= 0 and score1 + score2 <= board_size * board_size + 0.5);

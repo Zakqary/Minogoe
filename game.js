@@ -2,7 +2,7 @@
 const BOARD_SIZE = 12;
 const CELL_PX = 52; // 12 * 52 = 624px board
 const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
-const HANDICAP_POINTS = 1; // whoever moves second gets a 1-point head start
+const HANDICAP_POINTS = 0.5; // whoever moves second gets a half-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
 const TURN_TIME_LIMITS = { casual: 120, ranked: 60 }; // seconds; private/bot/hotseat are untimed
 const ACTIVE_MATCH_KEY = 'minogoe_activeMatch'; // localStorage key for reconnect-after-reload

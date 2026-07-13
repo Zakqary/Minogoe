@@ -1,3 +1,13 @@
+// Same formatting as singleplayer.js's own formatTime() - duplicated
+// rather than shared since profile.js doesn't otherwise load that page's
+// script at all.
+function formatSpTime(ms) {
+  const totalSec = ms / 1000;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec - m * 60;
+  return `${m}:${s.toFixed(2).padStart(5, '0')}`;
+}
+
 async function renderProfilePage() {
   const container = document.getElementById('profileContent');
   const params = new URLSearchParams(location.search);
@@ -83,6 +93,44 @@ async function renderProfilePage() {
           <div class="stat"><div class="stat-value">${myWins}</div><div class="stat-label">Your Wins</div></div>
           <div class="stat"><div class="stat-value">${myLosses}</div><div class="stat-label">Your Losses</div></div>
         </div>
+      `;
+    }
+  }
+
+  // Lower is better for both singleplayer modes (fastest time / fewest
+  // captured squares) - rank is "how many OTHER runs in that mode beat
+  // this one", plus one, same count-query-instead-of-fetch-everyone
+  // technique as the ELO rank above. Only shown for a mode this player
+  // actually has a personal best in.
+  const { data: spRuns } = await supabaseClient
+    .from('singleplayer_runs')
+    .select('mode, time_ms, score')
+    .eq('user_id', userId);
+
+  let singleplayerHtml = '';
+  if (spRuns && spRuns.length > 0) {
+    const boxes = [];
+    for (const run of spRuns) {
+      if (run.mode === 'speedrun') {
+        const { count } = await supabaseClient
+          .from('singleplayer_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('mode', 'speedrun')
+          .lt('time_ms', run.time_ms);
+        boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Speedrun &middot; ${formatSpTime(run.time_ms)}</div></div>`);
+      } else if (run.mode === 'eogonim') {
+        const { count } = await supabaseClient
+          .from('singleplayer_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('mode', 'eogonim')
+          .lt('score', run.score);
+        boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Eogonim &middot; ${run.score} captured</div></div>`);
+      }
+    }
+    if (boxes.length > 0) {
+      singleplayerHtml = `
+        <h3>Singleplayer Leaderboards</h3>
+        <div class="profile-stats">${boxes.join('')}</div>
       `;
     }
   }
@@ -175,6 +223,7 @@ async function renderProfilePage() {
       <div class="stat"><div class="stat-value">${formatPoints(pointsAgainst)}</div><div class="stat-label">Points Against</div></div>
     </div>
     ${botStatsHtml}
+    ${singleplayerHtml}
     ${headToHeadHtml}
     <h3>Recent Games</h3>
     <table class="games-table">

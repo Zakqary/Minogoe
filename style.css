@@ -1797,6 +1797,7 @@ h2, h3 {
   max-width: 56px;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: center;
 }
 
 .profile-heading {

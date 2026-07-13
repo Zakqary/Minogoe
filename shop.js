@@ -197,7 +197,7 @@ async function renderShopPage() {
                 <div class="shop-item-name">Extra Pot</div>
                 <div class="shop-item-sub">You have ${profile.garden_pot_count}</div>
               </div>
-              <button class="shop-buy-pot-btn">Buy for 10 coins</button>
+              <button class="shop-buy-pot-btn">Buy for 50 coins</button>
             </div>
           </div>
           <div class="shop-item-card">

@@ -2506,3 +2506,35 @@ begin
   return new;
 end;
 $$;
+
+-- ---------- Phase 35: extra garden pots 10 coins -> 50 coins ----------
+
+-- A pot is permanent and lets you keep an entire extra Mino growing (and
+-- gifting coins/items) forever - underpriced at the same 10 coins as a
+-- single-use seed pack given how much more utility it has.
+create or replace function public.buy_pot()
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  current_coins integer;
+  pot_price constant integer := 50;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select coins into current_coins from public.profiles where id = uid for update;
+  if current_coins < pot_price then
+    raise exception 'Not enough coins';
+  end if;
+
+  update public.profiles
+  set coins = coins - pot_price, garden_pot_count = garden_pot_count + 1
+  where id = uid;
+
+  return current_coins - pot_price;
+end;
+$$;

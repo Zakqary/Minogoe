@@ -151,6 +151,16 @@ async function renderProfilePage() {
     </div>
   ` : '';
 
+  // numeric columns (score1/score2 and anything summed from them) come
+  // back from PostgREST as strings, not numbers, to avoid float precision
+  // loss - same reason stats.js wraps every numeric RPC result in Number().
+  const pvpGames = Number(profile.pvp_games_played) || 0;
+  const pointsFor = Number(profile.pvp_points_for) || 0;
+  const pointsAgainst = Number(profile.pvp_points_against) || 0;
+  const avgDiff = pvpGames > 0 ? (pointsFor - pointsAgainst) / pvpGames : 0;
+  const avgDiffText = `${avgDiff > 0 ? '+' : ''}${avgDiff.toFixed(1)}`;
+  const formatPoints = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+
   container.innerHTML = `
     <h2 class="profile-heading">${avatarHtml(profile.avatar_id, 36)} ${escapeHtml(profile.username)} ${titleBadgeHtml(profile.title_id)} ${companionHtml}</h2>
     ${joinedText ? `<div class="profile-joined">Account created on ${escapeHtml(joinedText)}</div>` : ''}
@@ -160,6 +170,9 @@ async function renderProfilePage() {
       <div class="stat"><div class="stat-value">${profile.pvp_games_played}</div><div class="stat-label">Games</div></div>
       <div class="stat"><div class="stat-value">${profile.pvp_wins}</div><div class="stat-label">Wins</div></div>
       <div class="stat"><div class="stat-value">${profile.pvp_losses}</div><div class="stat-label">Losses</div></div>
+      <div class="stat"><div class="stat-value">${avgDiffText}</div><div class="stat-label">Avg Point Diff</div></div>
+      <div class="stat"><div class="stat-value">${formatPoints(pointsFor)}</div><div class="stat-label">Points Scored</div></div>
+      <div class="stat"><div class="stat-value">${formatPoints(pointsAgainst)}</div><div class="stat-label">Points Against</div></div>
     </div>
     ${botStatsHtml}
     ${headToHeadHtml}

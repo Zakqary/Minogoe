@@ -2135,3 +2135,72 @@ begin
   return new;
 end;
 $$;
+
+-- ---------- Phase 32: profile scoring stats (points for/against, pvp only) ----------
+
+-- score1/score2 are numeric (Phase 26's 0.5 handicap), so these accumulate
+-- fractional totals too - fine, the client only ever shows them rounded to
+-- 1 decimal place. Only pvp games count (player2_id is not null), same
+-- gating as pvp_wins/pvp_losses - a vs-bot practice game's score shouldn't
+-- pad or drag down a player's real scoring stats.
+alter table public.profiles add column if not exists pvp_points_for numeric not null default 0;
+alter table public.profiles add column if not exists pvp_points_against numeric not null default 0;
+
+create or replace function public.handle_game_recorded()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if new.player1_id is not null then
+    update public.profiles
+    set games_played = games_played + 1,
+        wins = wins + case when new.winner = 1 or new.winner is null then 1 else 0 end,
+        losses = losses + case when new.winner = 2 then 1 else 0 end,
+        pvp_games_played = pvp_games_played + case when new.player2_id is not null then 1 else 0 end,
+        pvp_wins = pvp_wins + case when new.player2_id is not null and (new.winner = 1 or new.winner is null) then 1 else 0 end,
+        pvp_losses = pvp_losses + case when new.player2_id is not null and new.winner = 2 then 1 else 0 end,
+        pvp_points_for = pvp_points_for + case when new.player2_id is not null then new.score1 else 0 end,
+        pvp_points_against = pvp_points_against + case when new.player2_id is not null then new.score2 else 0 end,
+        bot_games_played = bot_games_played + case when new.mode = 'bot' then 1 else 0 end,
+        bot_wins = bot_wins + case when new.mode = 'bot' and (new.winner = 1 or new.winner is null) then 1 else 0 end,
+        bot_losses = bot_losses + case when new.mode = 'bot' and new.winner = 2 then 1 else 0 end
+    where id = new.player1_id;
+  end if;
+
+  if new.player2_id is not null then
+    update public.profiles
+    set games_played = games_played + 1,
+        wins = wins + case when new.winner = 2 then 1 else 0 end,
+        losses = losses + case when new.winner = 1 or new.winner is null then 1 else 0 end,
+        pvp_games_played = pvp_games_played + 1,
+        pvp_wins = pvp_wins + case when new.winner = 2 then 1 else 0 end,
+        pvp_losses = pvp_losses + case when new.winner = 1 or new.winner is null then 1 else 0 end,
+        pvp_points_for = pvp_points_for + new.score2,
+        pvp_points_against = pvp_points_against + new.score1
+    where id = new.player2_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Backfill from existing games - safe to re-run, always recomputes from
+-- source rather than incrementing (same style as Phase 10/23/28).
+update public.profiles p
+set pvp_points_for = coalesce(pf.points_for, 0),
+    pvp_points_against = coalesce(pf.points_against, 0)
+from (
+  select player_id,
+         sum(my_score) as points_for,
+         sum(opp_score) as points_against
+  from (
+    select player1_id as player_id, score1 as my_score, score2 as opp_score
+    from public.games where player1_id is not null and player2_id is not null
+    union all
+    select player2_id as player_id, score2 as my_score, score1 as opp_score
+    from public.games where player2_id is not null
+  ) per_player
+  group by player_id
+) pf
+where p.id = pf.player_id;

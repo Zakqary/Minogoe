@@ -17,7 +17,7 @@ function potSlotHtml(mino, companionId) {
       </div>
     `;
   }
-  const progressText = mino.stage === 'adult' ? 'Fully grown' : `${mino.growth_progress}/5 games to grow`;
+  const progressText = mino.stage === 'adult' ? 'Fully grown' : `${mino.growth_progress}/10 games to grow`;
   const isCompanion = mino.id === companionId;
   // The companion picker only makes sense once a Mino is fully grown - a
   // seedling would look odd trailing a player around mid-game.

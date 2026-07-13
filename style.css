@@ -493,6 +493,25 @@ h2, h3 {
   width: 100%;
 }
 
+@media (max-width: 900px) {
+  /* Flattens the board+chart row so its two children (the canvas and the
+     Turn Times chart) become direct flex items of .replay-page, letting
+     them be reordered independently below - otherwise the Turn Times
+     chart (which can get tall with a long move log) sits between the
+     board and the play/step controls, forcing a scroll past it just to
+     reach them. */
+  .replay-board-row {
+    display: contents;
+  }
+
+  .replay-meta { order: 0; }
+  .replay-page #board { order: 1; }
+  .replay-controls { order: 2; width: 100%; justify-content: center; }
+  .step-info { order: 3; }
+  .replay-timing-chart { order: 4; width: 100%; box-sizing: border-box; }
+  .replay-page .hands { order: 5; }
+}
+
 /* 3 columns (side/board/hands+right), with the hands tray stacked above
    the right column's rules/log rather than living in the side column -
    named areas so .hands can be a plain sibling of the other 3 panels in
@@ -631,6 +650,19 @@ h2, h3 {
 
 .elo-result-banner.positive { color: #8fd98f; }
 .elo-result-banner.negative { color: #e8b3b3; }
+
+.elo-result-banner.halved {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border-color: #d9b25b;
+}
+
+.elo-halved-note {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
 
 .resume-match-banner {
   display: flex;

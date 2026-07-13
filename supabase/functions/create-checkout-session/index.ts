@@ -25,8 +25,19 @@ const COIN_PACKAGES: Record<string, { coins: number; amountCents: number; label:
   large: { coins: 150, amountCents: 1000, label: "150 Coins" },
 };
 
+// Scoped to the actual deployed site rather than "*" - this function does
+// nothing without a valid Supabase session bearer token, but restricting
+// the origin closes off any other site's browser JS from being able to
+// invoke it at all, even if it somehow got hold of a token. Derived via
+// `new URL(...).origin` rather than using SITE_URL directly - SITE_URL
+// includes a path on a GitHub Pages project site (e.g.
+// ".../Minogoe/shop.html" above), but a browser's Origin header is always
+// just scheme+host+port, never a path - comparing against the raw SITE_URL
+// would never match and would break every legitimate request.
+const SITE_ORIGIN = new URL(SITE_URL).origin;
+
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": SITE_ORIGIN,
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 

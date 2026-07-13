@@ -370,7 +370,9 @@ function playerBadgeHtml(playerNum) {
   // been decided yet. Cosmetics only show once a game is actually underway.
   if (!id || !state.gameStarted) return nameHtml;
   const companion = playerCompanion(playerNum);
-  const companionHtml = companion ? `<span class="player-companion">${minoVisualHtml(companion, 20)}</span>` : '';
+  const companionHtml = companion
+    ? `<span class="player-companion" title="${escapeHtml(minoLabel(companion))}${companion.name ? ' - ' + escapeHtml(companion.name) : ''}">${minoVisualHtml(companion, 20)}</span>`
+    : '';
   return `${avatarHtml(playerAvatarId(playerNum), 20)} ${companionHtml}${nameHtml} ${titleBadgeHtml(playerTitleId(playerNum))}`;
 }
 
@@ -1418,29 +1420,38 @@ async function recordGameResult(winner, forfeit) {
     // just inserted - a fresh select is needed to see the trigger's result.
     const { data: eloRow, error: eloError } = await supabaseClient
       .from('games')
-      .select('elo_delta_p1, elo_delta_p2')
+      .select('elo_delta_p1, elo_delta_p2, elo_halved')
       .eq('id', data.id)
       .single();
     if (!eloError && eloRow && eloRow.elo_delta_p1 != null) {
       if (state.online) {
-        Net.send({ type: 'elo-result', delta_p1: eloRow.elo_delta_p1, delta_p2: eloRow.elo_delta_p2 });
+        Net.send({ type: 'elo-result', delta_p1: eloRow.elo_delta_p1, delta_p2: eloRow.elo_delta_p2, halved: eloRow.elo_halved });
       }
-      showEloResult(state.myPlayer === 1 ? eloRow.elo_delta_p1 : eloRow.elo_delta_p2);
+      showEloResult(state.myPlayer === 1 ? eloRow.elo_delta_p1 : eloRow.elo_delta_p2, eloRow.elo_halved);
     }
   }
 }
 
 let eloResultTimer = null;
-function showEloResult(myDelta) {
+// halved is true when the server (schema.sql's handle_ranked_game(),
+// Phase 30) detected this is the 3rd+ consecutive ranked game between
+// exactly these two accounts with the same winner, uninterrupted by either
+// player facing anyone else in between - ELO movement is cut in half to
+// slow down win-trading, and this banner explains why the number looks
+// smaller than expected instead of just silently showing it.
+function showEloResult(myDelta, halved) {
   Auth.refreshProfile();
   const banner = document.getElementById('eloResultBanner');
   const sign = myDelta > 0 ? '+' : '';
-  banner.textContent = `Ranked result: ${sign}${myDelta} ELO`;
+  banner.innerHTML = halved
+    ? `<div>Ranked result: ${sign}${myDelta} ELO (halved)</div><div class="elo-halved-note">You've played this opponent 3+ times in a row with the same result, so ELO movement is halved to discourage win-trading.</div>`
+    : `Ranked result: ${sign}${myDelta} ELO`;
   banner.classList.toggle('positive', myDelta > 0);
   banner.classList.toggle('negative', myDelta < 0);
+  banner.classList.toggle('halved', !!halved);
   banner.style.display = 'flex';
   clearTimeout(eloResultTimer);
-  eloResultTimer = setTimeout(() => { banner.style.display = 'none'; }, 8000);
+  eloResultTimer = setTimeout(() => { banner.style.display = 'none'; }, halved ? 12000 : 8000);
 }
 
 // ---------- Selection / hover ----------
@@ -2498,7 +2509,7 @@ function handleNetDataInner(msg) {
     log(`\u{1F4AC} ${playerLabel(opponentPlayerNum)}: ${msg.text}`);
     playChatPing();
   } else if (msg.type === 'elo-result') {
-    showEloResult(state.myPlayer === 1 ? msg.delta_p1 : msg.delta_p2);
+    showEloResult(state.myPlayer === 1 ? msg.delta_p1 : msg.delta_p2, msg.halved);
   } else if (msg.type === 'resync-request') {
     // The peer noticed a gap/mismatch in the move sequence and wants our
     // canonical state to catch up - same payload used for the post-rejoin

@@ -32,6 +32,26 @@ const socketRoom = new Map();  // socket -> roomCode
 const casualQueue = [];        // { socket, userId, eloRating }
 const rankedQueue = [];
 
+// This server only ever relays small handshake messages (SDP offers/
+// answers, ICE candidates, room codes, chat text) - actual game moves flow
+// peer-to-peer once WebRTC connects (see net.js). Nothing legitimate is
+// anywhere close to these limits, so they cost real clients nothing; they
+// exist purely to cap the blast radius of a malicious or buggy client
+// spamming this endpoint, which is now a bigger concern with a larger
+// public user base.
+const MAX_MESSAGE_BYTES = 16 * 1024;
+const MAX_ROOM_CODE_LENGTH = 32;
+const MAX_CONNECTIONS = 5000;
+
+// Simple fixed-window per-socket rate limit on the 'message' event - resets
+// every RATE_LIMIT_WINDOW_MS. A real client sends at most a handful of
+// messages per second even during connection setup (one offer/answer plus a
+// few trickled ICE candidates); this window is generous enough to never
+// affect normal play while still cutting off a flooding client quickly.
+const RATE_LIMIT_WINDOW_MS = 1000;
+const RATE_LIMIT_MAX_MESSAGES = 40;
+const socketMessageCounts = new WeakMap(); // socket -> { count, windowStart }
+
 // A socket's 'queue'/'rejoin' handler awaits an async Supabase verification
 // before mutating any queue/room state. If the same socket's request gets
 // processed twice in close succession (double-click, client retry, a stray
@@ -186,10 +206,32 @@ function removeFromRoom(socket, roomCode) {
 const HEARTBEAT_INTERVAL_MS = 25000;
 
 wss.on('connection', (socket) => {
+  if (wss.clients.size > MAX_CONNECTIONS) {
+    socket.close();
+    return;
+  }
+
   socket.isAlive = true;
   socket.on('pong', () => { socket.isAlive = true; });
 
   socket.on('message', async (raw) => {
+    if (raw.length > MAX_MESSAGE_BYTES) {
+      socket.close();
+      return;
+    }
+
+    const rateInfo = socketMessageCounts.get(socket);
+    const now = Date.now();
+    if (!rateInfo || now - rateInfo.windowStart > RATE_LIMIT_WINDOW_MS) {
+      socketMessageCounts.set(socket, { count: 1, windowStart: now });
+    } else {
+      rateInfo.count++;
+      if (rateInfo.count > RATE_LIMIT_MAX_MESSAGES) {
+        socket.close();
+        return;
+      }
+    }
+
     let msg;
     try {
       msg = JSON.parse(raw);
@@ -198,7 +240,7 @@ wss.on('connection', (socket) => {
     }
 
     if (msg.type === 'join') {
-      const roomCode = String(msg.room || '').trim().toUpperCase();
+      const roomCode = String(msg.room || '').trim().toUpperCase().slice(0, MAX_ROOM_CODE_LENGTH);
       if (!roomCode) return;
 
       let room = rooms.get(roomCode);

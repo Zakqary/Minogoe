@@ -1911,3 +1911,227 @@ alter table public.profiles drop column if exists ties;
 alter table public.profiles drop column if exists pvp_ties;
 alter table public.profiles drop column if exists ranked_ties;
 alter table public.profiles drop column if exists bot_ties;
+
+-- ---------- Phase 29: mino evolution takes 10 human games per stage instead of 5 ----------
+
+-- growth_progress is reset to 0 in the same statement that stages a mino up
+-- (the "growth_progress >= 5" update below always zeroes it in the same
+-- run it fires in), so no currently-planted mino can have a stored
+-- growth_progress >= 5 - every existing value is already a valid, smaller
+-- amount of progress toward the new, higher bar. Raising the threshold is
+-- therefore a pure behavior change going forward: nobody's progress is
+-- lost, skipped, or double-counted, it just takes longer to fill from here.
+create or replace function public.handle_human_game_played()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p_id uuid;
+  m record;
+  gift_item record;
+begin
+  foreach p_id in array array[new.player1_id, new.player2_id] loop
+    if p_id is null then
+      continue;
+    end if;
+
+    update public.minos
+    set growth_progress = growth_progress + 1
+    where user_id = p_id and planted and stage <> 'adult';
+
+    update public.minos
+    set stage = case stage
+          when 'seed' then 'sapling'
+          when 'sapling' then 'adolescent'
+          when 'adolescent' then 'adult'
+          else stage
+        end,
+        growth_progress = 0
+    where user_id = p_id and planted and stage <> 'adult' and growth_progress >= 10;
+
+    if random() < 0.1 then
+      update public.profiles
+      set unopened_seed_packs = unopened_seed_packs + 1,
+          pending_pack_notifications = pending_pack_notifications + 1
+      where id = p_id;
+    end if;
+
+    -- Only advances last_gift_at on an actual hit (not every eligible
+    -- game) - that's what keeps this "rare" instead of a flat weekly
+    -- guarantee, while still averaging out to roughly once a week for a
+    -- normally-active player.
+    for m in
+      select * from public.minos
+      where user_id = p_id and planted and stage = 'adult'
+        and (last_gift_at is null or now() - last_gift_at >= interval '7 days')
+    loop
+      if random() < 0.25 then
+        select * into gift_item from public.shop_items
+        where mino_giftable
+          and id not in (select item_id from public.user_inventory where user_id = p_id)
+        order by random()
+        limit 1;
+
+        if gift_item.id is not null and random() < 0.8 then
+          insert into public.user_inventory (user_id, item_id) values (p_id, gift_item.id);
+        else
+          update public.profiles set coins = coins + (5 + floor(random() * 11)::integer) where id = p_id;
+        end if;
+
+        update public.minos set last_gift_at = now() where id = m.id;
+      end if;
+    end loop;
+  end loop;
+
+  return new;
+end;
+$$;
+
+-- ---------- Phase 30: halve ranked ELO movement on a 3rd+ consecutive same-opponent, same-result game (anti win-trading) ----------
+
+-- A pair repeatedly playing only each other, with the exact same player
+-- winning every time, is the classic win-trading pattern - one account
+-- farms ELO off the other over and over with no real competitive risk.
+-- This doesn't (and can't, from inside a single trigger) stop a determined
+-- pair from doing it, but it cuts the rate at which it inflates/deflates
+-- rating: once the SAME winner has taken the previous two ranked games
+-- between exactly these two accounts, uninterrupted by either player
+-- facing anyone else in between, and this new game continues that same
+-- result, both players' ELO movement is halved.
+alter table public.games add column if not exists elo_halved boolean not null default false;
+
+create or replace function public.handle_ranked_game()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p1_elo integer;
+  p2_elo integer;
+  expected_p1 numeric;
+  actual_p1 numeric;
+  k constant integer := 32;
+  delta_p1 integer;
+  delta_p2 integer;
+  this_winner_id uuid;
+  p1_recent_opps uuid[];
+  p1_recent_winners uuid[];
+  p2_recent_opps uuid[];
+  is_halved boolean := false;
+begin
+  if new.mode <> 'ranked' or new.player1_id is null or new.player2_id is null then
+    return new;
+  end if;
+
+  select elo_rating into p1_elo from public.profiles where id = new.player1_id;
+  select elo_rating into p2_elo from public.profiles where id = new.player2_id;
+
+  expected_p1 := 1.0 / (1.0 + power(10, (p2_elo - p1_elo) / 400.0));
+  -- A tie (winner is null) is folded into a player1 win here too, same as
+  -- everywhere else in this phase - kept only as a defensive fallback,
+  -- since a null winner should no longer be possible for a real
+  -- territory-decided ranked game (see Phase 26/27).
+  actual_p1 := case when new.winner = 2 then 0 else 1 end;
+
+  delta_p1 := round(k * (actual_p1 - expected_p1));
+
+  this_winner_id := case when new.winner = 1 then new.player1_id when new.winner = 2 then new.player2_id else new.player1_id end;
+
+  -- player1's (resp. player2's) last 2 ranked games, ANY opponent,
+  -- excluding this one - used to confirm neither player faced anyone else
+  -- in between, not just that the pair has 2 prior games between them
+  -- somewhere in their history.
+  select array_agg(opp_id order by ended_at desc), array_agg(winner_id order by ended_at desc)
+  into p1_recent_opps, p1_recent_winners
+  from (
+    select
+      case when player1_id = new.player1_id then player2_id else player1_id end as opp_id,
+      case when winner = 1 then player1_id when winner = 2 then player2_id else player1_id end as winner_id,
+      ended_at
+    from public.games
+    where mode = 'ranked' and id <> new.id
+      and (player1_id = new.player1_id or player2_id = new.player1_id)
+    order by ended_at desc
+    limit 2
+  ) sub;
+
+  select array_agg(opp_id order by ended_at desc)
+  into p2_recent_opps
+  from (
+    select
+      case when player1_id = new.player2_id then player2_id else player1_id end as opp_id,
+      ended_at
+    from public.games
+    where mode = 'ranked' and id <> new.id
+      and (player1_id = new.player2_id or player2_id = new.player2_id)
+    order by ended_at desc
+    limit 2
+  ) sub;
+
+  if array_length(p1_recent_opps, 1) = 2 and array_length(p2_recent_opps, 1) = 2
+     and p1_recent_opps[1] = new.player2_id and p1_recent_opps[2] = new.player2_id
+     and p2_recent_opps[1] = new.player1_id and p2_recent_opps[2] = new.player1_id
+     and p1_recent_winners[1] = this_winner_id and p1_recent_winners[2] = this_winner_id then
+    is_halved := true;
+    delta_p1 := round(delta_p1 / 2.0);
+  end if;
+
+  delta_p2 := -delta_p1;
+
+  update public.profiles
+  set elo_rating = elo_rating + delta_p1,
+      ranked_games_played = ranked_games_played + 1,
+      ranked_wins = ranked_wins + case when new.winner = 1 or new.winner is null then 1 else 0 end,
+      ranked_losses = ranked_losses + case when new.winner = 2 then 1 else 0 end
+  where id = new.player1_id;
+
+  update public.profiles
+  set elo_rating = elo_rating + delta_p2,
+      ranked_games_played = ranked_games_played + 1,
+      ranked_wins = ranked_wins + case when new.winner = 2 then 1 else 0 end,
+      ranked_losses = ranked_losses + case when new.winner = 1 or new.winner is null then 1 else 0 end
+  where id = new.player2_id;
+
+  update public.games set elo_delta_p1 = delta_p1, elo_delta_p2 = delta_p2, elo_halved = is_halved where id = new.id;
+
+  return new;
+end;
+$$;
+
+-- ---------- Phase 31: server-side username validation on signup ----------
+
+-- The signup form's minlength=3/maxlength=20 (auth-ui.js) was previously
+-- the ONLY check on a new username - trivially bypassed by calling
+-- supabaseClient.auth.signUp() directly from DevTools, which would let
+-- anyone register a blank, thousands-of-characters-long, or emoji/control-
+-- character username (usernames are shown all over the site: leaderboard,
+-- profile, replays, in-game). Deliberately NOT a table CHECK constraint on
+-- profiles.username - adding one retroactively could fail outright on this
+-- very re-run if any already-registered account's existing username
+-- doesn't fit the new rule, which isn't knowable from here. Validating
+-- inside the trigger instead only ever applies to signups from this point
+-- forward - existing accounts are completely untouched, and a rejected
+-- signup just rolls back the auth.users insert cleanly (surfaced to the
+-- client as a normal signUp() error).
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uname text := new.raw_user_meta_data->>'username';
+begin
+  if uname is null
+     or char_length(uname) < 3
+     or char_length(uname) > 20
+     or uname !~ '^[A-Za-z0-9_\- ]+$' then
+    raise exception 'Username must be 3-20 characters, using only letters, numbers, spaces, underscores, and hyphens.';
+  end if;
+
+  insert into public.profiles (id, username) values (new.id, uname);
+  insert into public.user_inventory (user_id, item_id) values (new.id, 'avatar_default');
+  insert into public.user_inventory (user_id, item_id) values (new.id, 'title_freshy');
+  return new;
+end;
+$$;

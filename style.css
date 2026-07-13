@@ -2253,8 +2253,9 @@ h2, h3 {
 }
 
 .garden-mino-coin-rate {
-  font-size: 11px;
-  color: #e0c568;
+  font-size: 10px;
+  color: #f0d060;
+  text-shadow: 0 0 6px rgba(240, 208, 96, 0.65);
 }
 
 .garden-digup-btn {

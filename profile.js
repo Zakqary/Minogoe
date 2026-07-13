@@ -61,12 +61,20 @@ async function renderProfilePage() {
       .or(`and(player1_id.eq.${myUserId},player2_id.eq.${userId}),and(player1_id.eq.${userId},player2_id.eq.${myUserId})`);
 
     if (h2hGames && h2hGames.length > 0) {
-      let myWins = 0, myLosses = 0, myTies = 0;
+      // A tie (winner is null) is folded into a win for whoever was
+      // player1 in that specific game - same reclassification as
+      // schema.sql's aggregate counters (Phase 28), since ties are no
+      // longer reachable under the current 0.5 handicap.
+      let myWins = 0, myLosses = 0;
       for (const g of h2hGames) {
         const iWasP1 = g.player1_id === myUserId;
-        if (g.winner == null) myTies++;
-        else if ((g.winner === 1) === iWasP1) myWins++;
-        else myLosses++;
+        if (g.winner == null) {
+          if (iWasP1) myWins++; else myLosses++;
+        } else if ((g.winner === 1) === iWasP1) {
+          myWins++;
+        } else {
+          myLosses++;
+        }
       }
       headToHeadHtml = `
         <h3>Your Head-to-Head vs ${escapeHtml(profile.username)}</h3>
@@ -74,7 +82,6 @@ async function renderProfilePage() {
           <div class="stat"><div class="stat-value">${h2hGames.length}</div><div class="stat-label">Games</div></div>
           <div class="stat"><div class="stat-value">${myWins}</div><div class="stat-label">Your Wins</div></div>
           <div class="stat"><div class="stat-value">${myLosses}</div><div class="stat-label">Your Losses</div></div>
-          <div class="stat"><div class="stat-value">${myTies}</div><div class="stat-label">Ties</div></div>
         </div>
       `;
     }
@@ -129,17 +136,18 @@ async function renderProfilePage() {
   // pvp_*/bot_* split out a vs-bot practice game from a "regular" game
   // against a real opponent (schema.sql Phase 23) - shown as two clearly
   // separate stat rows instead of blending them into one number the way
-  // games_played/wins/losses/ties (still used as-is elsewhere, e.g. the
+  // games_played/wins/losses (still used as-is elsewhere, e.g. the
   // leaderboard) do. The bot row only appears once there's actually
   // something to show, so most profiles aren't cluttered with a zeroed-
-  // out row for a mode they've never touched.
+  // out row for a mode they've never touched. No ties column - ties are
+  // no longer reachable under the current 0.5 handicap, and historical
+  // ones are folded into wins (schema.sql Phase 28).
   const botStatsHtml = profile.bot_games_played > 0 ? `
     <h3>vs Bot</h3>
     <div class="profile-stats">
       <div class="stat"><div class="stat-value">${profile.bot_games_played}</div><div class="stat-label">Games</div></div>
       <div class="stat"><div class="stat-value">${profile.bot_wins}</div><div class="stat-label">Wins</div></div>
       <div class="stat"><div class="stat-value">${profile.bot_losses}</div><div class="stat-label">Losses</div></div>
-      <div class="stat"><div class="stat-value">${profile.bot_ties}</div><div class="stat-label">Ties</div></div>
     </div>
   ` : '';
 
@@ -152,7 +160,6 @@ async function renderProfilePage() {
       <div class="stat"><div class="stat-value">${profile.pvp_games_played}</div><div class="stat-label">Games</div></div>
       <div class="stat"><div class="stat-value">${profile.pvp_wins}</div><div class="stat-label">Wins</div></div>
       <div class="stat"><div class="stat-value">${profile.pvp_losses}</div><div class="stat-label">Losses</div></div>
-      <div class="stat"><div class="stat-value">${profile.pvp_ties}</div><div class="stat-label">Ties</div></div>
     </div>
     ${botStatsHtml}
     ${headToHeadHtml}

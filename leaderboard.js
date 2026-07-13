@@ -2,18 +2,19 @@
 // matches only" is checked - fieldFor() resolves which underlying profile
 // column that key actually reads from in the current mode, so the sort
 // column doesn't need to be remapped when the checkbox is toggled.
+// No ties column - ties are no longer reachable under the current 0.5
+// handicap, and historical ones are folded into wins (schema.sql Phase 28).
 const COLUMNS = [
   { key: 'username', label: 'Player' },
   { key: 'elo_rating', label: 'ELO' },
   { key: 'games', label: 'Games' },
   { key: 'wins', label: 'W' },
   { key: 'losses', label: 'L' },
-  { key: 'ties', label: 'T' },
 ];
 
 const FIELD_MAP = {
-  all: { games: 'games_played', wins: 'wins', losses: 'losses', ties: 'ties' },
-  ranked: { games: 'ranked_games_played', wins: 'ranked_wins', losses: 'ranked_losses', ties: 'ranked_ties' },
+  all: { games: 'games_played', wins: 'wins', losses: 'losses' },
+  ranked: { games: 'ranked_games_played', wins: 'ranked_wins', losses: 'ranked_losses' },
 };
 
 let players = null;
@@ -28,7 +29,7 @@ function fieldFor(key) {
 async function loadLeaderboard() {
   const { data, error } = await supabaseClient
     .from('profiles')
-    .select('id, username, elo_rating, games_played, wins, losses, ties, ranked_games_played, ranked_wins, ranked_losses, ranked_ties, avatar_id, title_id');
+    .select('id, username, elo_rating, games_played, wins, losses, ranked_games_played, ranked_wins, ranked_losses, avatar_id, title_id');
 
   if (error) {
     document.getElementById('leaderboardContent').innerHTML = `<p>Could not load leaderboard: ${escapeHtml(error.message)}</p>`;
@@ -79,7 +80,6 @@ function renderLeaderboard() {
       <td>${p[fieldFor('games')]}</td>
       <td>${p[fieldFor('wins')]}</td>
       <td>${p[fieldFor('losses')]}</td>
-      <td>${p[fieldFor('ties')]}</td>
     </tr>
   `).join('');
 

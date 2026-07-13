@@ -1723,3 +1723,201 @@ as $$
   from public.games
   where player2_id is not null;
 $$;
+
+-- ---------- Phase 28: fold ties into wins everywhere, drop the ties columns entirely ----------
+
+-- Extends Phase 27's "a historical tie would have been a player1 win
+-- under the smaller 0.5 handicap" reclassification from just the Stats
+-- page to every wins/losses counter site-wide - the leaderboard and
+-- profile page both still had a ties column that could now only ever be
+-- 0 for a brand new game, but still carried old historical counts. Does
+-- NOT touch games.winner itself, any individual match's recorded result,
+-- or any ELO rating/delta already on the books - only how the SUMMARY
+-- counters tally historical results changes. (Retroactively recomputing
+-- ELO history is a much bigger, path-dependent undertaking - deliberately
+-- out of scope here, same as not touching games.winner.)
+
+-- Redefine the triggers FIRST, before dropping the ties columns below -
+-- otherwise there'd be a window where a live trigger still references a
+-- column that no longer exists.
+create or replace function public.handle_game_recorded()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if new.player1_id is not null then
+    update public.profiles
+    set games_played = games_played + 1,
+        wins = wins + case when new.winner = 1 or new.winner is null then 1 else 0 end,
+        losses = losses + case when new.winner = 2 then 1 else 0 end,
+        pvp_games_played = pvp_games_played + case when new.player2_id is not null then 1 else 0 end,
+        pvp_wins = pvp_wins + case when new.player2_id is not null and (new.winner = 1 or new.winner is null) then 1 else 0 end,
+        pvp_losses = pvp_losses + case when new.player2_id is not null and new.winner = 2 then 1 else 0 end,
+        bot_games_played = bot_games_played + case when new.mode = 'bot' then 1 else 0 end,
+        bot_wins = bot_wins + case when new.mode = 'bot' and (new.winner = 1 or new.winner is null) then 1 else 0 end,
+        bot_losses = bot_losses + case when new.mode = 'bot' and new.winner = 2 then 1 else 0 end
+    where id = new.player1_id;
+  end if;
+
+  if new.player2_id is not null then
+    update public.profiles
+    set games_played = games_played + 1,
+        wins = wins + case when new.winner = 2 then 1 else 0 end,
+        losses = losses + case when new.winner = 1 or new.winner is null then 1 else 0 end,
+        pvp_games_played = pvp_games_played + 1,
+        pvp_wins = pvp_wins + case when new.winner = 2 then 1 else 0 end,
+        pvp_losses = pvp_losses + case when new.winner = 1 or new.winner is null then 1 else 0 end
+    where id = new.player2_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function public.handle_ranked_game()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p1_elo integer;
+  p2_elo integer;
+  expected_p1 numeric;
+  actual_p1 numeric;
+  k constant integer := 32;
+  delta_p1 integer;
+  delta_p2 integer;
+begin
+  if new.mode <> 'ranked' or new.player1_id is null or new.player2_id is null then
+    return new;
+  end if;
+
+  select elo_rating into p1_elo from public.profiles where id = new.player1_id;
+  select elo_rating into p2_elo from public.profiles where id = new.player2_id;
+
+  expected_p1 := 1.0 / (1.0 + power(10, (p2_elo - p1_elo) / 400.0));
+  -- A tie (winner is null) is folded into a player1 win here too, same as
+  -- everywhere else in this phase - kept only as a defensive fallback,
+  -- since a null winner should no longer be possible for a real
+  -- territory-decided ranked game (see Phase 26/27).
+  actual_p1 := case when new.winner = 2 then 0 else 1 end;
+
+  delta_p1 := round(k * (actual_p1 - expected_p1));
+  delta_p2 := -delta_p1;
+
+  update public.profiles
+  set elo_rating = elo_rating + delta_p1,
+      ranked_games_played = ranked_games_played + 1,
+      ranked_wins = ranked_wins + case when new.winner = 1 or new.winner is null then 1 else 0 end,
+      ranked_losses = ranked_losses + case when new.winner = 2 then 1 else 0 end
+  where id = new.player1_id;
+
+  update public.profiles
+  set elo_rating = elo_rating + delta_p2,
+      ranked_games_played = ranked_games_played + 1,
+      ranked_wins = ranked_wins + case when new.winner = 2 then 1 else 0 end,
+      ranked_losses = ranked_losses + case when new.winner = 1 or new.winner is null then 1 else 0 end
+  where id = new.player2_id;
+
+  update public.games set elo_delta_p1 = delta_p1, elo_delta_p2 = delta_p2 where id = new.id;
+
+  return new;
+end;
+$$;
+
+-- Recompute every wins/losses counter from source, folding winner is null
+-- into a player1 win / player2 loss - same backfill style as Phase 10/23,
+-- safe to re-run (always recomputes rather than incrementing). games_played
+-- and its pvp_/ranked_/bot_ variants are untouched - a former tie still
+-- counted as a game played either way, only the win/loss split changes.
+update public.profiles p
+set wins = coalesce(al.wins, 0),
+    losses = coalesce(al.losses, 0)
+from (
+  select player_id,
+         sum(case
+               when winner = player_num then 1
+               when winner is null and player_num = 1 then 1
+               else 0
+             end) as wins,
+         sum(case
+               when winner is not null and winner <> player_num then 1
+               when winner is null and player_num = 2 then 1
+               else 0
+             end) as losses
+  from (
+    select player1_id as player_id, 1 as player_num, winner from public.games where player1_id is not null
+    union all
+    select player2_id as player_id, 2 as player_num, winner from public.games where player2_id is not null
+  ) per_player
+  group by player_id
+) al
+where p.id = al.player_id;
+
+update public.profiles p
+set pvp_wins = coalesce(pv.wins, 0),
+    pvp_losses = coalesce(pv.losses, 0)
+from (
+  select player_id,
+         sum(case
+               when winner = player_num then 1
+               when winner is null and player_num = 1 then 1
+               else 0
+             end) as wins,
+         sum(case
+               when winner is not null and winner <> player_num then 1
+               when winner is null and player_num = 2 then 1
+               else 0
+             end) as losses
+  from (
+    select player1_id as player_id, 1 as player_num, winner from public.games where player1_id is not null and player2_id is not null
+    union all
+    select player2_id as player_id, 2 as player_num, winner from public.games where player2_id is not null
+  ) per_player
+  group by player_id
+) pv
+where p.id = pv.player_id;
+
+update public.profiles p
+set ranked_wins = coalesce(rk.wins, 0),
+    ranked_losses = coalesce(rk.losses, 0)
+from (
+  select player_id,
+         sum(case
+               when winner = player_num then 1
+               when winner is null and player_num = 1 then 1
+               else 0
+             end) as wins,
+         sum(case
+               when winner is not null and winner <> player_num then 1
+               when winner is null and player_num = 2 then 1
+               else 0
+             end) as losses
+  from (
+    select player1_id as player_id, 1 as player_num, winner from public.games where mode = 'ranked' and player1_id is not null
+    union all
+    select player2_id as player_id, 2 as player_num, winner from public.games where mode = 'ranked' and player2_id is not null
+  ) per_player
+  group by player_id
+) rk
+where p.id = rk.player_id;
+
+update public.profiles p
+set bot_wins = coalesce(bt.wins, 0),
+    bot_losses = coalesce(bt.losses, 0)
+from (
+  select player1_id as player_id,
+         sum(case when winner = 1 or winner is null then 1 else 0 end) as wins,
+         sum(case when winner = 2 then 1 else 0 end) as losses
+  from public.games
+  where mode = 'bot' and player1_id is not null
+  group by player1_id
+) bt
+where p.id = bt.player_id;
+
+-- Nothing reads or writes these anymore - drop them entirely.
+alter table public.profiles drop column if exists ties;
+alter table public.profiles drop column if exists pvp_ties;
+alter table public.profiles drop column if exists ranked_ties;
+alter table public.profiles drop column if exists bot_ties;

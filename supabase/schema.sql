@@ -2215,9 +2215,27 @@ where p.id = pf.player_id;
 -- both, just different units - milliseconds vs. captured squares), so each
 -- is nullable and the check constraint below keeps exactly one of the two
 -- set per row rather than trusting every future insert to get that right.
-alter table public.singleplayer_runs add column if not exists mode text not null default 'speedrun' check (mode in ('speedrun', 'eogonim'));
+--
+-- The allowed-values check is deliberately its own separate drop+add step
+-- below, NOT an inline "check (...)" on this add column - this table
+-- already went through one rename (the mode used to be called 'golf'), and
+-- "add column if not exists" is a no-op once the column already exists, so
+-- an inline check clause here would have silently kept enforcing the OLD
+-- 'golf' value forever on any database that had already run an earlier
+-- version of this phase - exactly what happened. Same bug class as
+-- get_p1_p2_win_rates()/buy_seed_pack() earlier in this file, just for a
+-- constraint instead of a function.
+alter table public.singleplayer_runs add column if not exists mode text not null default 'speedrun';
 alter table public.singleplayer_runs alter column time_ms drop not null;
 alter table public.singleplayer_runs add column if not exists score integer;
+
+-- Drop first, before the data migration below - if anyone managed to save
+-- a run under the old 'golf' label before this rename, renaming that row
+-- to 'eogonim' would itself violate the very constraint being replaced if
+-- it were still in place.
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
+update public.singleplayer_runs set mode = 'eogonim' where mode = 'golf';
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim'));
 
 alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_user_id_key;
 alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_user_id_mode_key;

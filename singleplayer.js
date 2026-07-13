@@ -4,10 +4,13 @@
 // state machine, so shape/orientation generation is duplicated (same
 // approach replay.js already takes, for the same reason).
 
-const BOARD_SIZE = 9;
+// Board size varies by mode (Speedrun: 9x9, Golf: 8x8) - see BOARD_SIZES
+// and setMode() below - so this is reassigned rather than a const.
+let BOARD_SIZE = 9;
+const BOARD_SIZES = { speedrun: 9, golf: 8 };
 const CELL_PX = 52;
 const MAX_CAPTURE_SIZE = 4; // enclosures bigger than this don't count
-const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one
+const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, golf has no preview
 
 // ---------- Shapes ----------
 const BASE_SHAPES = {
@@ -75,20 +78,22 @@ function idx(r, c) { return r * BOARD_SIZE + c; }
 // ---------- State ----------
 // board cell values: 0 = empty, 1 = placed (uncaptured piece), 2 = captured (permanent)
 const state = {
+  mode: 'speedrun', // 'speedrun' | 'golf' - persists across resetBoardState(), only setMode() changes it
   board: new Uint8Array(BOARD_SIZE * BOARD_SIZE),
   pieceIdAt: new Int32Array(BOARD_SIZE * BOARD_SIZE),
   pieceCells: new Map(), // pieceId -> number[] of cell indices
   nextPieceId: 1,
   running: false,
   finished: false,
-  failed: false,
+  failed: false, // speedrun only - golf has no fail state, every ending is a valid (scored) result
   selected: null, // { shapeName, orientationIndex } - the current piece being placed
-  pieceQueue: [], // shapeNames coming up after the current piece, length LOOKAHEAD_COUNT
+  pieceQueue: [], // shapeNames coming up after the current piece, length LOOKAHEAD_COUNT - speedrun only
   mouseRC: null,
   hover: null,
   lastTapCell: null,
   startTime: null,
   finalTimeMs: null,
+  totalCaptured: 0, // running count of captured squares this run - golf's score, tracked in speedrun too but unused there
 };
 
 function resetBoardState() {
@@ -105,6 +110,7 @@ function resetBoardState() {
   state.lastTapCell = null;
   state.startTime = null;
   state.finalTimeMs = null;
+  state.totalCaptured = 0;
 }
 
 // ---------- Placement legality ----------
@@ -186,6 +192,7 @@ function runCaptureCascade() {
     }
     if (!anyCapturedThisPass) break;
     changed = true;
+    state.totalCaptured += capturedCells.length;
 
     const idsToRemove = new Set();
     for (const cell of capturedCells) {
@@ -224,25 +231,28 @@ function isBoardComplete() {
 // ---------- Run flow ----------
 function startRun() {
   resetBoardState();
-  for (let i = 0; i < LOOKAHEAD_COUNT; i++) state.pieceQueue.push(drawWeightedPiece());
+  if (state.mode === 'speedrun') {
+    for (let i = 0; i < LOOKAHEAD_COUNT; i++) state.pieceQueue.push(drawWeightedPiece());
+    state.startTime = Date.now();
+    startTimerTick();
+  }
   state.running = true;
-  state.startTime = Date.now();
-  startTimerTick();
   spawnNextPiece();
   render();
 }
 
-// Pulls the current piece from the front of the lookahead queue and refills
-// the back of it, so the next LOOKAHEAD_COUNT pieces are always visible in
-// advance - lets you plan board space instead of being blindsided by
-// whatever random shape shows up, especially late in a run.
+// Speedrun pulls the current piece from the front of the lookahead queue and
+// refills the back of it, so the next LOOKAHEAD_COUNT pieces are always
+// visible in advance. Golf has no preview at all - each piece is drawn
+// fresh, right when it's handed to you.
 function spawnNextPiece() {
-  const shapeName = state.pieceQueue.shift();
-  state.pieceQueue.push(drawWeightedPiece());
+  const shapeName = state.mode === 'speedrun' ? state.pieceQueue.shift() : drawWeightedPiece();
+  if (state.mode === 'speedrun') state.pieceQueue.push(drawWeightedPiece());
   state.selected = { shapeName, orientationIndex: 0 };
   recomputeHover();
   if (!hasAnyLegalMove(shapeName, state.board)) {
-    failRun();
+    if (state.mode === 'speedrun') failRun();
+    else finishGolfRun();
     return;
   }
   render();
@@ -273,7 +283,8 @@ function commitPlacement(r0, c0) {
     // directly filled the last gap with nothing left over to enclose -
     // color them in like the rest of the board for the finished view.
     for (let i = 0; i < state.board.length; i++) if (state.board[i] === 1) state.board[i] = 2;
-    finishRun();
+    if (state.mode === 'speedrun') finishRun();
+    else finishGolfRun();
     return;
   }
   spawnNextPiece();
@@ -295,6 +306,18 @@ function finishRun() {
   stopTimerTick();
   render();
   saveScoreIfBest(state.finalTimeMs);
+}
+
+// Golf has no separate "failed" ending - running out of legal placements
+// (the usual way a run ends, since you're never given a choice to pass) and
+// filling the board completely are both just "the run is over," scored the
+// same way either way.
+function finishGolfRun() {
+  state.running = false;
+  state.finished = true;
+  state.failed = false;
+  render();
+  saveGolfScoreIfBest(state.totalCaptured);
 }
 
 // ---------- Rotation / hover ----------
@@ -333,6 +356,40 @@ function startTimerTick() {
 }
 function stopTimerTick() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+}
+
+// ---------- Mode switching ----------
+function resizeCanvasForMode() {
+  canvas.width = BOARD_SIZE * CELL_PX;
+  canvas.height = BOARD_SIZE * CELL_PX;
+}
+
+// Switching mid-run is blocked (the Start button becomes Restart, and the
+// tab buttons themselves are disabled while running - see render()), so
+// this only ever runs against an idle or finished board.
+function setMode(mode) {
+  if (state.running || state.mode === mode) return;
+  state.mode = mode;
+  BOARD_SIZE = BOARD_SIZES[mode];
+  resizeCanvasForMode();
+  resetBoardState();
+  updateModeUI();
+  render();
+  refreshLeaderboard();
+}
+
+function updateModeUI() {
+  const isGolf = state.mode === 'golf';
+  document.getElementById('spTabSpeedrun').classList.toggle('active', !isGolf);
+  document.getElementById('spTabGolf').classList.toggle('active', isGolf);
+  document.getElementById('spModeTitle').textContent = isGolf ? 'Golf' : 'Speedrun';
+  document.getElementById('spUpcomingLabel').style.display = isGolf ? 'none' : '';
+  document.getElementById('spUpcomingPieces').style.display = isGolf ? 'none' : '';
+  document.getElementById('spRulesSpeedrun').style.display = isGolf ? 'none' : '';
+  document.getElementById('spRulesGolf').style.display = isGolf ? '' : 'none';
+  document.getElementById('spLeaderboardTitle').textContent = isGolf ? 'Lowest Scores' : 'Top Times';
+  document.getElementById('spSaveStatus').textContent = '';
+  document.getElementById('spTimer').textContent = isGolf ? 'Captured: 0' : formatTime(0);
 }
 
 // ---------- Rendering ----------
@@ -386,9 +443,21 @@ function render() {
   const startBtn = document.getElementById('spStartBtn');
   startBtn.textContent = (state.running || state.finished) ? 'Restart' : 'Start';
 
+  document.getElementById('spTabSpeedrun').disabled = state.running;
+  document.getElementById('spTabGolf').disabled = state.running;
+
+  if (state.mode === 'golf') {
+    document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured}`;
+  }
+
   if (!state.running && !state.finished) {
     banner.textContent = 'Click Start to begin';
-    pieceInfo.textContent = "You'll get one random piece at a time - place it anywhere it fits.";
+    pieceInfo.textContent = state.mode === 'golf'
+      ? "You'll get one random piece at a time, with no preview of what's coming - keep your captured territory as low as possible."
+      : "You'll get one random piece at a time - place it anywhere it fits.";
+  } else if (state.mode === 'golf' && state.finished) {
+    banner.textContent = `Run over — captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
+    pieceInfo.textContent = 'Click Restart to try for a lower score.';
   } else if (state.finished && state.failed) {
     banner.textContent = 'No legal moves - run failed';
     pieceInfo.textContent = "That piece didn't fit anywhere on the board. Click Restart to try again.";
@@ -486,6 +555,8 @@ document.addEventListener('keydown', (e) => {
 
 document.getElementById('mobileRotateBtn').addEventListener('click', rotateSelected);
 document.getElementById('spStartBtn').addEventListener('click', startRun);
+document.getElementById('spTabSpeedrun').addEventListener('click', () => setMode('speedrun'));
+document.getElementById('spTabGolf').addEventListener('click', () => setMode('golf'));
 
 // ---------- Leaderboard ----------
 async function saveScoreIfBest(timeMs) {
@@ -509,12 +580,34 @@ async function saveScoreIfBest(timeMs) {
   refreshLeaderboard();
 }
 
+// Same server-decides-if-it's-better discipline as saveScoreIfBest(), via
+// submit_singleplayer_score() instead of submit_singleplayer_time().
+async function saveGolfScoreIfBest(score) {
+  const user = Auth.getUser();
+  if (!user) {
+    document.getElementById('spSaveStatus').textContent = 'Sign in to save your score to the leaderboard.';
+    return;
+  }
+  const { data: bestScore, error } = await supabaseClient.rpc('submit_singleplayer_score', { p_score: score });
+  if (error) {
+    document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
+    return;
+  }
+  document.getElementById('spSaveStatus').textContent = bestScore === score
+    ? 'New personal best - saved!'
+    : `Saved. Your best is still ${bestScore}.`;
+  refreshLeaderboard();
+}
+
 async function refreshLeaderboard() {
   const container = document.getElementById('spLeaderboard');
+  const isGolf = state.mode === 'golf';
+  const scoreColumn = isGolf ? 'score' : 'time_ms';
   const { data, error } = await supabaseClient
     .from('singleplayer_runs')
-    .select('time_ms, profiles(id, username, avatar_id, title_id)')
-    .order('time_ms', { ascending: true })
+    .select(`${scoreColumn}, profiles(id, username, avatar_id, title_id)`)
+    .eq('mode', state.mode)
+    .order(scoreColumn, { ascending: true })
     .limit(20);
 
   if (error) {
@@ -528,18 +621,19 @@ async function refreshLeaderboard() {
     <tr>
       <td>${i + 1}</td>
       <td class="leaderboard-player-cell">${avatarHtml(row.profiles.avatar_id, 20)} <a href="profile.html?user=${encodeURIComponent(row.profiles.id)}">${escapeHtml(row.profiles.username)}</a> ${titleBadgeHtml(row.profiles.title_id)}</td>
-      <td>${formatTime(row.time_ms)}</td>
+      <td>${isGolf ? row.score : formatTime(row.time_ms)}</td>
     </tr>
   `).join('');
 
   container.innerHTML = `
     <table class="games-table">
-      <thead><tr><th>#</th><th>Player</th><th>Time</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>${isGolf ? 'Score' : 'Time'}</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="3">No runs yet - be the first!</td></tr>'}</tbody>
     </table>
   `;
 }
 
 // ---------- Init ----------
+updateModeUI();
 render();
 refreshLeaderboard();

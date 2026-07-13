@@ -2204,3 +2204,98 @@ from (
   group by player_id
 ) pf
 where p.id = pf.player_id;
+
+-- ---------- Phase 33: singleplayer "Golf" mode (minimize captured territory) ----------
+
+-- singleplayer_runs previously held exactly one row per user (one global
+-- best time, Speedrun-only). Adding a second mode means a user can now have
+-- one best PER mode - mode defaults to 'speedrun' so every pre-existing row
+-- is correctly tagged without a separate backfill. time_ms is only
+-- meaningful for speedrun and score only for golf (lower is better in both,
+-- just different units - milliseconds vs. captured squares), so each is
+-- nullable and the check constraint below keeps exactly one of the two set
+-- per row rather than trusting every future insert to get that right.
+alter table public.singleplayer_runs add column if not exists mode text not null default 'speedrun' check (mode in ('speedrun', 'golf'));
+alter table public.singleplayer_runs alter column time_ms drop not null;
+alter table public.singleplayer_runs add column if not exists score integer;
+
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_user_id_key;
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_user_id_mode_key;
+alter table public.singleplayer_runs add constraint singleplayer_runs_user_id_mode_key unique (user_id, mode);
+
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
+  check (
+    (mode = 'speedrun' and time_ms is not null and score is null)
+    or (mode = 'golf' and score is not null and time_ms is null)
+  );
+
+-- Re-scoped to mode = 'speedrun' explicitly now that a user can also have a
+-- golf row - previously "where user_id = uid" alone was unambiguous since
+-- speedrun was the only mode that existed.
+create or replace function public.submit_singleplayer_time(p_time_ms integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_time integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_time_ms is null or p_time_ms <= 0 then
+    raise exception 'Invalid time';
+  end if;
+
+  select time_ms into existing_time from public.singleplayer_runs where user_id = uid and mode = 'speedrun' for update;
+
+  if existing_time is null then
+    insert into public.singleplayer_runs (user_id, mode, time_ms) values (uid, 'speedrun', p_time_ms);
+    return p_time_ms;
+  elsif p_time_ms < existing_time then
+    update public.singleplayer_runs set time_ms = p_time_ms, completed_at = now() where user_id = uid and mode = 'speedrun';
+    return p_time_ms;
+  else
+    return existing_time;
+  end if;
+end;
+$$;
+
+-- Same "server decides if it's actually an improvement" discipline as
+-- submit_singleplayer_time() - a golf score is a captured-square count
+-- (lower is better, 0 is a perfect run), entirely client-computed from a
+-- client-only board simulation, so this can't verify the number is
+-- "correct" the way a server-authoritative game could - only that it's
+-- non-negative and that it doesn't silently overwrite a genuinely better
+-- existing best with a worse one.
+create or replace function public.submit_singleplayer_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < 0 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'golf' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'golf', p_score);
+    return p_score;
+  elsif p_score < existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'golf';
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;

@@ -786,6 +786,36 @@ h2, h3 {
   margin-top: 2px;
 }
 
+.sp-mode-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.sp-mode-tab {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font-body);
+  opacity: 0.7;
+}
+
+.sp-mode-tab.active {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  opacity: 1;
+  color: var(--accent-hover);
+}
+
+.sp-mode-tab:disabled {
+  cursor: not-allowed;
+}
+
 .sp-upcoming-pieces {
   display: flex;
   flex-wrap: wrap;

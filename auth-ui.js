@@ -137,7 +137,18 @@ function minoLabel(mino) {
   return `${capitalize(mino.rarity)}${mino.modifier ? ' ' + mino.modifier : ''} ${mino.color}`;
 }
 
+// Nudges signed-out visitors toward creating an account (a lot of people
+// try the game as a guest and never come back) - hidden until auth
+// actually resolves, so an already-registered player never sees it flash
+// on load before their signed-in state is known.
+function updateRegisterBanner() {
+  const banner = document.getElementById('registerBanner');
+  if (!banner) return;
+  banner.style.display = (Auth.isInitialized && !Auth.getUser()) ? '' : 'none';
+}
+
 function renderAuthWidget() {
+  updateRegisterBanner();
   const el = document.getElementById('authWidget');
   const user = Auth.getUser();
   const profile = Auth.getProfile();
@@ -238,3 +249,14 @@ function wireLoggedOutHandlers() {
 Auth.onAuthChange(renderAuthWidget);
 renderAuthWidget();
 if (typeof Catalog !== 'undefined') Catalog.ready().then(renderAuthWidget);
+
+// The banner button is static markup (unlike #authToggleBtn/#authPanel,
+// which renderAuthWidget() recreates from scratch every call) - wired
+// once here rather than re-attached on every render.
+document.getElementById('registerBannerBtn')?.addEventListener('click', () => {
+  const panel = document.getElementById('authPanel');
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  document.getElementById('tabSignUp')?.click();
+  document.getElementById('authWidget')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});

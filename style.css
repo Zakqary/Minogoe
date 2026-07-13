@@ -1106,6 +1106,42 @@ h2, h3 {
   box-shadow: var(--shadow-md);
 }
 
+/* Shown only to signed-out visitors (see updateRegisterBanner() in
+   auth-ui.js) - a bar rather than a pill like .announcement-pill above it,
+   so the two don't read as duplicates when both are visible at once. */
+.register-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 10px 20px 0;
+  padding: 10px 18px;
+  background: rgba(209, 151, 74, 0.1);
+  border: 1px solid rgba(209, 151, 74, 0.35);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 13px;
+  text-align: center;
+}
+
+.register-banner-btn {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #211505;
+  font-weight: 700;
+  font-size: 13px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.register-banner-btn:hover {
+  background: var(--accent-hover);
+}
+
 .site-footer {
   display: flex;
   flex-direction: column;

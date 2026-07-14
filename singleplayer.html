@@ -59,6 +59,7 @@
         <div class="sp-mode-tabs">
           <button type="button" id="spTabSpeedrun" class="sp-mode-tab active">Speedrun</button>
           <button type="button" id="spTabEogonim" class="sp-mode-tab">Eogonim</button>
+          <button type="button" id="spTabAscension" class="sp-mode-tab">Ascension</button>
         </div>
         <h3 id="spModeTitle">Speedrun</h3>
         <button id="spStartBtn">Start</button>
@@ -68,6 +69,7 @@
         </div>
         <div class="sp-upcoming-label" id="spUpcomingLabel">Up next:</div>
         <div class="sp-upcoming-pieces" id="spUpcomingPieces"></div>
+        <div id="spPieceChoices" class="sp-piece-choices" style="display:none;"></div>
         <div class="online-status" id="spSaveStatus"></div>
       </div>
 
@@ -88,6 +90,13 @@
           <li>The goal is the <em>opposite</em> of a real match: keep your total captured territory as low as possible.</li>
           <li>The run ends the moment your current piece has no legal placement anywhere &mdash; that's just how every run ends, not a failure. Your final captured total is your score.</li>
           <li>Lowest total captured territory wins a spot on the Eogonim leaderboard.</li>
+        </ul>
+        <ul id="spRulesAscension" style="display:none;">
+          <li><em>10&times;10</em> board, played in escalating rounds. Pick 1 of 3 random shapes to start &mdash; that's your only piece, in unlimited supply.</li>
+          <li>Pieces are drawn randomly from whichever shapes you've unlocked, and never disappear once placed &mdash; same enclosure scoring as Eogonim, any size pocket counts.</li>
+          <li>Each round has a target amount of territory to capture before you get stuck. Targets start at 10 and climb every round.</li>
+          <li>Clear a round's target and you'll pick a new shape to add to your collection, the board resets empty, and the next round begins.</li>
+          <li>Fail to hit a round's target before getting stuck and the run ends. Your leaderboard score is how many rounds you cleared.</li>
         </ul>
       </div>
     </div>

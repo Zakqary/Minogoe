@@ -1,6 +1,6 @@
 // Singleplayer modes. Deliberately self-contained rather than importing
 // from game.js - shape/orientation generation is duplicated (same approach
-// replay.js already takes, for the same reason). Two modes share this file:
+// replay.js already takes, for the same reason). Three modes share this file:
 //   - Speedrun: a cascading capture/removal mechanic all its own (enclose a
 //     small pocket and the walling pieces vanish, freeing the space back
 //     up) - see runCaptureCascade().
@@ -9,10 +9,15 @@
 //     captured territory (see computeCapturedCount(), which mirrors
 //     game.js's computeFinalScores() minus the two-player owner-conflict
 //     case, since there's only ever one color here).
-// Board size varies by mode (Speedrun: 9x9, Eogonim: 10x10) - see
+//   - Ascension: a roguelike built on Eogonim's no-removal capture rule.
+//     Start with one randomly-offered shape (infinite supply), place until
+//     stuck, and if that round's captured total clears an escalating
+//     threshold, unlock a new shape, reset the board, and go again - see
+//     the "Ascension run flow" section below.
+// Board size varies by mode (Speedrun: 9x9, Eogonim/Ascension: 10x10) - see
 // BOARD_SIZES and setMode() below - so this is reassigned rather than a const.
 let BOARD_SIZE = 9;
-const BOARD_SIZES = { speedrun: 9, eogonim: 10 };
+const BOARD_SIZES = { speedrun: 9, eogonim: 10, ascension: 10 };
 const CELL_PX = 52;
 const MAX_CAPTURE_SIZE = 4; // speedrun only - enclosures bigger than this don't count. Eogonim has no size cap, matching real Minogoe scoring.
 const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, eogonim has no preview
@@ -86,14 +91,14 @@ function idx(r, c) { return r * BOARD_SIZE + c; }
 // 2 at all, since pieces there never disappear; its captured count is only
 // ever a computed number (see computeCapturedCount()), not a board state.
 const state = {
-  mode: 'speedrun', // 'speedrun' | 'eogonim' - persists across resetBoardState(), only setMode() changes it
+  mode: 'speedrun', // 'speedrun' | 'eogonim' | 'ascension' - persists across resetBoardState(), only setMode()/startRun() change it
   board: new Uint8Array(BOARD_SIZE * BOARD_SIZE),
   pieceIdAt: new Int32Array(BOARD_SIZE * BOARD_SIZE),
   pieceCells: new Map(), // pieceId -> number[] of cell indices
   nextPieceId: 1,
   running: false,
   finished: false,
-  failed: false, // speedrun only - eogonim has no fail state, every ending is a valid (scored) result
+  failed: false, // speedrun only - eogonim/ascension have no fail state, every ending is a valid (scored) result
   selected: null, // { shapeName, orientationIndex } - the current piece being placed
   pieceQueue: [], // shapeNames coming up after the current piece, length LOOKAHEAD_COUNT - speedrun only
   mouseRC: null,
@@ -101,9 +106,23 @@ const state = {
   lastTapCell: null,
   startTime: null,
   finalTimeMs: null,
-  totalCaptured: 0, // running captured-territory count - this is eogonim's score. Also incremented by speedrun's cascade, but never displayed there.
+  totalCaptured: 0, // running captured-territory count - eogonim's score, and ascension's CURRENT ROUND score (reset every round, not every run). Also incremented by speedrun's cascade, but never displayed there.
+  // Ascension-only - deliberately NOT touched by resetBoardState() (which
+  // runs between rounds too), only by startRun()/setMode(), since these
+  // need to persist across a round reset within the same run.
+  round: 1,
+  unlockedShapes: [],
+  // Ascension-only - true while the "pick your next shape" interstitial is
+  // showing (between startRun()/a round pass and the next round's first
+  // placement). IS reset by resetBoardState() since it's board-adjacent UI
+  // state, not run-progress state.
+  awaitingPieceChoice: false,
+  pieceChoices: [], // shapeNames currently offered during the interstitial
 };
 
+// Used both for a brand new run (startRun()) AND between Ascension rounds
+// (chooseShape()) - deliberately leaves state.round/unlockedShapes alone,
+// since those need to survive a round reset within the same run.
 function resetBoardState() {
   state.board = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
   state.pieceIdAt = new Int32Array(BOARD_SIZE * BOARD_SIZE);
@@ -119,6 +138,8 @@ function resetBoardState() {
   state.startTime = null;
   state.finalTimeMs = null;
   state.totalCaptured = 0;
+  state.awaitingPieceChoice = false;
+  state.pieceChoices = [];
 }
 
 // ---------- Placement legality ----------
@@ -154,6 +175,42 @@ function drawWeightedPiece() {
   const roll = Math.random();
   const pool = roll < 0.70 ? PENTOMINO_NAMES : roll < 0.90 ? TETROMINO_NAMES : TROMINO_NAMES;
   return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// Ascension-only: same 70/20/10 category weighting as drawWeightedPiece(),
+// but scoped to a caller-supplied pool of still-available shapes (already-
+// unlocked ones excluded) - falls back to whichever category still has
+// anything left if the weighted-roll's own category is empty, so this
+// always returns something as long as `available` is non-empty.
+function drawWeightedPieceFrom(available) {
+  const avail = (names) => names.filter((n) => available.includes(n));
+  const availPent = avail(PENTOMINO_NAMES);
+  const availTetra = avail(TETROMINO_NAMES);
+  const availTri = avail(TROMINO_NAMES);
+  const roll = Math.random();
+  let pool = roll < 0.70 ? availPent : roll < 0.90 ? availTetra : availTri;
+  if (pool.length === 0) pool = availPent.length ? availPent : availTetra.length ? availTetra : availTri;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// Offers up to 3 distinct shapes the player hasn't already unlocked.
+function rollPieceChoices() {
+  const remaining = Object.keys(BASE_SHAPES).filter((n) => !state.unlockedShapes.includes(n));
+  const choices = [];
+  while (choices.length < 3 && remaining.length > 0) {
+    const pick = drawWeightedPieceFrom(remaining);
+    choices.push(pick);
+    remaining.splice(remaining.indexOf(pick), 1);
+  }
+  return choices;
+}
+
+// Round score thresholds: 10, 15, 18, then +2 every round after that
+// (20, 22, 24, ...) - see the plan/user spec for why these specific numbers.
+function ascensionThreshold(round) {
+  if (round === 1) return 10;
+  if (round === 2) return 15;
+  return 18 + (round - 3) * 2;
 }
 
 // ---------- Capture / cascade ----------
@@ -282,16 +339,41 @@ function startRun() {
     state.startTime = Date.now();
     startTimerTick();
   }
+  if (state.mode === 'ascension') {
+    state.round = 1;
+    state.unlockedShapes = [];
+  }
   state.running = true;
-  spawnNextPiece();
+  if (state.mode === 'ascension') {
+    showPieceChoice();
+  } else {
+    spawnNextPiece();
+  }
   render();
 }
 
 // Speedrun pulls the current piece from the front of the lookahead queue and
 // refills the back of it, so the next LOOKAHEAD_COUNT pieces are always
 // visible in advance. Eogonim has no preview at all - each piece is drawn
-// fresh, right when it's handed to you.
+// fresh, right when it's handed to you. Ascension draws randomly from
+// whichever shapes are currently unlocked, but only from among the ones
+// that actually have a legal placement right now - so the player is never
+// handed something unplaceable while an unlocked alternative would fit; the
+// round only ends once literally none of them do.
 function spawnNextPiece() {
+  if (state.mode === 'ascension') {
+    const placeable = state.unlockedShapes.filter((s) => hasAnyLegalMove(s, state.board));
+    if (placeable.length === 0) {
+      evaluateRoundEnd();
+      return;
+    }
+    const shapeName = placeable[Math.floor(Math.random() * placeable.length)];
+    state.selected = { shapeName, orientationIndex: 0 };
+    recomputeHover();
+    render();
+    return;
+  }
+
   const shapeName = state.mode === 'speedrun' ? state.pieceQueue.shift() : drawWeightedPiece();
   if (state.mode === 'speedrun') state.pieceQueue.push(drawWeightedPiece());
   state.selected = { shapeName, orientationIndex: 0 };
@@ -322,9 +404,10 @@ function commitPlacement(r0, c0) {
   state.hover = null;
 
   // Speedrun's cascade mutates the board (captures + removes the walling
-  // pieces); eogonim scores like a real Minogoe match instead - pieces stay
-  // put forever, so its "captured" total is just recomputed fresh here for
-  // the live display, with no board mutation at all.
+  // pieces); eogonim/ascension score like a real Minogoe match instead -
+  // pieces stay put forever, so the "captured" total (ascension's current
+  // ROUND score) is just recomputed fresh here for the live display, with
+  // no board mutation at all.
   if (state.mode === 'speedrun') {
     runCaptureCascade();
   } else {
@@ -339,8 +422,12 @@ function commitPlacement(r0, c0) {
       // color them in like the rest of the board for the finished view.
       for (let i = 0; i < state.board.length; i++) if (state.board[i] === 1) state.board[i] = 2;
       finishRun();
-    } else {
+    } else if (state.mode === 'eogonim') {
       finishEogonimRun();
+    } else {
+      // A completely full board is just a special case of "nothing fits
+      // anywhere" for ascension too - same round-end evaluation either way.
+      evaluateRoundEnd();
     }
     return;
   }
@@ -375,6 +462,50 @@ function finishEogonimRun() {
   state.failed = false;
   render();
   saveEogonimScoreIfBest(state.totalCaptured);
+}
+
+// ---------- Ascension run flow ----------
+
+// Shown at the very start of a run and again after every round pass -
+// state.running stays true throughout (so Restart/tab-disabling behave the
+// same as mid-placement), it's just a different interactive state than
+// actually placing pieces on the board.
+function showPieceChoice() {
+  state.pieceChoices = rollPieceChoices();
+  state.awaitingPieceChoice = true;
+  state.selected = null;
+  state.hover = null;
+  render();
+}
+
+// Called when the player clicks one of the offered shapes, both for round 1
+// (from startRun()) and every round after (from evaluateRoundEnd()).
+function chooseShape(shapeName) {
+  state.unlockedShapes.push(shapeName);
+  resetBoardState(); // clears the board/totalCaptured for the new round - does NOT touch state.round/unlockedShapes
+  state.running = true; // resetBoardState() sets this false, same re-set startRun() already does after calling it
+  spawnNextPiece();
+  render();
+}
+
+// Called once spawnNextPiece() finds that none of the currently-unlocked
+// shapes have a legal placement anywhere (including the "board is
+// completely full" case, via commitPlacement()'s isBoardComplete() check).
+function evaluateRoundEnd() {
+  if (state.totalCaptured >= ascensionThreshold(state.round)) {
+    state.round += 1;
+    showPieceChoice();
+  } else {
+    finishAscensionRun();
+  }
+}
+
+function finishAscensionRun() {
+  state.running = false;
+  state.finished = true;
+  state.failed = false; // no separate visual "failed" state - the dedicated ascension render() branch covers this
+  render();
+  saveAscensionScoreIfBest(state.round - 1); // rounds successfully CLEARED, not the round that was failed
 }
 
 // ---------- Rotation / hover ----------
@@ -430,23 +561,34 @@ function setMode(mode) {
   BOARD_SIZE = BOARD_SIZES[mode];
   resizeCanvasForMode();
   resetBoardState();
+  // resetBoardState() deliberately leaves round/unlockedShapes alone (they
+  // need to survive a mid-run round reset) - switching modes entirely is
+  // the one place those need to be cleared explicitly instead.
+  state.round = 1;
+  state.unlockedShapes = [];
   updateModeUI();
   render();
   refreshLeaderboard();
 }
 
 function updateModeUI() {
-  const isEogonim = state.mode === 'eogonim';
-  document.getElementById('spTabSpeedrun').classList.toggle('active', !isEogonim);
-  document.getElementById('spTabEogonim').classList.toggle('active', isEogonim);
-  document.getElementById('spModeTitle').textContent = isEogonim ? 'Eogonim' : 'Speedrun';
-  document.getElementById('spUpcomingLabel').style.display = isEogonim ? 'none' : '';
-  document.getElementById('spUpcomingPieces').style.display = isEogonim ? 'none' : '';
-  document.getElementById('spRulesSpeedrun').style.display = isEogonim ? 'none' : '';
-  document.getElementById('spRulesEogonim').style.display = isEogonim ? '' : 'none';
-  document.getElementById('spLeaderboardTitle').textContent = isEogonim ? 'Lowest Scores' : 'Top Times';
+  const mode = state.mode;
+  document.getElementById('spTabSpeedrun').classList.toggle('active', mode === 'speedrun');
+  document.getElementById('spTabEogonim').classList.toggle('active', mode === 'eogonim');
+  document.getElementById('spTabAscension').classList.toggle('active', mode === 'ascension');
+  document.getElementById('spModeTitle').textContent =
+    mode === 'ascension' ? 'Ascension' : mode === 'eogonim' ? 'Eogonim' : 'Speedrun';
+  document.getElementById('spUpcomingLabel').style.display = mode === 'speedrun' ? '' : 'none';
+  document.getElementById('spUpcomingPieces').style.display = mode === 'speedrun' ? '' : 'none';
+  document.getElementById('spRulesSpeedrun').style.display = mode === 'speedrun' ? '' : 'none';
+  document.getElementById('spRulesEogonim').style.display = mode === 'eogonim' ? '' : 'none';
+  document.getElementById('spRulesAscension').style.display = mode === 'ascension' ? '' : 'none';
+  document.getElementById('spLeaderboardTitle').textContent =
+    mode === 'ascension' ? 'Deepest Runs' : mode === 'eogonim' ? 'Lowest Scores' : 'Top Times';
   document.getElementById('spSaveStatus').textContent = '';
-  document.getElementById('spTimer').textContent = isEogonim ? 'Captured: 0' : formatTime(0);
+  document.getElementById('spPieceChoices').style.display = 'none';
+  document.getElementById('spTimer').textContent =
+    mode === 'eogonim' ? 'Captured: 0' : mode === 'ascension' ? `Round 1 - 0/${ascensionThreshold(1)}` : formatTime(0);
 }
 
 // ---------- Rendering ----------
@@ -492,8 +634,32 @@ function drawBoard() {
   }
 }
 
+// Renders the "pick your next shape" interstitial into #spPieceChoices -
+// only ever visible while state.awaitingPieceChoice is true (ascension only).
+function renderPieceChoices() {
+  const container = document.getElementById('spPieceChoices');
+  if (!state.awaitingPieceChoice) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  container.style.display = '';
+  container.innerHTML = state.pieceChoices.map((shapeName, i) => `
+    <button type="button" class="sp-piece-choice-btn" data-index="${i}">
+      <canvas class="sp-piece-choice-canvas"></canvas>
+      <span>${shapeName}</span>
+    </button>
+  `).join('');
+  const canvases = container.querySelectorAll('.sp-piece-choice-canvas');
+  state.pieceChoices.forEach((shapeName, i) => drawShapeIcon(canvases[i], BASE_SHAPES[shapeName], 12));
+  container.querySelectorAll('.sp-piece-choice-btn').forEach((btn) => {
+    btn.addEventListener('click', () => chooseShape(state.pieceChoices[Number(btn.dataset.index)]));
+  });
+}
+
 function render() {
   drawBoard();
+  renderPieceChoices();
 
   const banner = document.getElementById('spBanner');
   const pieceInfo = document.getElementById('spPieceInfo');
@@ -502,16 +668,27 @@ function render() {
 
   document.getElementById('spTabSpeedrun').disabled = state.running;
   document.getElementById('spTabEogonim').disabled = state.running;
+  document.getElementById('spTabAscension').disabled = state.running;
 
   if (state.mode === 'eogonim') {
     document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured}`;
+  } else if (state.mode === 'ascension') {
+    document.getElementById('spTimer').textContent = `Round ${state.round} - ${state.totalCaptured}/${ascensionThreshold(state.round)}`;
   }
 
   if (!state.running && !state.finished) {
     banner.textContent = 'Click Start to begin';
     pieceInfo.textContent = state.mode === 'eogonim'
       ? "You'll get one random piece at a time, with no preview of what's coming - keep your captured territory as low as possible."
-      : "You'll get one random piece at a time - place it anywhere it fits.";
+      : state.mode === 'ascension'
+        ? 'Pick a starting shape, then capture enough territory each round to keep unlocking more.'
+        : "You'll get one random piece at a time - place it anywhere it fits.";
+  } else if (state.mode === 'ascension' && state.awaitingPieceChoice) {
+    banner.textContent = state.round === 1 ? 'Choose your starting shape!' : `Round ${state.round - 1} cleared! Choose your next shape.`;
+    pieceInfo.textContent = 'Pick a shape below to add it to your collection.';
+  } else if (state.mode === 'ascension' && state.finished) {
+    banner.textContent = `Run over — cleared ${state.round - 1} round${state.round - 1 === 1 ? '' : 's'}`;
+    pieceInfo.textContent = `Needed ${ascensionThreshold(state.round)} this round, got ${state.totalCaptured}. Click Restart to try again.`;
   } else if (state.mode === 'eogonim' && state.finished) {
     banner.textContent = `Run over — captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
     pieceInfo.textContent = 'Click Restart to try for a lower score.';
@@ -614,6 +791,7 @@ document.getElementById('mobileRotateBtn').addEventListener('click', rotateSelec
 document.getElementById('spStartBtn').addEventListener('click', startRun);
 document.getElementById('spTabSpeedrun').addEventListener('click', () => setMode('speedrun'));
 document.getElementById('spTabEogonim').addEventListener('click', () => setMode('eogonim'));
+document.getElementById('spTabAscension').addEventListener('click', () => setMode('ascension'));
 
 // ---------- Leaderboard ----------
 async function saveScoreIfBest(timeMs) {
@@ -656,15 +834,38 @@ async function saveEogonimScoreIfBest(score) {
   refreshLeaderboard();
 }
 
+// Same discipline again, via submit_ascension_score() - the one case where
+// "better" means HIGHER, not lower (more rounds cleared).
+async function saveAscensionScoreIfBest(rounds) {
+  const user = Auth.getUser();
+  if (!user) {
+    document.getElementById('spSaveStatus').textContent = 'Sign in to save your score to the leaderboard.';
+    return;
+  }
+  const { data: bestRounds, error } = await supabaseClient.rpc('submit_ascension_score', { p_round: rounds });
+  if (error) {
+    document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
+    return;
+  }
+  document.getElementById('spSaveStatus').textContent = bestRounds === rounds
+    ? 'New personal best - saved!'
+    : `Saved. Your best is still ${bestRounds} round${bestRounds === 1 ? '' : 's'}.`;
+  refreshLeaderboard();
+}
+
 async function refreshLeaderboard() {
   const container = document.getElementById('spLeaderboard');
-  const isEogonim = state.mode === 'eogonim';
-  const scoreColumn = isEogonim ? 'score' : 'time_ms';
+  const mode = state.mode;
+  const scoreColumn = mode === 'speedrun' ? 'time_ms' : 'score';
+  // Every mode except ascension is "lower is better" (fastest time, fewest
+  // captured squares) - ascension is the one case where more (rounds
+  // cleared) is better.
+  const ascending = mode !== 'ascension';
   const { data, error } = await supabaseClient
     .from('singleplayer_runs')
     .select(`${scoreColumn}, profiles(id, username, avatar_id, title_id)`)
-    .eq('mode', state.mode)
-    .order(scoreColumn, { ascending: true })
+    .eq('mode', mode)
+    .order(scoreColumn, { ascending })
     .limit(10);
 
   if (error) {
@@ -674,17 +875,24 @@ async function refreshLeaderboard() {
 
   await Catalog.ready();
 
+  const formatScore = (row) => {
+    if (mode === 'speedrun') return formatTime(row.time_ms);
+    if (mode === 'ascension') return `${row.score} round${row.score === 1 ? '' : 's'}`;
+    return row.score;
+  };
+  const columnLabel = mode === 'speedrun' ? 'Time' : mode === 'ascension' ? 'Rounds' : 'Score';
+
   const rows = (data || []).map((row, i) => `
     <tr>
       <td>${i + 1}</td>
       <td class="leaderboard-player-cell">${avatarHtml(row.profiles.avatar_id, 20)} <a href="profile.html?user=${encodeURIComponent(row.profiles.id)}">${escapeHtml(row.profiles.username)}</a> ${titleBadgeHtml(row.profiles.title_id)}</td>
-      <td>${isEogonim ? row.score : formatTime(row.time_ms)}</td>
+      <td>${formatScore(row)}</td>
     </tr>
   `).join('');
 
   container.innerHTML = `
     <table class="games-table">
-      <thead><tr><th>#</th><th>Player</th><th>${isEogonim ? 'Score' : 'Time'}</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>${columnLabel}</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="3">No runs yet - be the first!</td></tr>'}</tbody>
     </table>
   `;

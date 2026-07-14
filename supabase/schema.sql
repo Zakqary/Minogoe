@@ -2538,3 +2538,59 @@ begin
   return current_coins - pot_price;
 end;
 $$;
+
+-- ---------- Phase 36: singleplayer "Ascension" mode (roguelike escalating rounds) ----------
+
+-- Extends the mode check constraint (same explicit drop-then-add pattern as
+-- the eogonim rename above - never an inline "check (...)" on "add column
+-- if not exists", since that silently keeps enforcing whatever the OLD
+-- allowed set was on any database that already ran an earlier version of
+-- this constraint).
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'ascension'));
+
+-- Ascension reuses the existing "score" column (an integer number of
+-- rounds cleared) rather than adding a new column - same shape as eogonim's
+-- score, just a different unit and a different "better" direction (higher,
+-- not lower - handled client-side by refreshLeaderboard()'s sort order and
+-- server-side by submit_ascension_score() below).
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
+  check (
+    (mode = 'speedrun' and time_ms is not null and score is null)
+    or (mode = 'eogonim' and score is not null and time_ms is null)
+    or (mode = 'ascension' and score is not null and time_ms is null)
+  );
+
+-- Same "server decides if it's actually an improvement" discipline as
+-- submit_singleplayer_score(), but inverted: an ascension score is a round
+-- count (higher is better), not a captured-square count (lower is better).
+create or replace function public.submit_ascension_score(p_round integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_round integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_round is null or p_round < 0 then
+    raise exception 'Invalid round';
+  end if;
+
+  select score into existing_round from public.singleplayer_runs where user_id = uid and mode = 'ascension' for update;
+
+  if existing_round is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'ascension', p_round);
+    return p_round;
+  elsif p_round > existing_round then
+    update public.singleplayer_runs set score = p_round, completed_at = now() where user_id = uid and mode = 'ascension';
+    return p_round;
+  else
+    return existing_round;
+  end if;
+end;
+$$;

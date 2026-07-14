@@ -849,6 +849,44 @@ h2, h3 {
   opacity: 0.85;
 }
 
+/* Ascension's "pick your next shape" interstitial - a row of clickable
+   shape cards, shown in place of the current-piece/upcoming-pieces
+   displays between rounds (see updateModeUI()/renderPieceChoices() in
+   singleplayer.js). */
+.sp-piece-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.sp-piece-choice-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: var(--font-body);
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.sp-piece-choice-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.sp-piece-choice-btn canvas {
+  background: var(--surface);
+  border-radius: 5px;
+  padding: 4px;
+}
+
 #connectBtn:hover:not(:disabled), #casualQueueBtn:hover:not(:disabled),
 #rankedQueueBtn:hover:not(:disabled), #newGameBtn:hover:not(:disabled), #spStartBtn:hover:not(:disabled) {
   background: var(--accent-hover);

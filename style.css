@@ -849,6 +849,15 @@ h2, h3 {
   opacity: 0.85;
 }
 
+/* Ascension's "Your shapes" inventory reuses .sp-upcoming-pieces/-item for
+   the same icon-grid look, but highlights whichever shape is currently the
+   drawn piece in play. */
+.sp-upcoming-item-active canvas {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+  opacity: 1;
+}
+
 /* Ascension's "pick your next shape" interstitial - a row of clickable
    shape cards, shown in place of the current-piece/upcoming-pieces
    displays between rounds (see updateModeUI()/renderPieceChoices() in

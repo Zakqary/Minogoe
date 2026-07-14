@@ -728,6 +728,31 @@ function render() {
       upcomingEl.appendChild(item);
     }
   }
+
+  // Ascension's "inventory" - every shape unlocked so far this run, so the
+  // player doesn't have to remember their own collection while planning
+  // placements. The currently-drawn piece gets a highlight so it's obvious
+  // which one of the collection is actually in play right now.
+  const unlockedLabel = document.getElementById('spUnlockedLabel');
+  const unlockedEl = document.getElementById('spUnlockedShapes');
+  if (state.mode === 'ascension' && state.unlockedShapes.length > 0) {
+    unlockedLabel.style.display = '';
+    unlockedEl.style.display = '';
+    unlockedEl.innerHTML = '';
+    for (const shapeName of state.unlockedShapes) {
+      const item = document.createElement('div');
+      item.className = 'sp-upcoming-item';
+      if (state.selected && state.selected.shapeName === shapeName) item.classList.add('sp-upcoming-item-active');
+      const c = document.createElement('canvas');
+      drawShapeIcon(c, BASE_SHAPES[shapeName], 14);
+      item.appendChild(c);
+      unlockedEl.appendChild(item);
+    }
+  } else {
+    unlockedLabel.style.display = 'none';
+    unlockedEl.style.display = 'none';
+    unlockedEl.innerHTML = '';
+  }
 }
 
 // ---------- Canvas interaction ----------

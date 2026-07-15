@@ -107,26 +107,46 @@ function removeFromQueues(socket) {
   }
 }
 
+// Finds the first pair of DIFFERENT users in the queue (queue order, not
+// necessarily indices 0/1) and pairs them - skips over same-user pairs so
+// a player can never end up matched against their own second tab/device.
+// If everyone currently waiting happens to be the same user (multi-
+// tabbing with no one else in queue), this just stops - they stay queued
+// until a genuine opponent shows up, exactly like normal "still waiting."
 function tryMatchCasual() {
-  while (casualQueue.length >= 2) {
-    const a = casualQueue.shift();
-    const b = casualQueue.shift();
+  while (true) {
+    let pair = null;
+    outer:
+    for (let i = 0; i < casualQueue.length; i++) {
+      for (let j = i + 1; j < casualQueue.length; j++) {
+        if (casualQueue[i].userId !== casualQueue[j].userId) { pair = [i, j]; break outer; }
+      }
+    }
+    if (!pair) return;
+    const [i, j] = pair;
+    const b = casualQueue.splice(j, 1)[0];
+    const a = casualQueue.splice(i, 1)[0];
     if (a.socket.readyState !== WebSocket.OPEN && b.socket.readyState !== WebSocket.OPEN) continue;
-    if (a.socket.readyState !== WebSocket.OPEN) { casualQueue.unshift(b); continue; }
-    if (b.socket.readyState !== WebSocket.OPEN) { casualQueue.unshift(a); continue; }
+    if (a.socket.readyState !== WebSocket.OPEN) { casualQueue.push(b); continue; }
+    if (b.socket.readyState !== WebSocket.OPEN) { casualQueue.push(a); continue; }
     pairSockets(a, b, 'casual');
   }
 }
 
+// Same closest-ELO search as before, but the same-user skip above also
+// applies here - the inner scan just ignores any pair sharing a userId
+// while still finding the closest-rated valid pair among the rest.
 function tryMatchRanked() {
-  while (rankedQueue.length >= 2) {
-    let bestI = 0, bestJ = 1, bestDiff = Infinity;
+  while (true) {
+    let bestI = -1, bestJ = -1, bestDiff = Infinity;
     for (let i = 0; i < rankedQueue.length; i++) {
       for (let j = i + 1; j < rankedQueue.length; j++) {
+        if (rankedQueue[i].userId === rankedQueue[j].userId) continue;
         const diff = Math.abs(rankedQueue[i].eloRating - rankedQueue[j].eloRating);
         if (diff < bestDiff) { bestDiff = diff; bestI = i; bestJ = j; }
       }
     }
+    if (bestI === -1) return;
     const b = rankedQueue.splice(bestJ, 1)[0];
     const a = rankedQueue.splice(bestI, 1)[0];
     if (a.socket.readyState !== WebSocket.OPEN && b.socket.readyState !== WebSocket.OPEN) continue;
@@ -240,28 +260,58 @@ wss.on('connection', (socket) => {
     }
 
     if (msg.type === 'join') {
-      const roomCode = String(msg.room || '').trim().toUpperCase().slice(0, MAX_ROOM_CODE_LENGTH);
-      if (!roomCode) return;
+      if (pendingSocketRequests.has(socket)) return; // already processing a request for this socket
+      pendingSocketRequests.add(socket);
+      try {
+        const roomCode = String(msg.room || '').trim().toUpperCase().slice(0, MAX_ROOM_CODE_LENGTH);
+        if (!roomCode) return;
 
-      let room = rooms.get(roomCode);
-      if (!room) {
-        room = { mode: 'private', slots: [] };
-        rooms.set(roomCode, room);
-      }
-      if (room.slots.length >= 2) {
-        socket.send(JSON.stringify({ type: 'full' }));
-        return;
-      }
-
-      const isHost = room.slots.length === 0;
-      room.slots.push({ socket, userId: null, isHost, disconnectTimer: null });
-      socketRoom.set(socket, roomCode);
-      socket.send(JSON.stringify({ type: 'joined', isHost }));
-
-      if (room.slots.length === 2) {
-        for (const s of room.slots) {
-          s.socket.send(JSON.stringify({ type: 'ready', mode: 'private' }));
+        // Verified only if the client is logged in and supplied
+        // credentials - a guest (or an older client from before this
+        // existed) joins exactly as before, with userId left null. Never
+        // trust msg.userId on its own without verifying it against the
+        // access token, same discipline as the queue/rejoin handlers.
+        let userId = null;
+        if (msg.userId && msg.accessToken) {
+          const user = await verifySupabaseUser(msg.accessToken);
+          if (user && user.id === msg.userId) userId = user.id;
         }
+
+        let room = rooms.get(roomCode);
+        if (!room) {
+          room = { mode: 'private', slots: [] };
+          rooms.set(roomCode, room);
+        }
+        if (room.slots.length >= 2) {
+          socket.send(JSON.stringify({ type: 'full' }));
+          return;
+        }
+
+        // A logged-in player can't join their own private room from a
+        // second tab/device - would otherwise let someone "play
+        // themselves" and submit a fabricated result. This is on top of,
+        // not instead of, the database's own games_distinct_players_check
+        // constraint, which only ever catches it once a result is
+        // actually submitted at the END of a game - this stops it at
+        // matchmaking time instead. Guests (userId still null here) can't
+        // be checked this way and are unaffected, same as before.
+        if (userId && room.slots.some((s) => s.userId === userId)) {
+          socket.send(JSON.stringify({ type: 'self-join-blocked' }));
+          return;
+        }
+
+        const isHost = room.slots.length === 0;
+        room.slots.push({ socket, userId, isHost, disconnectTimer: null });
+        socketRoom.set(socket, roomCode);
+        socket.send(JSON.stringify({ type: 'joined', isHost }));
+
+        if (room.slots.length === 2) {
+          for (const s of room.slots) {
+            s.socket.send(JSON.stringify({ type: 'ready', mode: 'private' }));
+          }
+        }
+      } finally {
+        pendingSocketRequests.delete(socket);
       }
       return;
     }

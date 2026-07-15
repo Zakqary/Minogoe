@@ -54,11 +54,23 @@ async function renderProfilePage() {
 
   // Rank on the ELO leaderboard - number of players with a strictly higher
   // rating, plus one. A count query instead of fetching every profile.
-  const { count: higherEloCount, error: rankError } = await supabaseClient
-    .from('profiles')
-    .select('id', { count: 'exact', head: true })
-    .gt('elo_rating', profile.elo_rating);
-  const rank = rankError ? null : (higherEloCount ?? 0) + 1;
+  // Only meaningful for a player who's actually played a ranked game -
+  // everyone else sits at the untouched 1200 default, which was never
+  // earned and shouldn't be treated like a real rating (same reasoning as
+  // leaderboard.js's own "Unranked" handling). Both the comparison pool
+  // AND this profile's own rank/elo/peak-elo display are gated on that,
+  // so a real ranked player's rank is computed only against other
+  // genuinely-ranked players too, not diluted by never-played accounts
+  // parked at the default.
+  let rank = null;
+  if (profile.ranked_games_played > 0) {
+    const { count: higherEloCount, error: rankError } = await supabaseClient
+      .from('profiles')
+      .select('id', { count: 'exact', head: true })
+      .gt('elo_rating', profile.elo_rating)
+      .gt('ranked_games_played', 0);
+    rank = rankError ? null : (higherEloCount ?? 0) + 1;
+  }
 
   // Only meaningful when looking at someone ELSE's profile while signed
   // in - there's no "vs yourself" record to show otherwise.
@@ -234,9 +246,9 @@ async function renderProfilePage() {
     <h2 class="profile-heading">${avatarHtml(profile.avatar_id, 36)} ${escapeHtml(profile.username)} ${titleBadgeHtml(profile.title_id)} ${companionHtml}</h2>
     ${joinedText ? `<div class="profile-joined">Account created on ${escapeHtml(joinedText)}</div>` : ''}
     <div class="profile-stats">
-      <div class="stat"><div class="stat-value">${rank != null ? '#' + rank : '-'}</div><div class="stat-label">Rank</div></div>
-      <div class="stat"><div class="stat-value">${profile.elo_rating}</div><div class="stat-label">ELO</div></div>
-      <div class="stat"><div class="stat-value">${profile.highest_elo}</div><div class="stat-label">Peak ELO</div></div>
+      <div class="stat"><div class="stat-value">${profile.ranked_games_played > 0 ? (rank != null ? '#' + rank : '-') : 'Unranked'}</div><div class="stat-label">Rank</div></div>
+      <div class="stat"><div class="stat-value">${profile.ranked_games_played > 0 ? profile.elo_rating : 'Unranked'}</div><div class="stat-label">ELO</div></div>
+      <div class="stat"><div class="stat-value">${profile.ranked_games_played > 0 ? profile.highest_elo : 'Unranked'}</div><div class="stat-label">Peak ELO</div></div>
       <div class="stat"><div class="stat-value">${profile.pvp_games_played}</div><div class="stat-label">Games</div></div>
       <div class="stat"><div class="stat-value">${profile.pvp_wins}</div><div class="stat-label">Wins</div></div>
       <div class="stat"><div class="stat-value">${profile.pvp_losses}</div><div class="stat-label">Losses</div></div>

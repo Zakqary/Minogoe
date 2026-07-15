@@ -203,6 +203,17 @@ const Net = (() => {
       return;
     }
 
+    // Server rejected a logged-in player joining their own private room
+    // from a second tab/device. Reuses onRoomFull rather than a dedicated
+    // callback - all it actually does on the game.js side is reset
+    // state.connecting and re-render, which is exactly what this needs
+    // too, just with a different status message first.
+    if (msg.type === 'self-join-blocked') {
+      callbacks.onStatus && callbacks.onStatus("You can't join your own room from another tab/device.");
+      callbacks.onRoomFull && callbacks.onRoomFull();
+      return;
+    }
+
     if (msg.type === 'queue-error') {
       callbacks.onStatus && callbacks.onStatus(msg.message || 'Could not join the queue.');
       return;

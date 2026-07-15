@@ -2676,9 +2676,18 @@ function connectToPrivateRoom(room) {
   state.connecting = true;
   render();
   setLobbyStatus(`Connecting to room ${room}... (if this seems stuck for a while, it is safe to click again to retry)`);
+  // userId/accessToken are only included when actually signed in - a guest
+  // joins exactly as before. The server verifies the token itself before
+  // trusting userId for anything (see server.js's 'join' handler); this
+  // is what lets it reject a logged-in player joining their own room from
+  // a second tab/device.
+  const user = Auth.getUser();
+  const joinMessage = user
+    ? { type: 'join', room, userId: user.id, accessToken: Auth.getAccessToken() }
+    : { type: 'join', room };
   Net.connect({
     serverUrl: SIGNALING_SERVER_URL,
-    joinMessage: { type: 'join', room },
+    joinMessage,
     onStatus: setLobbyStatus,
     onReady: handleNetReady,
     onData: handleNetData,

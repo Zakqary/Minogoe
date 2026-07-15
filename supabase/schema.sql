@@ -2555,26 +2555,25 @@ $$;
 
 -- ---------- Phase 36: singleplayer "Ascension" mode (roguelike escalating rounds) ----------
 
--- Extends the mode check constraint (same explicit drop-then-add pattern as
--- the eogonim rename above - never an inline "check (...)" on "add column
--- if not exists", since that silently keeps enforcing whatever the OLD
--- allowed set was on any database that already ran an earlier version of
--- this constraint).
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'ascension'));
-
+-- Deliberately NOT adding/re-adding singleplayer_runs_mode_check or
+-- singleplayer_runs_mode_fields_check here - this phase used to re-add both
+-- with a 3-value mode list (missing 'blindeogonim' and 'exactmatch', added
+-- by later phases), which on a full re-run of this file re-narrowed both
+-- constraints right back down, rejecting any real 'blindeogonim'/
+-- 'exactmatch' row a player had already saved before this phase even
+-- finished running - failing here, before Phase 40/41 below's wider
+-- versions ever got a chance to run. Same recurring bug class as
+-- get_p1_p2_win_rates()/buy_seed_pack()/Phase 33's singleplayer_runs_mode_
+-- check earlier in this file (and the identical mistake Phase 40 itself
+-- made until it was fixed too) - whichever phase touches this constraint
+-- LAST owns it (Phase 41 today); do not add a narrower version of either
+-- constraint here again, in ANY earlier phase.
+--
 -- Ascension reuses the existing "score" column (an integer number of
 -- rounds cleared) rather than adding a new column - same shape as eogonim's
 -- score, just a different unit and a different "better" direction (higher,
 -- not lower - handled client-side by refreshLeaderboard()'s sort order and
 -- server-side by submit_ascension_score() below).
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
-  check (
-    (mode = 'speedrun' and time_ms is not null and score is null)
-    or (mode = 'eogonim' and score is not null and time_ms is null)
-    or (mode = 'ascension' and score is not null and time_ms is null)
-  );
 
 -- Same "server decides if it's actually an improvement" discipline as
 -- submit_singleplayer_score(), but inverted: an ascension score is a round

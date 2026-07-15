@@ -3190,3 +3190,60 @@ begin
   end if;
 end;
 $$;
+
+-- ---------- Phase 41: singleplayer "Exact Match" mode (precision variant of Eogonim) ----------
+
+-- Same explicit drop-then-add pattern as every earlier mode addition in
+-- this file - this is now the latest phase to touch these two constraints,
+-- so it's the one that owns them; nothing earlier in the file should ever
+-- re-add a narrower version again (see Phase 33/36's comments for why).
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension', 'exactmatch'));
+
+-- Exact Match reuses the existing "score" column exactly like Ascension
+-- does (an integer number of rounds cleared in a row, higher is better) -
+-- same shape, different rounds - no new column needed.
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
+  check (
+    (mode = 'speedrun' and time_ms is not null and score is null)
+    or (mode = 'eogonim' and score is not null and time_ms is null)
+    or (mode = 'blindeogonim' and score is not null and time_ms is null)
+    or (mode = 'ascension' and score is not null and time_ms is null)
+    or (mode = 'exactmatch' and score is not null and time_ms is null)
+  );
+
+-- Same "server decides if it's actually an improvement" discipline as
+-- submit_ascension_score(), and the same higher-is-better comparison
+-- direction (rounds cleared) - kept as its own RPC/leaderboard row rather
+-- than reusing submit_ascension_score(), same reasoning as every other
+-- mode-specific submit_*() function in this file.
+create or replace function public.submit_exactmatch_score(p_round integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_round integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_round is null or p_round < 0 then
+    raise exception 'Invalid round';
+  end if;
+
+  select score into existing_round from public.singleplayer_runs where user_id = uid and mode = 'exactmatch' for update;
+
+  if existing_round is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'exactmatch', p_round);
+    return p_round;
+  elsif p_round > existing_round then
+    update public.singleplayer_runs set score = p_round, completed_at = now() where user_id = uid and mode = 'exactmatch';
+    return p_round;
+  else
+    return existing_round;
+  end if;
+end;
+$$;

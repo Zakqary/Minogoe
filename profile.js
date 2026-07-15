@@ -98,7 +98,8 @@ async function renderProfilePage() {
   }
 
   // Lower is better for Speedrun/Eogonim/Blind Eogonim (fastest time / fewest
-  // captured squares), but HIGHER is better for Ascension (more rounds cleared) -
+  // captured squares), but HIGHER is better for Ascension/Exact Match (more
+  // rounds cleared) -
   // rank is "how many OTHER runs in that mode beat this one", plus one,
   // same count-query-instead-of-fetch-everyone technique as the ELO rank
   // above, just flipped (.gt instead of .lt) for ascension. Only shown for
@@ -140,6 +141,13 @@ async function renderProfilePage() {
           .eq('mode', 'ascension')
           .gt('score', run.score);
         boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Ascension &middot; ${run.score} round${run.score === 1 ? '' : 's'}</div></div>`);
+      } else if (run.mode === 'exactmatch') {
+        const { count } = await supabaseClient
+          .from('singleplayer_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('mode', 'exactmatch')
+          .gt('score', run.score);
+        boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Exact Match &middot; ${run.score} round${run.score === 1 ? '' : 's'}</div></div>`);
       }
     }
     if (boxes.length > 0) {

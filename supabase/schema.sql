@@ -3323,3 +3323,128 @@ as $$
   group by shape_name
   order by win_rate desc;
 $$;
+
+-- ---------- Phase 44: Stats page graphs - average score over time, time held rank 1 ----------
+
+-- Same population/filter as get_score_averages() (decided pvp games only),
+-- just bucketed to one row per calendar day instead of one overall
+-- average - one data point per day that actually had a decided pvp game,
+-- not a flat calendar (a day with zero games just doesn't appear, rather
+-- than showing up as a zero/gap).
+create or replace function public.get_score_averages_by_day()
+returns table (
+  day date,
+  avg_winner_score numeric,
+  avg_loser_score numeric,
+  sample_size bigint
+)
+language sql
+stable
+as $$
+  select
+    date_trunc('day', ended_at)::date as day,
+    round(avg(case when winner = 1 then score1 else score2 end), 2) as avg_winner_score,
+    round(avg(case when winner = 1 then score2 else score1 end), 2) as avg_loser_score,
+    count(*) as sample_size
+  from public.games
+  where player2_id is not null and winner is not null
+  group by date_trunc('day', ended_at)
+  order by day;
+$$;
+
+-- Reconstructs how long each player has actually HELD the #1 ELO spot
+-- across the site's whole ranked history, in real elapsed time - not just
+-- who's #1 right now. Only players who've played at least one ranked game
+-- are considered (everyone else sits at the untouched 1200 default, which
+-- isn't a meaningful "rank" to compete over). Approach:
+--   1. elo_after_game: same running-sum reconstruction as highest_elo's
+--      Phase 37 backfill, but keeping every intermediate value (not just
+--      the peak) - this player's ELO immediately after each of their
+--      ranked games.
+--   2. current_elo_at_event: at every timestamp where ANY ranked game
+--      finished, look up each player's most recently known ELO at or
+--      before that moment (last observation carried forward) via a
+--      LATERAL "asof" lookup - this is the classic way to emulate an
+--      as-of join in Postgres, which has no native one.
+--   3. leader_at_event: whoever has the highest current_elo at each event
+--      timestamp is the #1 player starting from that instant, until the
+--      next event (or now(), for the most recent one).
+--   4. Sum each player's total elapsed time across every period they held
+--      that spot.
+-- Step 2 is an O(events x players) cross join - completely fine at this
+-- site's current scale (at most a few thousand ranked games), but would
+-- need a smarter incremental approach or a periodically-refreshed
+-- materialized view if the player base grows substantially.
+create or replace function public.get_rank1_time_leaders()
+returns table (
+  player_id uuid,
+  username text,
+  hours_as_rank1 numeric
+)
+language sql
+stable
+as $$
+  with p_deltas as (
+    select player1_id as player_id, elo_delta_p1 as delta, ended_at, id as game_id
+    from public.games
+    where mode = 'ranked' and player1_id is not null and elo_delta_p1 is not null
+    union all
+    select player2_id as player_id, elo_delta_p2 as delta, ended_at, id as game_id
+    from public.games
+    where mode = 'ranked' and player2_id is not null and elo_delta_p2 is not null
+  ),
+  elo_after_game as (
+    select
+      player_id,
+      game_id,
+      ended_at,
+      1200 + sum(delta) over (
+        partition by player_id order by ended_at, game_id
+        rows between unbounded preceding and current row
+      ) as elo_after
+    from p_deltas
+  ),
+  event_times as (
+    select distinct ended_at from elo_after_game
+  ),
+  distinct_players as (
+    select distinct player_id from elo_after_game
+  ),
+  current_elo_at_event as (
+    select et.ended_at, dp.player_id, asof.elo_after
+    from event_times et
+    cross join distinct_players dp
+    left join lateral (
+      select eag.elo_after
+      from elo_after_game eag
+      where eag.player_id = dp.player_id and eag.ended_at <= et.ended_at
+      order by eag.ended_at desc, eag.game_id desc
+      limit 1
+    ) asof on true
+    where asof.elo_after is not null
+  ),
+  leader_at_event as (
+    select
+      ended_at,
+      player_id,
+      row_number() over (partition by ended_at order by elo_after desc, player_id) as rn
+    from current_elo_at_event
+  ),
+  leader_periods as (
+    select
+      player_id,
+      ended_at as period_start,
+      coalesce(lead(ended_at) over (order by ended_at), now()) as period_end
+    from leader_at_event
+    where rn = 1
+  )
+  select
+    lp.player_id,
+    p.username,
+    round(sum(extract(epoch from (lp.period_end - lp.period_start))) / 3600.0, 1) as hours_as_rank1
+  from leader_periods lp
+  join public.profiles p on p.id = lp.player_id
+  group by lp.player_id, p.username
+  order by hours_as_rank1 desc
+  limit 10;
+$$;

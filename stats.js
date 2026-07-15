@@ -8,6 +8,15 @@ function formatShapeName(shapeName) {
   return letter ? `${letter} ${category}` : (shapeName || 'Unknown');
 }
 
+// get_score_averages_by_day() returns a plain "YYYY-MM-DD" date - parsed
+// via new Date(y, m-1, d) rather than new Date(dayStr) directly, since the
+// latter treats a bare date string as UTC midnight and can display as the
+// PREVIOUS day in any timezone behind UTC.
+function formatDayLabel(dayStr) {
+  const [y, m, d] = dayStr.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 // Duplicated from game.js rather than shared - same standalone-page
 // convention replay.js already follows, since this page doesn't otherwise
 // load any of game.js's live/interactive state machine.
@@ -92,17 +101,92 @@ function pieceRowHtml(shapeName, pct, valueText, color) {
   `;
 }
 
+// Renders a simple two-line chart as an inline SVG - no charting library,
+// same "hand-rolled, no dependency beyond Supabase" convention as every
+// other visual on this site (drawShapeIcon() etc.). preserveAspectRatio
+// "none" plus a fixed CSS height (see .stats-line-chart) means it fills
+// its container's width without distorting into an unreadably short/tall
+// shape on narrow screens.
+function lineChartSvg(series, xLabels) {
+  const width = 640, height = 200;
+  const padL = 34, padR = 10, padT = 10, padB = 24;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const n = xLabels.length;
+
+  const maxVal = Math.max(...series.flatMap((s) => s.points), 1);
+  const xFor = (i) => padL + (n <= 1 ? plotW / 2 : (plotW * i) / (n - 1));
+  const yFor = (v) => padT + plotH - (v / maxVal) * plotH;
+
+  const gridLines = [0, 0.5, 1].map((frac) => {
+    const y = padT + plotH * (1 - frac);
+    return `
+      <line x1="${padL}" y1="${y}" x2="${width - padR}" y2="${y}" stroke="var(--border-soft)" stroke-width="1" />
+      <text x="${padL - 6}" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--text-faint)">${Math.round(maxVal * frac)}</text>
+    `;
+  }).join('');
+
+  const lines = series.map((s) => {
+    const pts = s.points.map((v, i) => `${xFor(i)},${yFor(v)}`).join(' ');
+    const dots = s.points.map((v, i) => `<circle cx="${xFor(i)}" cy="${yFor(v)}" r="2.5" fill="${s.color}" />`).join('');
+    return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" />${dots}`;
+  }).join('');
+
+  // A handful of date labels rather than one per point - with a point per
+  // day, labeling every single one would overlap into an unreadable smear.
+  const labelCount = Math.min(n, 6);
+  const dateLabels = [];
+  for (let k = 0; k < labelCount; k++) {
+    const i = labelCount === 1 ? 0 : Math.round((k * (n - 1)) / (labelCount - 1));
+    dateLabels.push(`<text x="${xFor(i)}" y="${height - 6}" text-anchor="middle" font-size="9" fill="var(--text-faint)">${escapeHtml(xLabels[i])}</text>`);
+  }
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="stats-line-chart" preserveAspectRatio="none">
+      ${gridLines}
+      ${lines}
+      ${dateLabels.join('')}
+    </svg>
+  `;
+}
+
+function lineChartLegendHtml(series) {
+  return `
+    <div class="stats-line-legend">
+      ${series.map((s) => `
+        <span class="stats-legend-item">
+          <span class="stats-legend-swatch" style="background:${s.color};"></span>${escapeHtml(s.label)}
+        </span>
+      `).join('')}
+    </div>
+  `;
+}
+
+// "3d 4h" once it crosses a full day, otherwise "X.Xh" - a running ELO
+// leader's reign is usually measured in hours early on and days/weeks once
+// the game has more history.
+function formatHoursAsRank1(hours) {
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    const remHours = Math.round(hours - days * 24);
+    return `${days}d ${remHours}h`;
+  }
+  return `${hours.toFixed(1)}h`;
+}
+
 async function renderStatsPage() {
   const container = document.getElementById('statsContent');
 
-  const [platform, p1p2, firstPiece, scores] = await Promise.all([
+  const [platform, p1p2, firstPiece, scores, scoresByDay, rank1Leaders] = await Promise.all([
     supabaseClient.rpc('get_platform_stats'),
     supabaseClient.rpc('get_p1_p2_win_rates'),
     supabaseClient.rpc('get_first_piece_win_rates'),
     supabaseClient.rpc('get_score_averages'),
+    supabaseClient.rpc('get_score_averages_by_day'),
+    supabaseClient.rpc('get_rank1_time_leaders'),
   ]);
 
-  const firstError = platform.error || p1p2.error || firstPiece.error || scores.error;
+  const firstError = platform.error || p1p2.error || firstPiece.error || scores.error || scoresByDay.error || rank1Leaders.error;
   if (firstError) {
     container.innerHTML = `<p>Could not load stats: ${escapeHtml(firstError.message)}</p>`;
     return;
@@ -158,6 +242,36 @@ async function renderStatsPage() {
     scoreChart = '<p class="stats-chart-empty">Not enough decided pvp games recorded yet.</p>';
   }
 
+  let scoreOverTimeChart;
+  const byDay = scoresByDay.data || [];
+  if (byDay.length > 0) {
+    const dayLabels = byDay.map((r) => formatDayLabel(r.day));
+    const series = [
+      { label: 'Winner', color: 'var(--accent)', points: byDay.map((r) => Number(r.avg_winner_score)) },
+      { label: 'Loser', color: 'var(--danger)', points: byDay.map((r) => Number(r.avg_loser_score)) },
+    ];
+    scoreOverTimeChart = `
+      ${lineChartLegendHtml(series)}
+      ${lineChartSvg(series, dayLabels)}
+    `;
+  } else {
+    scoreOverTimeChart = '<p class="stats-chart-empty">Not enough decided pvp games recorded yet.</p>';
+  }
+
+  let rank1Chart;
+  const leaders = rank1Leaders.data || [];
+  if (leaders.length > 0) {
+    const maxHours = Math.max(...leaders.map((l) => Number(l.hours_as_rank1)), 1);
+    rank1Chart = leaders.map((l) => barRowHtml(
+      l.username,
+      (Number(l.hours_as_rank1) / maxHours) * 100,
+      formatHoursAsRank1(Number(l.hours_as_rank1)),
+      'var(--accent)'
+    )).join('');
+  } else {
+    rank1Chart = '<p class="stats-chart-empty">Not enough ranked history recorded yet.</p>';
+  }
+
   container.innerHTML = `
     ${topStats}
 
@@ -176,6 +290,18 @@ async function renderStatsPage() {
     <div class="stats-chart-card">
       <h3>Average Score: Winner vs Loser</h3>
       ${scoreChart}
+    </div>
+
+    <div class="stats-chart-card">
+      <h3>Average Score Over Time</h3>
+      <p class="stats-chart-note">One data point per day with at least one decided pvp game.</p>
+      ${scoreOverTimeChart}
+    </div>
+
+    <div class="stats-chart-card">
+      <h3>Most Time Spent as the #1 Ranked Player</h3>
+      <p class="stats-chart-note">Total real time each player has actually held the highest ELO on the site, not just their peak rating.</p>
+      ${rank1Chart}
     </div>
   `;
 

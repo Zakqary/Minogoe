@@ -3448,3 +3448,82 @@ as $$
   order by hours_as_rank1 desc
   limit 10;
 $$;
+
+-- ---------- Phase 45: Stats page graphs - ELO distribution histogram, singleplayer record progression ----------
+
+-- Buckets every ranked-active player's CURRENT elo_rating into ~100-point
+-- bands (1000, 1100, 1200, ...). Only players with at least one ranked
+-- game count - everyone else sits at the untouched 1200 default, which
+-- would otherwise dominate the 1200 bucket with players who've never
+-- actually competed, making the "distribution" mostly meaningless.
+create or replace function public.get_elo_distribution()
+returns table (
+  bucket_start integer,
+  player_count bigint
+)
+language sql
+stable
+as $$
+  select
+    (floor(elo_rating / 100.0) * 100)::integer as bucket_start,
+    count(*) as player_count
+  from public.profiles
+  where ranked_games_played > 0
+  group by bucket_start
+  order by bucket_start;
+$$;
+
+-- Reconstructs the singleplayer world-record progression for every mode
+-- (lowest time/score for Speedrun/Eogonim/Blind Eogonim, highest round
+-- count for Ascension) from the CURRENT rows in singleplayer_runs.
+--
+-- IMPORTANT caveat, documented here since there's no way to fully solve
+-- it with the data actually available: singleplayer_runs only ever keeps
+-- each player's latest personal best (submit_*_score()/submit_singleplayer
+-- _time() overwrite the row in place, per-mode) - it was never designed
+-- as an append-only history log, so a player's OWN earlier, later-beaten
+-- score is gone the moment they improve on it. This reconstruction takes
+-- every player's current best per mode, orders by completed_at, and walks
+-- a running min (or running max for Ascension) to find genuine "this beat
+-- everything before it" moments - that's still an honest, monotonic
+-- record timeline, it just may UNDER-count some historical record changes
+-- (never overstate one) if a player broke the record more than once
+-- themselves, since only their final value survives in the table.
+create or replace function public.get_record_progression()
+returns table (
+  mode text,
+  achieved_at timestamptz,
+  value numeric
+)
+language sql
+stable
+as $$
+  with runs as (
+    select
+      mode,
+      completed_at,
+      case when mode = 'speedrun' then time_ms::numeric else score::numeric end as raw_value
+    from public.singleplayer_runs
+  ),
+  running as (
+    select
+      mode,
+      completed_at,
+      case
+        when mode = 'ascension' then max(raw_value) over (partition by mode order by completed_at rows between unbounded preceding and current row)
+        else min(raw_value) over (partition by mode order by completed_at rows between unbounded preceding and current row)
+      end as running_best
+    from runs
+  ),
+  with_prev as (
+    select mode, completed_at, running_best,
+      lag(running_best) over (partition by mode order by completed_at) as prev_best
+    from running
+  )
+  -- Only keep the moments the running best actually changed - most rows
+  -- would just repeat the same value as an uninformative flat segment.
+  select mode, completed_at as achieved_at, running_best as value
+  from with_prev
+  where prev_best is distinct from running_best
+  order by mode, achieved_at;
+$$;

@@ -101,14 +101,16 @@ function pieceRowHtml(shapeName, pct, valueText, color) {
   `;
 }
 
-// Renders a simple two-line chart as an inline SVG - no charting library,
-// same "hand-rolled, no dependency beyond Supabase" convention as every
-// other visual on this site (drawShapeIcon() etc.). preserveAspectRatio
-// "none" plus a fixed CSS height (see .stats-line-chart) means it fills
-// its container's width without distorting into an unreadably short/tall
-// shape on narrow screens.
-function lineChartSvg(series, xLabels) {
-  const width = 640, height = 200;
+// Renders a simple multi-series line chart as an inline SVG - no charting
+// library, same "hand-rolled, no dependency beyond Supabase" convention as
+// every other visual on this site (drawShapeIcon() etc.). preserveAspect
+// Ratio "none" plus a fixed CSS height (see .stats-svg-chart) means it
+// fills its container's width without distorting into an unreadably
+// short/tall shape on narrow screens. height is adjustable (a smaller
+// value for the 2x2 per-mode record-progression grid than the full-width
+// score-over-time chart).
+function lineChartSvg(series, xLabels, height = 200) {
+  const width = 640;
   const padL = 34, padR = 10, padT = 10, padB = 24;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
@@ -142,10 +144,49 @@ function lineChartSvg(series, xLabels) {
   }
 
   return `
-    <svg viewBox="0 0 ${width} ${height}" class="stats-line-chart" preserveAspectRatio="none">
+    <svg viewBox="0 0 ${width} ${height}" class="stats-svg-chart" preserveAspectRatio="none" style="height:${height}px;">
       ${gridLines}
       ${lines}
       ${dateLabels.join('')}
+    </svg>
+  `;
+}
+
+// Same hand-rolled-SVG approach as lineChartSvg(), but vertical bars along
+// a shared baseline - the conventional histogram look, as distinct from
+// this page's horizontal bar-row charts (barRowHtml()/pieceRowHtml()).
+function histogramSvg(buckets, color) {
+  const width = 640, height = 200;
+  const padL = 34, padR = 10, padT = 10, padB = 24;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const n = buckets.length;
+  const maxCount = Math.max(...buckets.map((b) => b.count), 1);
+  const gap = 4;
+  const barWidth = n > 0 ? Math.max(1, plotW / n - gap) : 0;
+
+  const gridLines = [0, 0.5, 1].map((frac) => {
+    const y = padT + plotH * (1 - frac);
+    return `
+      <line x1="${padL}" y1="${y}" x2="${width - padR}" y2="${y}" stroke="var(--border-soft)" stroke-width="1" />
+      <text x="${padL - 6}" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--text-faint)">${Math.round(maxCount * frac)}</text>
+    `;
+  }).join('');
+
+  const bars = buckets.map((b, i) => {
+    const barH = (b.count / maxCount) * plotH;
+    const x = padL + i * (barWidth + gap);
+    const y = padT + plotH - barH;
+    return `
+      <rect x="${x}" y="${y}" width="${barWidth}" height="${barH}" fill="${color}" rx="2" />
+      <text x="${x + barWidth / 2}" y="${height - 6}" text-anchor="middle" font-size="9" fill="var(--text-faint)">${escapeHtml(b.label)}</text>
+    `;
+  }).join('');
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="stats-svg-chart" preserveAspectRatio="none" style="height:${height}px;">
+      ${gridLines}
+      ${bars}
     </svg>
   `;
 }
@@ -174,19 +215,40 @@ function formatHoursAsRank1(hours) {
   return `${hours.toFixed(1)}h`;
 }
 
+// Duplicated from singleplayer.js's formatTime() rather than shared - same
+// standalone-page convention this file already follows for BASE_SHAPES.
+function formatTimeMs(ms) {
+  const totalSec = ms / 1000;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec - m * 60;
+  return `${m}:${s.toFixed(2).padStart(5, '0')}`;
+}
+
+const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension' };
+const RECORD_MODE_COLORS = { speedrun: '#5b7fd9', eogonim: 'var(--accent)', blindeogonim: '#8b6fd9', ascension: '#6fbf73' };
+
+function formatRecordValue(mode, value) {
+  if (mode === 'speedrun') return formatTimeMs(value);
+  if (mode === 'ascension') return `${value} round${value === 1 ? '' : 's'}`;
+  return `${value} captured`;
+}
+
 async function renderStatsPage() {
   const container = document.getElementById('statsContent');
 
-  const [platform, p1p2, firstPiece, scores, scoresByDay, rank1Leaders] = await Promise.all([
+  const [platform, p1p2, firstPiece, scores, scoresByDay, rank1Leaders, eloDistribution, recordProgression] = await Promise.all([
     supabaseClient.rpc('get_platform_stats'),
     supabaseClient.rpc('get_p1_p2_win_rates'),
     supabaseClient.rpc('get_first_piece_win_rates'),
     supabaseClient.rpc('get_score_averages'),
     supabaseClient.rpc('get_score_averages_by_day'),
     supabaseClient.rpc('get_rank1_time_leaders'),
+    supabaseClient.rpc('get_elo_distribution'),
+    supabaseClient.rpc('get_record_progression'),
   ]);
 
-  const firstError = platform.error || p1p2.error || firstPiece.error || scores.error || scoresByDay.error || rank1Leaders.error;
+  const firstError = platform.error || p1p2.error || firstPiece.error || scores.error || scoresByDay.error
+    || rank1Leaders.error || eloDistribution.error || recordProgression.error;
   if (firstError) {
     container.innerHTML = `<p>Could not load stats: ${escapeHtml(firstError.message)}</p>`;
     return;
@@ -272,6 +334,42 @@ async function renderStatsPage() {
     rank1Chart = '<p class="stats-chart-empty">Not enough ranked history recorded yet.</p>';
   }
 
+  let eloChart;
+  const buckets = eloDistribution.data || [];
+  if (buckets.length > 0) {
+    eloChart = histogramSvg(
+      buckets.map((b) => ({ label: String(b.bucket_start), count: Number(b.player_count) })),
+      'var(--accent)'
+    );
+  } else {
+    eloChart = '<p class="stats-chart-empty">Not enough ranked players yet.</p>';
+  }
+
+  const recordsByMode = { speedrun: [], eogonim: [], blindeogonim: [], ascension: [] };
+  for (const row of recordProgression.data || []) {
+    if (recordsByMode[row.mode]) recordsByMode[row.mode].push(row);
+  }
+  const recordChartsHtml = Object.keys(RECORD_MODE_LABELS).map((mode) => {
+    const rows = recordsByMode[mode];
+    if (rows.length === 0) {
+      return `
+        <div class="stats-record-mode">
+          <h4>${RECORD_MODE_LABELS[mode]}</h4>
+          <p class="stats-chart-empty">No runs recorded yet.</p>
+        </div>
+      `;
+    }
+    const xLabels = rows.map((r) => new Date(r.achieved_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }));
+    const series = [{ color: RECORD_MODE_COLORS[mode], points: rows.map((r) => Number(r.value)) }];
+    const currentBest = Number(rows[rows.length - 1].value);
+    return `
+      <div class="stats-record-mode">
+        <h4>${RECORD_MODE_LABELS[mode]} <span class="stats-record-current">best: ${formatRecordValue(mode, currentBest)}</span></h4>
+        ${lineChartSvg(series, xLabels, 110)}
+      </div>
+    `;
+  }).join('');
+
   container.innerHTML = `
     ${topStats}
 
@@ -302,6 +400,18 @@ async function renderStatsPage() {
       <h3>Most Time Spent as the #1 Ranked Player</h3>
       <p class="stats-chart-note">Total real time each player has actually held the highest ELO on the site, not just their peak rating.</p>
       ${rank1Chart}
+    </div>
+
+    <div class="stats-chart-card">
+      <h3>ELO Distribution</h3>
+      <p class="stats-chart-note">Players with at least one ranked game, bucketed by 100-point ELO band.</p>
+      ${eloChart}
+    </div>
+
+    <div class="stats-chart-card">
+      <h3>Singleplayer Record Progression</h3>
+      <p class="stats-chart-note">World-record line per mode - lower is better except Ascension (higher). Reconstructed from current personal bests, so it may miss a record a player later broke themselves.</p>
+      <div class="stats-record-grid">${recordChartsHtml}</div>
     </div>
   `;
 

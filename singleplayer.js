@@ -579,10 +579,12 @@ function finishAscensionRun() {
 }
 
 // ---------- Rotation / hover ----------
-function rotateSelected() {
+function rotateSelected(reverse = false) {
   if (!state.selected) return;
   const len = ORIENTATIONS[state.selected.shapeName].length;
-  state.selected.orientationIndex = (state.selected.orientationIndex + 1) % len;
+  state.selected.orientationIndex = reverse
+    ? (state.selected.orientationIndex - 1 + len) % len
+    : (state.selected.orientationIndex + 1) % len;
   recomputeHover();
   render();
 }
@@ -947,7 +949,8 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'f' || e.key === 'F') flipSelected();
 });
 
-document.getElementById('mobileRotateBtn').addEventListener('click', rotateSelected);
+document.getElementById('mobileRotateBtn').addEventListener('click', () => rotateSelected());
+document.getElementById('mobileRotateCcwBtn').addEventListener('click', () => rotateSelected(true));
 document.getElementById('spStartBtn').addEventListener('click', startRun);
 document.getElementById('spTabSpeedrun').addEventListener('click', () => setMode('speedrun'));
 document.getElementById('spTabEogonim').addEventListener('click', () => setMode('eogonim'));

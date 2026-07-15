@@ -45,14 +45,17 @@
     <div class="board-panel">
       <div class="board-wrapper">
         <canvas id="board"></canvas>
-        <button id="mobileRotateBtn" class="mobile-rotate-btn" aria-label="Rotate piece" type="button">&#8635;</button>
+        <div class="mobile-rotate-btns">
+          <button id="mobileRotateCcwBtn" class="mobile-rotate-btn" aria-label="Rotate piece counter-clockwise" type="button">&#8634;</button>
+          <button id="mobileRotateBtn" class="mobile-rotate-btn" aria-label="Rotate piece clockwise" type="button">&#8635;</button>
+        </div>
       </div>
       <div class="turn-banner-row">
         <div class="turn-banner" id="spBanner">Click Start to begin</div>
         <div class="turn-timer" id="spTimer">0:00.00</div>
       </div>
       <div class="selection-info" id="spPieceInfo">You'll get one random piece at a time - place it anywhere it fits.</div>
-      <div class="rotate-hint">Press <strong>R</strong> or scroll to rotate, <strong>F</strong> to flip, or use the rotate button. Tap the board once to preview, tap again to place.</div>
+      <div class="rotate-hint">Press <strong>R</strong> or scroll to rotate, <strong>F</strong> to flip, or use the rotate buttons. Tap the board once to preview, tap again to place.</div>
     </div>
 
     <div class="side-panel">

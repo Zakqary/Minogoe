@@ -2858,14 +2858,45 @@ h2, h3 {
   display: inline-block;
 }
 
-/* Fixed height, flexible width - preserveAspectRatio="none" on the SVG
-   itself (see lineChartSvg() in stats.js) makes the chart fill exactly
-   this box instead of letterboxing/distorting to keep its authored
-   viewBox aspect ratio. */
-.stats-line-chart {
+/* Flexible width, height set inline per chart (see lineChartSvg()/
+   histogramSvg() in stats.js) - preserveAspectRatio="none" on the SVG
+   itself makes it fill exactly that box instead of letterboxing/distorting
+   to keep its authored viewBox aspect ratio. 200px here is just a
+   fallback default. */
+.stats-svg-chart {
   width: 100%;
   height: 200px;
   display: block;
+}
+
+/* 2x2 grid of small per-mode record-progression charts. */
+.stats-record-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px;
+}
+
+.stats-record-mode h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.stats-record-current {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .stats-record-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {

@@ -999,12 +999,37 @@ h2, h3 {
 .score .value { font-family: var(--font-display); font-size: 28px; font-weight: 700; }
 
 .projected {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   font-size: 12px;
   color: var(--text-faint);
   background: var(--surface);
   border: 1px solid var(--border-soft);
   padding: 8px 10px;
   border-radius: 7px;
+}
+
+.projected-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  opacity: 0.8;
+}
+
+.projected-value {
+  font-weight: 700;
+}
+
+.projected-p1 { color: var(--p1); }
+.projected-p2 { color: var(--p2); }
+
+.projected-undecided {
+  color: var(--text-faint);
+  margin-left: auto;
 }
 
 .controls {
@@ -1326,8 +1351,17 @@ h2, h3 {
   border-radius: 20px;
 }
 
-/* New element with no desktop-visible state of its own - hidden by default,
-   shown only inside the mobile media query below. */
+/* New elements with no desktop-visible state of their own - hidden by
+   default, shown only inside the mobile media query below. Wrapped in a
+   row container so the clockwise/counter-clockwise buttons sit side by
+   side on mobile rather than each getting their own row in
+   .board-wrapper's column flex layout - harmless on desktop either way,
+   since the buttons inside are display:none regardless. */
+.mobile-rotate-btns {
+  display: flex;
+  gap: 10px;
+}
+
 .mobile-rotate-btn {
   display: none;
 }
@@ -1432,11 +1466,14 @@ h2, h3 {
   /* Sits just below the board's bottom-right corner instead of on top of
      it - close enough to reach with the same thumb, but out of the way of
      taps aimed at that corner of the grid itself. */
+  .mobile-rotate-btns {
+    margin-top: 8px;
+  }
+
   .mobile-rotate-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-top: 8px;
     width: 52px;
     height: 52px;
     border-radius: 50%;

@@ -210,11 +210,16 @@ async function renderProfilePage() {
   // numeric columns (score1/score2 and anything summed from them) come
   // back from PostgREST as strings, not numbers, to avoid float precision
   // loss - same reason stats.js wraps every numeric RPC result in Number().
-  const pvpGames = Number(profile.pvp_games_played) || 0;
+  // Averaged over pvp_scored_games (non-forfeit pvp games only), NOT
+  // pvp_games_played - a forfeit's score1/score2 is just whatever the
+  // board happened to look like when someone quit/timed out, not a real
+  // final score (schema.sql Phase 38), so including it in the average
+  // would dilute/skew it against a number that was never meaningful.
+  const pvpScoredGames = Number(profile.pvp_scored_games) || 0;
   const pointsFor = Number(profile.pvp_points_for) || 0;
   const pointsAgainst = Number(profile.pvp_points_against) || 0;
-  const avgDiff = pvpGames > 0 ? (pointsFor - pointsAgainst) / pvpGames : 0;
-  const avgDiffText = `${avgDiff > 0 ? '+' : ''}${avgDiff.toFixed(1)}`;
+  const avgDiff = pvpScoredGames > 0 ? (pointsFor - pointsAgainst) / pvpScoredGames : 0;
+  const avgDiffText = pvpScoredGames > 0 ? `${avgDiff > 0 ? '+' : ''}${avgDiff.toFixed(1)}` : '-';
   const formatPoints = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
   container.innerHTML = `
@@ -223,9 +228,11 @@ async function renderProfilePage() {
     <div class="profile-stats">
       <div class="stat"><div class="stat-value">${rank != null ? '#' + rank : '-'}</div><div class="stat-label">Rank</div></div>
       <div class="stat"><div class="stat-value">${profile.elo_rating}</div><div class="stat-label">ELO</div></div>
+      <div class="stat"><div class="stat-value">${profile.highest_elo}</div><div class="stat-label">Peak ELO</div></div>
       <div class="stat"><div class="stat-value">${profile.pvp_games_played}</div><div class="stat-label">Games</div></div>
       <div class="stat"><div class="stat-value">${profile.pvp_wins}</div><div class="stat-label">Wins</div></div>
       <div class="stat"><div class="stat-value">${profile.pvp_losses}</div><div class="stat-label">Losses</div></div>
+      <div class="stat"><div class="stat-value">${profile.highest_ranked_win_streak}</div><div class="stat-label">Best Ranked Streak</div></div>
       <div class="stat"><div class="stat-value">${avgDiffText}</div><div class="stat-label">Avg Point Diff</div></div>
       <div class="stat"><div class="stat-value">${formatPoints(pointsFor)}</div><div class="stat-label">Points Scored</div></div>
       <div class="stat"><div class="stat-value">${formatPoints(pointsAgainst)}</div><div class="stat-label">Points Against</div></div>

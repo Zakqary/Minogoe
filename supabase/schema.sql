@@ -2594,3 +2594,296 @@ begin
   end if;
 end;
 $$;
+
+-- ---------- Phase 37: profile "Highest ELO" and "Highest Ranked Win Streak" stats ----------
+
+alter table public.profiles add column if not exists highest_elo integer not null default 1200;
+alter table public.profiles add column if not exists ranked_win_streak integer not null default 0;
+alter table public.profiles add column if not exists highest_ranked_win_streak integer not null default 0;
+
+-- Reconstructs each player's true historical peak ELO from their full
+-- elo_delta_p1/elo_delta_p2 history in chronological order, rather than
+-- just backfilling "current rating" (which would understate anyone who's
+-- ever been higher than they are now). Every account starts at 1200 (the
+-- column default, never changed except by this trigger), so a running sum
+-- of deltas in game order reconstructs the exact rating after each game;
+-- the greatest(1200, ...) floor covers a player whose peak was actually
+-- their untouched starting rating (e.g. someone who has only ever lost).
+-- Safe to re-run - always recomputed from source, same as every other
+-- backfill in this file.
+with p_deltas as (
+  select player1_id as player_id, elo_delta_p1 as delta, ended_at
+  from public.games
+  where mode = 'ranked' and player1_id is not null and elo_delta_p1 is not null
+  union all
+  select player2_id as player_id, elo_delta_p2 as delta, ended_at
+  from public.games
+  where mode = 'ranked' and player2_id is not null and elo_delta_p2 is not null
+),
+running as (
+  select player_id,
+         1200 + sum(delta) over (
+           partition by player_id order by ended_at
+           rows between unbounded preceding and current row
+         ) as running_elo
+  from p_deltas
+),
+peaks as (
+  select player_id, max(running_elo) as peak_elo from running group by player_id
+)
+update public.profiles p
+set highest_elo = greatest(1200, pk.peak_elo)
+from peaks pk
+where p.id = pk.player_id;
+
+-- Same idea for win streaks - a classic "gaps and islands" grouping: two
+-- consecutive ranked games for the same player land in the same group iff
+-- neither their overall position nor their same-result position changed
+-- between them, i.e. every game in between was also a win. The longest
+-- "won" group is the historical peak; the group (if any) containing that
+-- player's most recent ranked game is their CURRENT streak (0 if their
+-- last ranked game was a loss, via the coalesce below).
+with per_player_games as (
+  select player1_id as player_id, (winner = 1 or winner is null) as won, ended_at
+  from public.games where mode = 'ranked' and player1_id is not null
+  union all
+  select player2_id as player_id, (winner = 2) as won, ended_at
+  from public.games where mode = 'ranked' and player2_id is not null
+),
+numbered as (
+  select player_id, won, ended_at,
+         row_number() over (partition by player_id order by ended_at) as overall_rn,
+         row_number() over (partition by player_id, won order by ended_at) as same_result_rn
+  from per_player_games
+),
+grouped as (
+  select player_id, won, ended_at, (overall_rn - same_result_rn) as grp
+  from numbered
+),
+win_streaks as (
+  select player_id, grp, count(*) as streak_len, max(ended_at) as last_at
+  from grouped
+  where won
+  group by player_id, grp
+),
+peak_streaks as (
+  select player_id, max(streak_len) as peak_streak
+  from win_streaks
+  group by player_id
+),
+last_game_per_player as (
+  select player_id, max(ended_at) as last_ended_at
+  from per_player_games
+  group by player_id
+),
+current_streaks as (
+  select ws.player_id, ws.streak_len as current_streak
+  from win_streaks ws
+  join last_game_per_player lgp
+    on lgp.player_id = ws.player_id and lgp.last_ended_at = ws.last_at
+)
+update public.profiles p
+set highest_ranked_win_streak = ps.peak_streak,
+    ranked_win_streak = coalesce(cs.current_streak, 0)
+from peak_streaks ps
+left join current_streaks cs on cs.player_id = ps.player_id
+where p.id = ps.player_id;
+
+-- Redefines handle_ranked_game() one more time to maintain the two new
+-- streak/peak columns going forward - the ENTIRE body is copied forward
+-- from Phase 30 (anti-win-trading halving included), not just the new
+-- bits, since create or replace wholesale replaces the function.
+create or replace function public.handle_ranked_game()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p1_elo integer;
+  p2_elo integer;
+  expected_p1 numeric;
+  actual_p1 numeric;
+  k constant integer := 32;
+  delta_p1 integer;
+  delta_p2 integer;
+  this_winner_id uuid;
+  p1_recent_opps uuid[];
+  p1_recent_winners uuid[];
+  p2_recent_opps uuid[];
+  is_halved boolean := false;
+  p1_won boolean;
+  p2_won boolean;
+begin
+  if new.mode <> 'ranked' or new.player1_id is null or new.player2_id is null then
+    return new;
+  end if;
+
+  select elo_rating into p1_elo from public.profiles where id = new.player1_id;
+  select elo_rating into p2_elo from public.profiles where id = new.player2_id;
+
+  expected_p1 := 1.0 / (1.0 + power(10, (p2_elo - p1_elo) / 400.0));
+  actual_p1 := case when new.winner = 2 then 0 else 1 end;
+
+  delta_p1 := round(k * (actual_p1 - expected_p1));
+
+  this_winner_id := case when new.winner = 1 then new.player1_id when new.winner = 2 then new.player2_id else new.player1_id end;
+
+  select array_agg(opp_id order by ended_at desc), array_agg(winner_id order by ended_at desc)
+  into p1_recent_opps, p1_recent_winners
+  from (
+    select
+      case when player1_id = new.player1_id then player2_id else player1_id end as opp_id,
+      case when winner = 1 then player1_id when winner = 2 then player2_id else player1_id end as winner_id,
+      ended_at
+    from public.games
+    where mode = 'ranked' and id <> new.id
+      and (player1_id = new.player1_id or player2_id = new.player1_id)
+    order by ended_at desc
+    limit 2
+  ) sub;
+
+  select array_agg(opp_id order by ended_at desc)
+  into p2_recent_opps
+  from (
+    select
+      case when player1_id = new.player2_id then player2_id else player1_id end as opp_id,
+      ended_at
+    from public.games
+    where mode = 'ranked' and id <> new.id
+      and (player1_id = new.player2_id or player2_id = new.player2_id)
+    order by ended_at desc
+    limit 2
+  ) sub;
+
+  if array_length(p1_recent_opps, 1) = 2 and array_length(p2_recent_opps, 1) = 2
+     and p1_recent_opps[1] = new.player2_id and p1_recent_opps[2] = new.player2_id
+     and p2_recent_opps[1] = new.player1_id and p2_recent_opps[2] = new.player1_id
+     and p1_recent_winners[1] = this_winner_id and p1_recent_winners[2] = this_winner_id then
+    is_halved := true;
+    delta_p1 := round(delta_p1 / 2.0);
+  end if;
+
+  delta_p2 := -delta_p1;
+
+  p1_won := (new.winner = 1 or new.winner is null);
+  p2_won := (new.winner = 2);
+
+  update public.profiles
+  set elo_rating = elo_rating + delta_p1,
+      highest_elo = greatest(highest_elo, elo_rating + delta_p1),
+      ranked_games_played = ranked_games_played + 1,
+      ranked_wins = ranked_wins + case when p1_won then 1 else 0 end,
+      ranked_losses = ranked_losses + case when p2_won then 1 else 0 end,
+      ranked_win_streak = case when p1_won then ranked_win_streak + 1 else 0 end,
+      highest_ranked_win_streak = case
+        when p1_won then greatest(highest_ranked_win_streak, ranked_win_streak + 1)
+        else highest_ranked_win_streak
+      end
+  where id = new.player1_id;
+
+  update public.profiles
+  set elo_rating = elo_rating + delta_p2,
+      highest_elo = greatest(highest_elo, elo_rating + delta_p2),
+      ranked_games_played = ranked_games_played + 1,
+      ranked_wins = ranked_wins + case when p2_won then 1 else 0 end,
+      ranked_losses = ranked_losses + case when p1_won then 1 else 0 end,
+      ranked_win_streak = case when p2_won then ranked_win_streak + 1 else 0 end,
+      highest_ranked_win_streak = case
+        when p2_won then greatest(highest_ranked_win_streak, ranked_win_streak + 1)
+        else highest_ranked_win_streak
+      end
+  where id = new.player2_id;
+
+  update public.games set elo_delta_p1 = delta_p1, elo_delta_p2 = delta_p2, elo_halved = is_halved where id = new.id;
+
+  return new;
+end;
+$$;
+
+-- ---------- Phase 38: exclude forfeited games from pvp points for/against ----------
+
+-- score1/score2 on a forfeited game were never the real deciding factor
+-- (see the games_score_plausible_check/forfeit comments earlier in this
+-- file, and profile.js's own "W - FF" display logic) - summing them into
+-- pvp_points_for/against produced the "unrealistic numbers" players were
+-- seeing, since a forfeit's score1/score2 is just whatever the board
+-- happened to look like at the moment someone quit or timed out, not a
+-- completed game's actual territory split. New pvp_scored_games tracks how
+-- many pvp games actually contributed a real score, so profile.js can
+-- average over the right denominator instead of diluting against every
+-- pvp game including forfeits.
+alter table public.profiles add column if not exists pvp_scored_games integer not null default 0;
+
+create or replace function public.handle_game_recorded()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if new.player1_id is not null then
+    update public.profiles
+    set games_played = games_played + 1,
+        wins = wins + case when new.winner = 1 or new.winner is null then 1 else 0 end,
+        losses = losses + case when new.winner = 2 then 1 else 0 end,
+        pvp_games_played = pvp_games_played + case when new.player2_id is not null then 1 else 0 end,
+        pvp_wins = pvp_wins + case when new.player2_id is not null and (new.winner = 1 or new.winner is null) then 1 else 0 end,
+        pvp_losses = pvp_losses + case when new.player2_id is not null and new.winner = 2 then 1 else 0 end,
+        pvp_scored_games = pvp_scored_games + case when new.player2_id is not null and not new.forfeit then 1 else 0 end,
+        pvp_points_for = pvp_points_for + case when new.player2_id is not null and not new.forfeit then new.score1 else 0 end,
+        pvp_points_against = pvp_points_against + case when new.player2_id is not null and not new.forfeit then new.score2 else 0 end,
+        bot_games_played = bot_games_played + case when new.mode = 'bot' then 1 else 0 end,
+        bot_wins = bot_wins + case when new.mode = 'bot' and (new.winner = 1 or new.winner is null) then 1 else 0 end,
+        bot_losses = bot_losses + case when new.mode = 'bot' and new.winner = 2 then 1 else 0 end
+    where id = new.player1_id;
+  end if;
+
+  if new.player2_id is not null then
+    update public.profiles
+    set games_played = games_played + 1,
+        wins = wins + case when new.winner = 2 then 1 else 0 end,
+        losses = losses + case when new.winner = 1 or new.winner is null then 1 else 0 end,
+        pvp_games_played = pvp_games_played + 1,
+        pvp_wins = pvp_wins + case when new.winner = 2 then 1 else 0 end,
+        pvp_losses = pvp_losses + case when new.winner = 1 or new.winner is null then 1 else 0 end,
+        pvp_scored_games = pvp_scored_games + case when not new.forfeit then 1 else 0 end,
+        pvp_points_for = pvp_points_for + case when not new.forfeit then new.score2 else 0 end,
+        pvp_points_against = pvp_points_against + case when not new.forfeit then new.score1 else 0 end
+    where id = new.player2_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Backfill, safe to re-run: recomputes from source, excluding forfeits.
+update public.profiles p
+set pvp_points_for = coalesce(pf.points_for, 0),
+    pvp_points_against = coalesce(pf.points_against, 0),
+    pvp_scored_games = coalesce(pf.scored_games, 0)
+from (
+  select player_id,
+         sum(my_score) as points_for,
+         sum(opp_score) as points_against,
+         count(*) as scored_games
+  from (
+    select player1_id as player_id, score1 as my_score, score2 as opp_score
+    from public.games where player1_id is not null and player2_id is not null and not forfeit
+    union all
+    select player2_id as player_id, score2 as my_score, score1 as opp_score
+    from public.games where player2_id is not null and not forfeit
+  ) per_player
+  group by player_id
+) pf
+where p.id = pf.player_id;
+
+-- Anyone with ZERO non-forfeit pvp games (all their pvp history is
+-- forfeits, or they have none) never appears in the subquery above, so the
+-- update above never touches them - explicitly zero them out here instead
+-- of leaving whatever stale pre-fix totals Phase 32 had already written.
+update public.profiles
+set pvp_points_for = 0, pvp_points_against = 0, pvp_scored_games = 0
+where id not in (
+  select player1_id from public.games where player1_id is not null and player2_id is not null and not forfeit
+  union
+  select player2_id from public.games where player2_id is not null and not forfeit
+);

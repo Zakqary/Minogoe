@@ -1486,10 +1486,36 @@ function selectShape(shapeName) {
   render();
 }
 
-function rotateSelected() {
+function rotateSelected(reverse = false) {
   if (!state.selected) return;
   const len = ORIENTATIONS[state.selected.shapeName].length;
-  state.selected.orientationIndex = (state.selected.orientationIndex + 1) % len;
+  state.selected.orientationIndex = reverse
+    ? (state.selected.orientationIndex - 1 + len) % len
+    : (state.selected.orientationIndex + 1) % len;
+  recomputeHover();
+  updateSelectionInfo();
+  drawBoard();
+  refreshDragGhostShape();
+}
+
+// Jumps directly to the mirrored counterpart of the CURRENT orientation
+// (same rotation, opposite handedness) instead of cycling rotateSelected()
+// up to 7 times to reach it by hand. ORIENTATIONS[shapeName] already stores
+// every orientation pre-normalized (see mirror()/normalize() above), so the
+// mirrored coords can be looked up directly by matching content rather than
+// assuming a fixed index offset - piece-specific de-duplication (symmetric
+// pieces have fewer than 8 total orientations) means that offset isn't
+// reliably +4 for every shape. A no-op for a piece that's symmetric under
+// mirroring (mirrored coords equal the current ones), which is correct -
+// there's nothing to flip.
+function flipSelected() {
+  if (!state.selected) return;
+  const orientations = ORIENTATIONS[state.selected.shapeName];
+  const mirrored = mirror(orientations[state.selected.orientationIndex]);
+  const key = JSON.stringify(mirrored);
+  const targetIndex = orientations.findIndex((o) => JSON.stringify(o) === key);
+  if (targetIndex === -1) return;
+  state.selected.orientationIndex = targetIndex;
   recomputeHover();
   updateSelectionInfo();
   drawBoard();
@@ -1801,8 +1827,17 @@ function render() {
     const proj = computeFinalScores(state.board);
     const proj1 = proj.score1 + (handicapPlayer() === 1 ? HANDICAP_POINTS : 0);
     const proj2 = proj.score2 + (handicapPlayer() === 2 ? HANDICAP_POINTS : 0);
-    document.getElementById('projected').innerHTML =
-      `Projected if game ended now: ${playerLabel(1)} ${proj1} &middot; ${playerLabel(2)} ${proj2} &middot; Undecided ${proj.undecided}`;
+    // Same information as before (if the game ended right now: P1's score,
+    // P2's score, and how much of the board is still undecided), just laid
+    // out as compact labeled chips instead of one dense sentence - still
+    // sized/muted well below the real scoreboard above it, just easier to
+    // actually scan at a glance mid-game.
+    document.getElementById('projected').innerHTML = `
+      <span class="projected-label">Projected</span>
+      <span class="projected-value projected-p1">${playerLabel(1)} ${proj1}</span>
+      <span class="projected-value projected-p2">${playerLabel(2)} ${proj2}</span>
+      <span class="projected-undecided">${proj.undecided} undecided</span>
+    `;
   } else {
     document.getElementById('projected').textContent = 'No game in progress yet.';
   }
@@ -2113,8 +2148,13 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 // ---------- Controls ----------
-document.getElementById('rotateBtn').addEventListener('click', rotateSelected);
-document.getElementById('mobileRotateBtn').addEventListener('click', rotateSelected);
+// Wrapped in arrow functions rather than passed directly - addEventListener
+// calls a handler with the click Event as its first argument, which would
+// otherwise land in rotateSelected()'s new `reverse` parameter (a truthy
+// object), silently reversing every click.
+document.getElementById('rotateBtn').addEventListener('click', () => rotateSelected());
+document.getElementById('mobileRotateBtn').addEventListener('click', () => rotateSelected());
+document.getElementById('mobileRotateCcwBtn').addEventListener('click', () => rotateSelected(true));
 document.getElementById('undoBtn').addEventListener('click', () => requestUndo());
 document.getElementById('passBtn').addEventListener('click', () => requestPass());
 document.getElementById('forfeitBtn').addEventListener('click', () => forfeitGame());
@@ -2128,6 +2168,8 @@ document.getElementById('newGameDeclineBtn').addEventListener('click', () => res
 document.addEventListener('keydown', (e) => {
   if (e.key === 'r' || e.key === 'R') {
     rotateSelected();
+  } else if (e.key === 'f' || e.key === 'F') {
+    flipSelected();
   }
 });
 

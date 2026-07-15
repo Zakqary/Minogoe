@@ -2253,12 +2253,14 @@ alter table public.singleplayer_runs drop constraint if exists singleplayer_runs
 alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_user_id_mode_key;
 alter table public.singleplayer_runs add constraint singleplayer_runs_user_id_mode_key unique (user_id, mode);
 
+-- Deliberately NOT re-adding singleplayer_runs_mode_fields_check here either,
+-- for the exact same reason as singleplayer_runs_mode_check just above (it
+-- hit the identical failure - "check constraint ... is violated by some
+-- row" - since this narrower 2-branch version was re-added on every re-run,
+-- rejecting any real 'ascension' row before Phase 36's 3-branch version
+-- below ever got a chance to run). Phase 36 owns this constraint now too -
+-- do not add a narrower version of it here again.
 alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
-  check (
-    (mode = 'speedrun' and time_ms is not null and score is null)
-    or (mode = 'eogonim' and score is not null and time_ms is null)
-  );
 
 -- Re-scoped to mode = 'speedrun' explicitly now that a user can also have an
 -- eogonim row - previously "where user_id = uid" alone was unambiguous

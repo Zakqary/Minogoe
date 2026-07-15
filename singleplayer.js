@@ -578,6 +578,7 @@ function updateModeUI() {
   document.getElementById('spTabAscension').classList.toggle('active', mode === 'ascension');
   document.getElementById('spModeTitle').textContent =
     mode === 'ascension' ? 'Ascension' : mode === 'eogonim' ? 'Eogonim' : 'Speedrun';
+  document.getElementById('spModeCredit').style.display = mode === 'eogonim' ? '' : 'none';
   document.getElementById('spUpcomingLabel').style.display = mode === 'speedrun' ? '' : 'none';
   document.getElementById('spUpcomingPieces').style.display = mode === 'speedrun' ? '' : 'none';
   document.getElementById('spRulesSpeedrun').style.display = mode === 'speedrun' ? '' : 'none';

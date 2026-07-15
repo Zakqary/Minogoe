@@ -806,6 +806,14 @@ h2, h3 {
   margin-top: 2px;
 }
 
+.sp-mode-credit {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-faint);
+  margin-top: -6px;
+  margin-bottom: 8px;
+}
+
 .sp-mode-tabs {
   display: flex;
   gap: 6px;
@@ -1645,6 +1653,27 @@ h2, h3 {
    side by side (see .garden-layout below). */
 .garden-page {
   max-width: 1080px;
+}
+
+/* Widest of all - a "giant list of every account" (per the admin page's own
+   brief) needs far more horizontal room than any other .profile-page-based
+   page, and still scrolls internally past that on a narrow screen. */
+.admin-page {
+  max-width: 1400px;
+}
+
+.admin-page-sub {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-bottom: 14px;
+}
+
+.admin-table-wrap {
+  overflow-x: auto;
+}
+
+.admin-table-wrap .games-table {
+  white-space: nowrap;
 }
 
 .shop-page h3 {

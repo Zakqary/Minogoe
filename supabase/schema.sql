@@ -2901,3 +2901,233 @@ where id not in (
   union
   select player2_id from public.games where player2_id is not null and not forfeit
 );
+
+-- ---------- Phase 39: lifetime coins earned tracking + admin monitor page ----------
+
+-- coins is a live balance that goes back down on every purchase, so it
+-- can't answer "how many coins has this account ever taken in" on its own -
+-- exactly the same problem highest_elo (Phase 37) solved for ELO. This is
+-- the same idea applied to coins: a counter that only ever goes up,
+-- incremented alongside every single coin GRANT (never on a spend). Only 3
+-- call sites ever add to coins - claim_daily_checkin(), grant_coin_purchase(),
+-- and the mino coin-gift branch of handle_human_game_played() - all three
+-- are redefined below to keep this in lockstep. Backfilled to the current
+-- coins balance as a floor: this necessarily undercounts anyone who has
+-- ever spent coins before today (that spending history isn't logged
+-- anywhere to reconstruct from, unlike ELO's per-game delta trail), but
+-- every coin earned from this point forward is counted exactly.
+alter table public.profiles add column if not exists lifetime_coins_earned integer not null default 0;
+update public.profiles set lifetime_coins_earned = coins where lifetime_coins_earned < coins;
+
+create or replace function public.claim_daily_checkin()
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  last_claim timestamptz;
+  new_coins integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select last_checkin_at into last_claim from public.profiles where id = uid for update;
+
+  if last_claim is not null and now() - last_claim < interval '24 hours' then
+    raise exception 'Already checked in today';
+  end if;
+
+  update public.profiles
+  set coins = coins + 1, lifetime_coins_earned = lifetime_coins_earned + 1, last_checkin_at = now()
+  where id = uid
+  returning coins into new_coins;
+
+  return new_coins;
+end;
+$$;
+
+create or replace function public.grant_coin_purchase(
+  p_user_id uuid,
+  p_stripe_session_id text,
+  p_package_id text,
+  p_coins integer,
+  p_amount_cents integer
+)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.coin_purchases (user_id, stripe_session_id, package_id, coins_granted, amount_cents)
+  values (p_user_id, p_stripe_session_id, p_package_id, p_coins, p_amount_cents)
+  on conflict (stripe_session_id) do nothing;
+
+  if found then
+    update public.profiles set coins = coins + p_coins, lifetime_coins_earned = lifetime_coins_earned + p_coins where id = p_user_id;
+  end if;
+end;
+$$;
+
+-- Full body carried forward from Phase 34 (the last redefinition), plus
+-- lifetime_coins_earned tracking on the one branch that grants coins.
+create or replace function public.handle_human_game_played()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p_id uuid;
+  m record;
+  gift_item record;
+  coins_granted integer;
+  wants_title boolean;
+begin
+  foreach p_id in array array[new.player1_id, new.player2_id] loop
+    if p_id is null then
+      continue;
+    end if;
+
+    update public.minos
+    set growth_progress = growth_progress + 1
+    where user_id = p_id and planted and stage <> 'adult';
+
+    update public.minos
+    set stage = case stage
+          when 'seed' then 'sapling'
+          when 'sapling' then 'adolescent'
+          when 'adolescent' then 'adult'
+          else stage
+        end,
+        growth_progress = 0
+    where user_id = p_id and planted and stage <> 'adult' and growth_progress >= 10;
+
+    if random() < 0.1 then
+      update public.profiles
+      set unopened_seed_packs = unopened_seed_packs + 1,
+          pending_pack_notifications = pending_pack_notifications + 1
+      where id = p_id;
+    end if;
+
+    for m in
+      select * from public.minos
+      where user_id = p_id and planted and stage = 'adult'
+    loop
+      if (m.last_gift_at is null or now() - m.last_gift_at >= interval '7 days') and random() < 0.02 then
+        wants_title := random() < 0.25;
+        select * into gift_item from public.shop_items
+        where mino_giftable and type = case when wants_title then 'title' else 'avatar' end
+          and id not in (select item_id from public.user_inventory where user_id = p_id)
+        order by random()
+        limit 1;
+
+        if gift_item.id is null then
+          -- Preferred type had nothing left to give - fall back to
+          -- whichever giftable type actually has an unowned item.
+          select * into gift_item from public.shop_items
+          where mino_giftable
+            and id not in (select item_id from public.user_inventory where user_id = p_id)
+          order by random()
+          limit 1;
+        end if;
+
+        if gift_item.id is not null then
+          insert into public.user_inventory (user_id, item_id) values (p_id, gift_item.id);
+          insert into public.mino_gifts (user_id, mino_id, gift_type, item_id) values (p_id, m.id, 'item', gift_item.id);
+          update public.minos set last_gift_at = now() where id = m.id;
+        end if;
+      end if;
+
+      if random() < m.coin_drop_rate / 100.0 then
+        coins_granted := 5 + floor(random() * 11)::integer;
+        update public.profiles
+        set coins = coins + coins_granted, lifetime_coins_earned = lifetime_coins_earned + coins_granted
+        where id = p_id;
+        insert into public.mino_gifts (user_id, mino_id, gift_type, coins_amount) values (p_id, m.id, 'coins', coins_granted);
+      end if;
+    end loop;
+  end loop;
+
+  return new;
+end;
+$$;
+
+-- A single security-definer RPC, gated on the caller's own username being
+-- 'AVNJ' (checked server-side, inside the function - never trust a hidden
+-- nav link alone for this). Several of the tables joined here
+-- (coin_purchases, mino_gifts) are deliberately NOT publicly readable
+-- (their own RLS policies only allow auth.uid() = user_id), so this is the
+-- only way - short of AVNJ's own account - to see these aggregates across
+-- every account; a plain client-side query from any other account would be
+-- rejected by RLS on those two tables even if it somehow reached this far.
+create or replace function public.admin_get_monitor_data()
+returns table (
+  id uuid,
+  username text,
+  coins integer,
+  lifetime_coins_earned integer,
+  coins_purchased bigint,
+  coins_from_minos bigint,
+  items_owned bigint,
+  minos_owned bigint,
+  unopened_seed_packs integer,
+  garden_pot_count integer,
+  elo_rating integer,
+  highest_elo integer,
+  games_played integer,
+  pvp_games_played integer,
+  ranked_games_played integer,
+  ranked_win_streak integer,
+  highest_ranked_win_streak integer,
+  created_at timestamptz,
+  last_seen timestamptz
+)
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  caller_username text;
+begin
+  select username into caller_username from public.profiles where id = auth.uid();
+  if caller_username is distinct from 'AVNJ' then
+    raise exception 'Not authorized';
+  end if;
+
+  return query
+  select
+    p.id,
+    p.username,
+    p.coins,
+    p.lifetime_coins_earned,
+    coalesce(cp.total, 0) as coins_purchased,
+    coalesce(mg.total, 0) as coins_from_minos,
+    coalesce(inv.cnt, 0) as items_owned,
+    coalesce(mn.cnt, 0) as minos_owned,
+    p.unopened_seed_packs,
+    p.garden_pot_count,
+    p.elo_rating,
+    p.highest_elo,
+    p.games_played,
+    p.pvp_games_played,
+    p.ranked_games_played,
+    p.ranked_win_streak,
+    p.highest_ranked_win_streak,
+    p.created_at,
+    p.last_seen
+  from public.profiles p
+  left join (
+    select user_id, sum(coins_granted) as total from public.coin_purchases group by user_id
+  ) cp on cp.user_id = p.id
+  left join (
+    select user_id, sum(coins_amount) as total from public.mino_gifts where gift_type = 'coins' group by user_id
+  ) mg on mg.user_id = p.id
+  left join (
+    select user_id, count(*) as cnt from public.user_inventory group by user_id
+  ) inv on inv.user_id = p.id
+  left join (
+    select user_id, count(*) as cnt from public.minos group by user_id
+  ) mn on mn.user_id = p.id
+  order by p.lifetime_coins_earned desc;
+end;
+$$;

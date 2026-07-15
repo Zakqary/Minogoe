@@ -147,8 +147,21 @@ function updateRegisterBanner() {
   banner.style.display = (Auth.isInitialized && !Auth.getUser()) ? '' : 'none';
 }
 
+// The admin.html link only exists in the nav's markup for AVNJ - anyone
+// else never sees it appear, and (separately, and more importantly)
+// admin.js's actual data fetch is gated server-side too, via
+// admin_get_monitor_data() checking the caller's own username - this is
+// just what keeps the link itself out of sight for everyone else.
+function updateAdminNavLink() {
+  const link = document.getElementById('adminNavLink');
+  if (!link) return;
+  const profile = Auth.getProfile();
+  link.style.display = (profile && profile.username === 'AVNJ') ? '' : 'none';
+}
+
 function renderAuthWidget() {
   updateRegisterBanner();
+  updateAdminNavLink();
   const el = document.getElementById('authWidget');
   const user = Auth.getUser();
   const profile = Auth.getProfile();

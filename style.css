@@ -906,66 +906,6 @@ h2, h3 {
   padding: 4px;
 }
 
-/* Exact Match's hand - unlike the piece-choice cards above (a one-time
-   interstitial), these stay on screen the whole round and are the actual
-   selection control (selectHandShape() in singleplayer.js), so each gets a
-   remaining-copies badge and an "active" state for whichever is currently
-   selected, plus a disabled state once a shape's copies hit 0. */
-.sp-hand-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 6px 0;
-}
-
-.sp-hand-btn {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface-2);
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.sp-hand-btn:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-
-.sp-hand-btn.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-
-.sp-hand-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.sp-hand-btn canvas {
-  background: var(--surface);
-  border-radius: 4px;
-  padding: 3px;
-}
-
-.sp-hand-count {
-  position: absolute;
-  bottom: -5px;
-  right: -5px;
-  min-width: 15px;
-  padding: 1px 3px;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #211505;
-  font-size: 10px;
-  font-weight: 700;
-  text-align: center;
-  line-height: 1.4;
-}
-
 #connectBtn:hover:not(:disabled), #casualQueueBtn:hover:not(:disabled),
 #rankedQueueBtn:hover:not(:disabled), #newGameBtn:hover:not(:disabled), #spStartBtn:hover:not(:disabled) {
   background: var(--accent-hover);

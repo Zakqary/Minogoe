@@ -62,7 +62,6 @@
           <button type="button" id="spTabEogonim" class="sp-mode-tab">Eogonim</button>
           <button type="button" id="spTabBlindEogonim" class="sp-mode-tab">Blind Eogonim</button>
           <button type="button" id="spTabAscension" class="sp-mode-tab">Ascension</button>
-          <button type="button" id="spTabExactMatch" class="sp-mode-tab">Exact Match</button>
         </div>
         <h3 id="spModeTitle">Speedrun</h3>
         <div class="sp-mode-credit" id="spModeCredit" style="display:none;">Idea by SgtBird08</div>
@@ -75,8 +74,6 @@
         <div class="sp-upcoming-pieces" id="spUpcomingPieces"></div>
         <div class="sp-upcoming-label" id="spUnlockedLabel" style="display:none;">Your shapes:</div>
         <div class="sp-upcoming-pieces" id="spUnlockedShapes" style="display:none;"></div>
-        <div class="sp-upcoming-label" id="spHandLabel" style="display:none;">Your hand:</div>
-        <div id="spHandGrid" class="sp-hand-grid" style="display:none;"></div>
         <div id="spPieceChoices" class="sp-piece-choices" style="display:none;"></div>
         <div class="online-status" id="spSaveStatus"></div>
       </div>
@@ -114,15 +111,6 @@
           <li>Each round has a target amount of territory to capture before you get stuck. Targets start at 10 and climb every round.</li>
           <li>Clear a round's target and you'll pick a new shape to add to your collection, the board resets empty, and the next round begins.</li>
           <li>Fail to hit a round's target before getting stuck and the run ends. Your leaderboard score is how many rounds you cleared.</li>
-        </ul>
-        <ul id="spRulesExactMatch" style="display:none;">
-          <li><em>10&times;10</em> board, played in rounds. Each round deals you a hand of <em>15</em> random pieces (any of them can repeat).</li>
-          <li>Your captured territory starts near the whole board the moment your first piece touches the open board, then falls as you place more pieces &mdash; the round's target (rolled from that hand, so it's always reachable) is a number you need to land on exactly on the way down.</li>
-          <li>Unlike every other mode, you choose which piece to place from your hand instead of being handed one at a time &mdash; click a shape in "Your hand" below to select it.</li>
-          <li>Pieces never disappear once placed &mdash; same enclosure scoring as Eogonim, any size pocket counts, and capturing can never be undone.</li>
-          <li>You must land <em>EXACTLY</em> on the round's target. Drop below it and the run ends immediately &mdash; there's no taking it back.</li>
-          <li>Land exactly on the target and you'll get a brand new hand, a new target, and a fresh empty board for the next round.</li>
-          <li>If none of your remaining pieces can fit anywhere before captured comes down to the target, the run also ends. Your leaderboard score is how many rounds in a row you cleared.</li>
         </ul>
       </div>
     </div>

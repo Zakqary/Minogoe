@@ -21,25 +21,10 @@
 //     stuck, and if that round's captured total clears an escalating
 //     threshold, unlock a new shape, reset the board, and go again - see
 //     the "Ascension run flow" section below.
-//   - Exact Match: also built on Eogonim's no-removal capture rule, but
-//     inverted into a precision puzzle instead of an escalating one. Each
-//     round deals a hand of 15 random pieces (any of which may repeat), and
-//     rolls a target scaled to what THAT hand can actually deliver (using
-//     roughly 70%-95% of its total cells - see randomExactTarget()), since
-//     captured starts near the board's full size the moment the first
-//     piece touches it and only comes down from there - a flat target
-//     range would usually demand more cells than a 15-piece hand can ever
-//     supply. You choose which piece to place from your hand (rather than
-//     being handed one at a time), and must land your captured total on
-//     EXACTLY that target. Captured dropping below the target is
-//     unrecoverable (captures never reverse), and running out of
-//     placeable pieces before reaching the target also ends the run. Score
-//     is rounds cleared in a row - see the "Exact Match run flow" section.
 // Board size varies by mode (Speedrun: 9x9, everything else: 10x10) - see
 // BOARD_SIZES and setMode() below - so this is reassigned rather than a const.
 let BOARD_SIZE = 9;
-const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10, exactmatch: 10 };
-const EXACT_MATCH_HAND_SIZE = 15;
+const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10 };
 const CELL_PX = 52;
 const MAX_CAPTURE_SIZE = 4; // speedrun only - enclosures bigger than this don't count. Eogonim has no size cap, matching real Minogoe scoring.
 const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, eogonim has no preview
@@ -113,16 +98,15 @@ function idx(r, c) { return r * BOARD_SIZE + c; }
 // 2 at all, since pieces there never disappear; its captured count is only
 // ever a computed number (see computeCapturedCount()), not a board state.
 const state = {
-  mode: 'speedrun', // 'speedrun' | 'eogonim' | 'blindeogonim' | 'ascension' | 'exactmatch' - persists across resetBoardState(), only setMode()/startRun() change it
+  mode: 'speedrun', // 'speedrun' | 'eogonim' | 'blindeogonim' | 'ascension' - persists across resetBoardState(), only setMode()/startRun() change it
   board: new Uint8Array(BOARD_SIZE * BOARD_SIZE),
   pieceIdAt: new Int32Array(BOARD_SIZE * BOARD_SIZE),
   pieceCells: new Map(), // pieceId -> number[] of cell indices
   nextPieceId: 1,
   running: false,
   finished: false,
-  failed: false, // speedrun only - eogonim/blindeogonim/ascension/exactmatch have no fail state, every ending is a valid (scored) result
+  failed: false, // speedrun only - eogonim/blindeogonim/ascension have no fail state, every ending is a valid (scored) result
   illegalMove: false, // blindeogonim only - whether this run's ending was a click on an occupied square rather than running out of legal placements
-  exactOvershoot: false, // exactmatch only - whether this run's ending was captured dropping below the target rather than getting stuck above it
   selected: null, // { shapeName, orientationIndex } - the current piece being placed
   pieceQueue: [], // shapeNames coming up after the current piece, length LOOKAHEAD_COUNT - speedrun only
   mouseRC: null,
@@ -130,32 +114,23 @@ const state = {
   lastTapCell: null,
   startTime: null,
   finalTimeMs: null,
-  totalCaptured: 0, // running captured-territory count - eogonim's score, and ascension/exactmatch's CURRENT ROUND score (reset every round, not every run). Also incremented by speedrun's cascade, but never displayed there.
-  // Ascension/Exact Match only - deliberately NOT touched by
-  // resetBoardState() (which runs between rounds too), only by
-  // startRun()/setMode(), since these need to persist across a round reset
-  // within the same run.
+  totalCaptured: 0, // running captured-territory count - eogonim's score, and ascension's CURRENT ROUND score (reset every round, not every run). Also incremented by speedrun's cascade, but never displayed there.
+  // Ascension-only - deliberately NOT touched by resetBoardState() (which
+  // runs between rounds too), only by startRun()/setMode(), since these
+  // need to persist across a round reset within the same run.
   round: 1,
-  unlockedShapes: [], // ascension only
+  unlockedShapes: [],
   // Ascension-only - true while the "pick your next shape" interstitial is
   // showing (between startRun()/a round pass and the next round's first
   // placement). IS reset by resetBoardState() since it's board-adjacent UI
   // state, not run-progress state.
   awaitingPieceChoice: false,
   pieceChoices: [], // shapeNames currently offered during the interstitial
-  // Exact Match only - this round's hand (shapeName -> copies remaining)
-  // and randomly-rolled capture target. Both ARE reset by resetBoardState()
-  // (blanked to null there) since they're board-adjacent, per-round state -
-  // startExactMatchRound() is what actually repopulates them right after,
-  // same two-step pattern as awaitingPieceChoice/showPieceChoice() above.
-  handCounts: null,
-  exactTarget: null,
 };
 
-// Used both for a brand new run (startRun()) AND between Ascension/Exact
-// Match rounds (chooseShape()/evaluateExactMatchRound()) - deliberately
-// leaves state.round/unlockedShapes alone, since those need to survive a
-// round reset within the same run.
+// Used both for a brand new run (startRun()) AND between Ascension rounds
+// (chooseShape()) - deliberately leaves state.round/unlockedShapes alone,
+// since those need to survive a round reset within the same run.
 function resetBoardState() {
   state.board = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
   state.pieceIdAt = new Int32Array(BOARD_SIZE * BOARD_SIZE);
@@ -165,7 +140,6 @@ function resetBoardState() {
   state.finished = false;
   state.failed = false;
   state.illegalMove = false;
-  state.exactOvershoot = false;
   state.selected = null;
   state.pieceQueue = [];
   state.hover = null;
@@ -175,8 +149,6 @@ function resetBoardState() {
   state.totalCaptured = 0;
   state.awaitingPieceChoice = false;
   state.pieceChoices = [];
-  state.handCounts = null;
-  state.exactTarget = null;
 }
 
 // ---------- Placement legality ----------
@@ -267,40 +239,6 @@ function ascensionThreshold(round) {
   if (round === 1) return 10;
   if (round === 2) return 15;
   return 18 + (round - 3) * 2;
-}
-
-// Exact Match's hand: 15 independent weighted draws (same 70/20/10 category
-// odds as every other mode's random piece), tallied into counts rather than
-// kept as a flat list - duplicates are expected and simply stack, and
-// decrementing a count on placement is simpler than splicing an array.
-function rollExactMatchHand() {
-  const counts = {};
-  for (let i = 0; i < EXACT_MATCH_HAND_SIZE; i++) {
-    const shapeName = drawWeightedPiece();
-    counts[shapeName] = (counts[shapeName] || 0) + 1;
-  }
-  return counts;
-}
-
-function handTotalCells(handCounts) {
-  return Object.entries(handCounts).reduce((sum, [shapeName, count]) => sum + BASE_SHAPES[shapeName].length * count, 0);
-}
-
-// The target has to be set relative to what THIS round's actual hand can
-// deliver, not a flat range - captured starts near the board's full size
-// the moment the first piece touches the open board (see computeCaptured
-// Count()'s doc comment) and only comes down by however many cells get
-// placed after that, so a flat "5-30" target would usually demand more
-// total cells than a 15-piece hand (avg ~69, max 75) can ever supply,
-// making most rounds mathematically unwinnable regardless of skill. Instead,
-// this rolls how much of the hand's total capacity needs to actually get
-// used (70%-95%) and sets the target to whatever captured total that
-// implies - always achievable in principle for THIS hand, while still
-// requiring most (not necessarily literally every single piece) of it.
-function randomExactTarget(handTotal) {
-  const usageFraction = 0.70 + Math.random() * 0.25;
-  const cellsToPlace = Math.round(handTotal * usageFraction);
-  return Math.max(5, BOARD_SIZE * BOARD_SIZE - cellsToPlace);
 }
 
 // ---------- Capture / cascade ----------
@@ -433,14 +371,9 @@ function startRun() {
     state.round = 1;
     state.unlockedShapes = [];
   }
-  if (state.mode === 'exactmatch') {
-    state.round = 1;
-  }
   state.running = true;
   if (state.mode === 'ascension') {
     showPieceChoice();
-  } else if (state.mode === 'exactmatch') {
-    startExactMatchRound();
   } else {
     spawnNextPiece();
   }
@@ -496,34 +429,18 @@ function commitPlacement(r0, c0) {
   }
   state.pieceCells.set(id, cells);
 
-  // Exact Match consumes one copy of the placed shape from the hand -
-  // guaranteed to exist and be > 0, since selectHandShape() only ever lets
-  // you select a shape you still have copies of.
-  if (state.mode === 'exactmatch') {
-    state.handCounts[shapeName] -= 1;
-  }
-
   state.selected = null;
   state.hover = null;
 
   // Speedrun's cascade mutates the board (captures + removes the walling
-  // pieces); eogonim/blindeogonim/ascension/exactmatch score like a real
-  // Minogoe match instead - pieces stay put forever, so the "captured"
-  // total (ascension/exactmatch's current ROUND score) is just recomputed
-  // fresh here for the live display, with no board mutation at all.
+  // pieces); eogonim/blindeogonim/ascension score like a real Minogoe match
+  // instead - pieces stay put forever, so the "captured" total (ascension's
+  // current ROUND score) is just recomputed fresh here for the live
+  // display, with no board mutation at all.
   if (state.mode === 'speedrun') {
     runCaptureCascade();
   } else {
     state.totalCaptured = computeCapturedCount(state.board);
-  }
-
-  // Exact Match's round-end conditions (hit the target exactly, overshot
-  // it, or got stuck under it) are independent of board fullness, unlike
-  // every other mode here - handled entirely by evaluateExactMatchRound(),
-  // so this returns before the isBoardComplete() check below ever runs.
-  if (state.mode === 'exactmatch') {
-    evaluateExactMatchRound();
-    return;
   }
 
   if (isBoardComplete()) {
@@ -637,80 +554,6 @@ function finishAscensionRun() {
   saveAscensionScoreIfBest(state.round - 1); // rounds successfully CLEARED, not the round that was failed
 }
 
-// ---------- Exact Match run flow ----------
-
-// Rolls a fresh hand + target for the round about to be played - does NOT
-// touch the board or state.round itself (resetBoardState(), called just
-// before this everywhere it's used, already handled the board; state.round
-// is bumped by the caller before this runs, same as Ascension's
-// showPieceChoice()/chooseShape() split). Explicitly re-sets state.running
-// in case resetBoardState() (which sets it false) ran immediately before
-// this on the same call stack, same defensive re-set chooseShape() does.
-function startExactMatchRound() {
-  state.handCounts = rollExactMatchHand();
-  state.exactTarget = randomExactTarget(handTotalCells(state.handCounts));
-  state.running = true;
-  state.selected = null;
-  state.hover = null;
-  render();
-}
-
-// Picks a piece out of the current hand to place next - only callable while
-// a copy remains. Unlike every other mode, the player chooses freely from
-// whatever's left in hand rather than being handed a piece automatically.
-function selectHandShape(shapeName) {
-  if (!state.running || state.mode !== 'exactmatch') return;
-  if (!state.handCounts[shapeName]) return;
-  state.selected = { shapeName, orientationIndex: 0 };
-  recomputeHover();
-  render();
-}
-
-// Called after every placement in Exact Match mode. computeCapturedCount()
-// counts EMPTY cells still touching a placed piece - that number starts
-// near the board's full size (an empty board's every cell is up for grabs)
-// and only ever goes DOWN as more of the board fills in, reaching 0 on a
-// completely tiled board. So the target is approached from ABOVE, not
-// built up from below - there are exactly three outcomes after a placement:
-//   - Captured total lands EXACTLY on this round's target: round cleared -
-//     advance the round counter and deal a fresh hand/target/board.
-//   - Captured total drops BELOW the target: it can only ever go down from
-//     here (captures never reverse, same no-removal rule as Eogonim), so
-//     skipping past the target this way is unrecoverable - run over.
-//   - Still ABOVE target: keep going, unless every shape with copies left
-//     in hand has nowhere left to fit anywhere on the board, in which case
-//     captured can never come down to the target either - run over.
-function evaluateExactMatchRound() {
-  if (state.totalCaptured === state.exactTarget) {
-    state.round += 1;
-    resetBoardState();
-    startExactMatchRound();
-    return;
-  }
-  if (state.totalCaptured < state.exactTarget) {
-    finishExactMatchRun(true);
-    return;
-  }
-  const remainingShapes = Object.keys(state.handCounts).filter((s) => state.handCounts[s] > 0);
-  if (!remainingShapes.some((s) => hasAnyLegalMove(s, state.board))) {
-    finishExactMatchRun(false);
-    return;
-  }
-  render();
-}
-
-// overshoot = true means captured dropped BELOW the target on this move
-// (skipped past it on the way down); false means the run got stuck ABOVE
-// the target with no more legal placements left in hand.
-function finishExactMatchRun(overshoot) {
-  state.running = false;
-  state.finished = true;
-  state.failed = false;
-  state.exactOvershoot = overshoot;
-  render();
-  saveExactMatchScoreIfBest(state.round - 1); // rounds successfully CLEARED, not the round that was failed
-}
-
 // ---------- Rotation / hover ----------
 function rotateSelected() {
   if (!state.selected) return;
@@ -784,9 +627,7 @@ function setMode(mode) {
   resetBoardState();
   // resetBoardState() deliberately leaves round/unlockedShapes alone (they
   // need to survive a mid-run round reset) - switching modes entirely is
-  // the one place those need to be cleared explicitly instead. Harmless for
-  // whichever mode isn't being switched to (exactmatch never reads
-  // unlockedShapes, ascension never reads round the same way).
+  // the one place those need to be cleared explicitly instead.
   state.round = 1;
   state.unlockedShapes = [];
   updateModeUI();
@@ -800,9 +641,8 @@ function updateModeUI() {
   document.getElementById('spTabEogonim').classList.toggle('active', mode === 'eogonim');
   document.getElementById('spTabBlindEogonim').classList.toggle('active', mode === 'blindeogonim');
   document.getElementById('spTabAscension').classList.toggle('active', mode === 'ascension');
-  document.getElementById('spTabExactMatch').classList.toggle('active', mode === 'exactmatch');
   document.getElementById('spModeTitle').textContent =
-    mode === 'ascension' ? 'Ascension' : mode === 'exactmatch' ? 'Exact Match' : mode === 'blindeogonim' ? 'Blind Eogonim' : mode === 'eogonim' ? 'Eogonim' : 'Speedrun';
+    mode === 'ascension' ? 'Ascension' : mode === 'blindeogonim' ? 'Blind Eogonim' : mode === 'eogonim' ? 'Eogonim' : 'Speedrun';
   document.getElementById('spModeCredit').style.display = mode === 'eogonim' ? '' : 'none';
   document.getElementById('spUpcomingLabel').style.display = mode === 'speedrun' ? '' : 'none';
   document.getElementById('spUpcomingPieces').style.display = mode === 'speedrun' ? '' : 'none';
@@ -810,13 +650,12 @@ function updateModeUI() {
   document.getElementById('spRulesEogonim').style.display = mode === 'eogonim' ? '' : 'none';
   document.getElementById('spRulesBlindEogonim').style.display = mode === 'blindeogonim' ? '' : 'none';
   document.getElementById('spRulesAscension').style.display = mode === 'ascension' ? '' : 'none';
-  document.getElementById('spRulesExactMatch').style.display = mode === 'exactmatch' ? '' : 'none';
   document.getElementById('spLeaderboardTitle').textContent =
-    mode === 'ascension' ? 'Deepest Runs' : mode === 'exactmatch' ? 'Longest Streaks' : (mode === 'eogonim' || mode === 'blindeogonim') ? 'Lowest Scores' : 'Top Times';
+    mode === 'ascension' ? 'Deepest Runs' : (mode === 'eogonim' || mode === 'blindeogonim') ? 'Lowest Scores' : 'Top Times';
   document.getElementById('spSaveStatus').textContent = '';
   document.getElementById('spPieceChoices').style.display = 'none';
   document.getElementById('spTimer').textContent =
-    (mode === 'eogonim' || mode === 'blindeogonim') ? 'Captured: 0' : (mode === 'ascension') ? `Round 1 - 0/${ascensionThreshold(1)}` : mode === 'exactmatch' ? 'Round 1' : formatTime(0);
+    (mode === 'eogonim' || mode === 'blindeogonim') ? 'Captured: 0' : mode === 'ascension' ? `Round 1 - 0/${ascensionThreshold(1)}` : formatTime(0);
 }
 
 // ---------- Rendering ----------
@@ -897,44 +736,9 @@ function renderPieceChoices() {
   });
 }
 
-// Exact Match's hand - a grid of clickable shape buttons (unlike Ascension's
-// purely informational "Your shapes" inventory, these are the actual
-// selection UI: selectHandShape() is wired to each button's click). Shows
-// every shape that was EVER in this round's hand (Object.keys(handCounts)
-// - insertion order from rollExactMatchHand(), stable for the round), with
-// a remaining-copies badge; a shape reaching 0 stays visible but disabled
-// rather than disappearing, so the player can still see their whole
-// starting hand while planning around what's left.
-function renderExactMatchHand() {
-  const label = document.getElementById('spHandLabel');
-  const grid = document.getElementById('spHandGrid');
-  if (state.mode !== 'exactmatch' || !state.handCounts) {
-    label.style.display = 'none';
-    grid.style.display = 'none';
-    grid.innerHTML = '';
-    return;
-  }
-  label.style.display = '';
-  grid.style.display = '';
-  const shapeNames = Object.keys(state.handCounts);
-  grid.innerHTML = shapeNames.map((shapeName) => `
-    <button type="button" class="sp-hand-btn${state.selected && state.selected.shapeName === shapeName ? ' active' : ''}"
-      data-shape="${shapeName}" ${state.handCounts[shapeName] === 0 ? 'disabled' : ''}>
-      <canvas class="sp-hand-canvas"></canvas>
-      <span class="sp-hand-count">${state.handCounts[shapeName]}</span>
-    </button>
-  `).join('');
-  const canvases = grid.querySelectorAll('.sp-hand-canvas');
-  shapeNames.forEach((shapeName, i) => drawShapeIcon(canvases[i], BASE_SHAPES[shapeName], 10));
-  grid.querySelectorAll('.sp-hand-btn').forEach((btn) => {
-    btn.addEventListener('click', () => selectHandShape(btn.dataset.shape));
-  });
-}
-
 function render() {
   drawBoard();
   renderPieceChoices();
-  renderExactMatchHand();
 
   const banner = document.getElementById('spBanner');
   const pieceInfo = document.getElementById('spPieceInfo');
@@ -945,14 +749,11 @@ function render() {
   document.getElementById('spTabEogonim').disabled = state.running;
   document.getElementById('spTabBlindEogonim').disabled = state.running;
   document.getElementById('spTabAscension').disabled = state.running;
-  document.getElementById('spTabExactMatch').disabled = state.running;
 
   if (state.mode === 'eogonim' || state.mode === 'blindeogonim') {
     document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured}`;
   } else if (state.mode === 'ascension') {
     document.getElementById('spTimer').textContent = `Round ${state.round} - ${state.totalCaptured}/${ascensionThreshold(state.round)}`;
-  } else if (state.mode === 'exactmatch' && state.exactTarget !== null) {
-    document.getElementById('spTimer').textContent = `Round ${state.round} - ${state.totalCaptured}/${state.exactTarget}`;
   }
 
   if (!state.running && !state.finished) {
@@ -963,9 +764,7 @@ function render() {
         ? "Same as Eogonim, but every piece vanishes the instant you place it. Remember where you've put them - clicking an occupied square ends your run."
         : state.mode === 'ascension'
           ? 'Pick a starting shape, then capture enough territory each round to keep unlocking more.'
-          : state.mode === 'exactmatch'
-            ? "Each round deals a hand of 15 random pieces and a target scaled to what that hand can reach. Captured territory starts high and falls as you place more pieces - land it exactly on the target. Drop below it or run out of moves first and it's over."
-            : "You'll get one random piece at a time - place it anywhere it fits.";
+          : "You'll get one random piece at a time - place it anywhere it fits.";
   } else if (state.mode === 'ascension' && state.awaitingPieceChoice) {
     banner.textContent = state.round === 1 ? 'Choose your starting shape!' : `Round ${state.round - 1} cleared! Choose your next shape.`;
     pieceInfo.textContent = 'Pick a shape below to add it to your collection.';
@@ -982,11 +781,6 @@ function render() {
     pieceInfo.textContent = state.illegalMove
       ? 'That square was already occupied. The board above shows where everything actually was - click Restart to try again.'
       : 'Click Restart to try for a lower score.';
-  } else if (state.mode === 'exactmatch' && state.finished) {
-    banner.textContent = `Run over — cleared ${state.round - 1} round${state.round - 1 === 1 ? '' : 's'} in a row`;
-    pieceInfo.textContent = state.exactOvershoot
-      ? `Captured dropped to ${state.totalCaptured}, skipping past the target of ${state.exactTarget}. Click Restart to try again.`
-      : `Stuck at ${state.totalCaptured}/${state.exactTarget} captured with no placeable pieces left. Click Restart to try again.`;
   } else if (state.finished && state.failed) {
     banner.textContent = 'No legal moves - run failed';
     pieceInfo.textContent = "That piece didn't fit anywhere on the board. Click Restart to try again.";
@@ -1135,7 +929,6 @@ document.getElementById('spTabSpeedrun').addEventListener('click', () => setMode
 document.getElementById('spTabEogonim').addEventListener('click', () => setMode('eogonim'));
 document.getElementById('spTabBlindEogonim').addEventListener('click', () => setMode('blindeogonim'));
 document.getElementById('spTabAscension').addEventListener('click', () => setMode('ascension'));
-document.getElementById('spTabExactMatch').addEventListener('click', () => setMode('exactmatch'));
 
 // ---------- Leaderboard ----------
 async function saveScoreIfBest(timeMs) {
@@ -1218,34 +1011,14 @@ async function saveAscensionScoreIfBest(rounds) {
   refreshLeaderboard();
 }
 
-// Same discipline again, via submit_exactmatch_score() - a separate RPC and
-// leaderboard row from Ascension's, even though both are "higher (rounds
-// cleared) is better" scoring.
-async function saveExactMatchScoreIfBest(rounds) {
-  const user = Auth.getUser();
-  if (!user) {
-    document.getElementById('spSaveStatus').textContent = 'Sign in to save your score to the leaderboard.';
-    return;
-  }
-  const { data: bestRounds, error } = await supabaseClient.rpc('submit_exactmatch_score', { p_round: rounds });
-  if (error) {
-    document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
-    return;
-  }
-  document.getElementById('spSaveStatus').textContent = bestRounds === rounds
-    ? 'New personal best - saved!'
-    : `Saved. Your best is still ${bestRounds} round${bestRounds === 1 ? '' : 's'}.`;
-  refreshLeaderboard();
-}
-
 async function refreshLeaderboard() {
   const container = document.getElementById('spLeaderboard');
   const mode = state.mode;
   const scoreColumn = mode === 'speedrun' ? 'time_ms' : 'score';
-  // Every mode except ascension/exactmatch is "lower is better" (fastest
-  // time, fewest captured squares) - those two are where more (rounds
+  // Every mode except ascension is "lower is better" (fastest time, fewest
+  // captured squares) - ascension is the one case where more (rounds
   // cleared) is better.
-  const ascending = mode !== 'ascension' && mode !== 'exactmatch';
+  const ascending = mode !== 'ascension';
   const { data, error } = await supabaseClient
     .from('singleplayer_runs')
     .select(`${scoreColumn}, profiles(id, username, avatar_id, title_id)`)
@@ -1262,10 +1035,10 @@ async function refreshLeaderboard() {
 
   const formatScore = (row) => {
     if (mode === 'speedrun') return formatTime(row.time_ms);
-    if (mode === 'ascension' || mode === 'exactmatch') return `${row.score} round${row.score === 1 ? '' : 's'}`;
+    if (mode === 'ascension') return `${row.score} round${row.score === 1 ? '' : 's'}`;
     return row.score;
   };
-  const columnLabel = mode === 'speedrun' ? 'Time' : (mode === 'ascension' || mode === 'exactmatch') ? 'Rounds' : 'Score';
+  const columnLabel = mode === 'speedrun' ? 'Time' : mode === 'ascension' ? 'Rounds' : 'Score';
 
   const rows = (data || []).map((row, i) => `
     <tr>

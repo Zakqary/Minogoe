@@ -3241,3 +3241,31 @@ begin
   end if;
 end;
 $$;
+
+-- ---------- Phase 42: remove singleplayer "Exact Match" mode ----------
+
+-- Exact Match didn't hold up as a gamemode in practice and is being pulled
+-- entirely, client and server both. Any saved Exact Match leaderboard rows
+-- are deleted here (there's nothing else meaningful to do with them - the
+-- client no longer has any UI to display or submit to that mode), and
+-- submit_exactmatch_score() is dropped since nothing calls it anymore.
+delete from public.singleplayer_runs where mode = 'exactmatch';
+drop function if exists public.submit_exactmatch_score(integer);
+
+-- Same explicit drop-then-add pattern as every earlier mode change in this
+-- file - this is now the latest phase to touch these two constraints, so
+-- it's the one that owns them; nothing earlier in the file (including
+-- Phase 41 above) should ever re-add the wider, exactmatch-including
+-- version again. The delete above runs BEFORE this narrows the constraint
+-- back down, so no existing row can ever violate it on a fresh re-run.
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension'));
+
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
+  check (
+    (mode = 'speedrun' and time_ms is not null and score is null)
+    or (mode = 'eogonim' and score is not null and time_ms is null)
+    or (mode = 'blindeogonim' and score is not null and time_ms is null)
+    or (mode = 'ascension' and score is not null and time_ms is null)
+  );

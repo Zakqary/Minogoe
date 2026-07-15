@@ -3134,26 +3134,21 @@ $$;
 
 -- ---------- Phase 40: singleplayer "Blind Eogonim" mode (memory variant of Eogonim) ----------
 
--- Same explicit drop-then-add pattern as every earlier mode addition in
--- this file (Phase 33/36's comments explain why an inline "check (...)" on
--- "add column if not exists" would be wrong here) - this is now the latest
--- phase to touch these two constraints, so it's the one that owns them;
--- nothing earlier in the file should ever re-add a narrower version again.
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension'));
-
+-- Deliberately NOT adding/re-adding singleplayer_runs_mode_check or
+-- singleplayer_runs_mode_fields_check here - this phase used to re-add both
+-- with a 4-value mode list (missing 'exactmatch'), which on a full re-run
+-- of this file re-narrowed both constraints right back down, rejecting any
+-- real 'exactmatch' row a player had already saved before Phase 41 below's
+-- wider version ever got a chance to run. Same recurring bug class as
+-- get_p1_p2_win_rates()/buy_seed_pack()/Phase 33's singleplayer_runs_mode_
+-- check earlier in this file - whichever phase touches this constraint
+-- LAST owns it (Phase 41 today); do not add a narrower version of either
+-- constraint here again.
+--
 -- Blind Eogonim reuses the existing "score" column exactly like Eogonim
 -- does (a captured-square count, lower is better) - it's the same scoring
 -- rule, just played with pieces hidden after placement, so no new column
--- is needed, only a new allowed mode value.
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
-  check (
-    (mode = 'speedrun' and time_ms is not null and score is null)
-    or (mode = 'eogonim' and score is not null and time_ms is null)
-    or (mode = 'blindeogonim' and score is not null and time_ms is null)
-    or (mode = 'ascension' and score is not null and time_ms is null)
-  );
+-- is needed, only a new allowed mode value (added by Phase 41 below).
 
 -- A separate RPC rather than reusing submit_singleplayer_score() - that one
 -- is hardcoded to mode = 'eogonim', and Blind Eogonim keeps its own

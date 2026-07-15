@@ -99,5 +99,53 @@ function showGiftToast(gifts) {
   });
 }
 
+// Same acknowledge-on-dismiss idea as the two toasts above, but for coins
+// won from the 48-hour "most ranked matches played" leaderboard
+// (schema.sql Phase 47) - that reward is granted entirely server-side by
+// rollover_ranked_period_if_needed(), so this is the only way a winner
+// ever finds out.
+async function checkForCoinAwards() {
+  const user = Auth.getUser();
+  if (!user) return;
+
+  const { data: awards, error } = await supabaseClient
+    .from('coin_award_notifications')
+    .select('*')
+    .eq('user_id', user.id)
+    .eq('acknowledged', false)
+    .order('created_at', { ascending: true });
+
+  if (error || !awards || awards.length === 0) return;
+
+  showCoinAwardToast(awards);
+}
+
+function removeCoinAwardToast() {
+  const el = document.getElementById('minoCoinAwardToast');
+  if (el) el.remove();
+}
+
+function showCoinAwardToast(awards) {
+  if (document.getElementById('minoCoinAwardToast')) return;
+
+  const lines = awards.map((a) => `<div class="mino-gift-toast-line">&#127942; You won ${a.coins_amount} coin${a.coins_amount === 1 ? '' : 's'} for the ${escapeHtml(a.reason)}!</div>`).join('');
+
+  const el = document.createElement('div');
+  el.id = 'minoCoinAwardToast';
+  el.className = 'mino-seed-toast mino-gift-toast';
+  el.innerHTML = `
+    <button id="minoCoinAwardToastDismiss" class="mino-seed-toast-dismiss" aria-label="Dismiss">&times;</button>
+    <div class="mino-seed-toast-message">Nice work!</div>
+    ${lines}
+  `;
+  document.body.appendChild(el);
+
+  document.getElementById('minoCoinAwardToastDismiss').addEventListener('click', async () => {
+    removeCoinAwardToast();
+    await supabaseClient.rpc('acknowledge_coin_award_notifications');
+  });
+}
+
 Auth.onAuthChange(checkForNewPacks);
 Auth.onAuthChange(checkForNewGifts);
+Auth.onAuthChange(checkForCoinAwards);

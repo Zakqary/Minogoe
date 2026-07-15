@@ -3589,3 +3589,290 @@ begin
   return new;
 end;
 $$;
+
+-- ---------- Phase 47: 48-hour rotating "most ranked matches played" leaderboard ----------
+
+-- Singleton row tracking when the CURRENT period started. Nothing else
+-- about a finished period needs to survive its rollover - who won and how
+-- much they got is captured permanently in coin_award_notifications below.
+create table if not exists public.ranked_leaderboard_period (
+  id integer primary key default 1,
+  started_at timestamptz not null default now(),
+  constraint ranked_leaderboard_period_singleton check (id = 1)
+);
+insert into public.ranked_leaderboard_period (id, started_at)
+values (1, now())
+on conflict (id) do nothing;
+
+alter table public.ranked_leaderboard_period enable row level security;
+drop policy if exists "Ranked leaderboard period is publicly readable" on public.ranked_leaderboard_period;
+create policy "Ranked leaderboard period is publicly readable"
+  on public.ranked_leaderboard_period for select
+  using (true);
+-- No insert/update/delete policy - only rollover_ranked_period_if_needed()
+-- below (security definer) ever writes here.
+
+-- Each player's count of ranked matches played within the CURRENT period
+-- only - wiped (not decremented) on every rollover, so this always reads
+-- as "since the period started," never a running lifetime total (that's
+-- what profiles.ranked_games_played already is).
+create table if not exists public.ranked_period_counts (
+  user_id uuid primary key references public.profiles(id) on delete cascade,
+  games_count integer not null default 0
+);
+
+alter table public.ranked_period_counts enable row level security;
+drop policy if exists "Ranked period counts are publicly readable" on public.ranked_period_counts;
+create policy "Ranked period counts are publicly readable"
+  on public.ranked_period_counts for select
+  using (true);
+-- No insert/update/delete policy - only handle_ranked_game() (increments,
+-- redefined below) and rollover_ranked_period_if_needed() (clears) ever
+-- write here.
+
+-- Generic "you were awarded coins for X" notification log, same
+-- acknowledge-on-dismiss pattern as pending_pack_notifications/mino_gifts.
+-- Deliberately not folded into mino_gifts itself - these awards have
+-- nothing to do with a specific planted Mino (mino_id would just be null
+-- on every row here), and a free-text reason reads oddly crammed into that
+-- table's shape.
+create table if not exists public.coin_award_notifications (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  coins_amount integer not null,
+  reason text not null,
+  acknowledged boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+alter table public.coin_award_notifications enable row level security;
+drop policy if exists "Users can view their own coin award notifications" on public.coin_award_notifications;
+create policy "Users can view their own coin award notifications"
+  on public.coin_award_notifications for select
+  using (auth.uid() = user_id);
+-- No insert/update/delete policy - only rollover_ranked_period_if_needed()
+-- (grants) and acknowledge_coin_award_notifications() (marks read) below
+-- ever write here.
+
+-- Checks whether the current 48-hour period has elapsed and, if so, awards
+-- coins to its top players and starts a fresh period immediately. Ties are
+-- handled the same way the tie-aware leaderboard ranking (leaderboard.js/
+-- singleplayer.js) treats them: everyone tied for the most matches played
+-- gets 2 coins each, and everyone tied for the next-highest DISTINCT count
+-- gets 1 coin each (if literally everyone who played is tied for first,
+-- there's no "2nd place" tier at all this period - that's fine).
+--
+-- There's no real cron job available to this schema, so this is called
+-- opportunistically from two places instead: handle_ranked_game() (every
+-- ranked game finished) and get_ranked_period_leaderboard() (every time
+-- anyone views the leaderboard panel on the main page). Between those two,
+-- a rollover fires within moments of the 48-hour mark passing on any site
+-- with regular traffic. The `for update` row lock on the singleton period
+-- row is what keeps two simultaneous callers from double-awarding the same
+-- outgoing period.
+create or replace function public.rollover_ranked_period_if_needed()
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  period_started_at timestamptz;
+  top_count integer;
+  second_count integer;
+begin
+  select started_at into period_started_at from public.ranked_leaderboard_period where id = 1 for update;
+
+  if period_started_at is null or now() - period_started_at < interval '48 hours' then
+    return;
+  end if;
+
+  select max(games_count) into top_count from public.ranked_period_counts where games_count > 0;
+
+  if top_count is not null then
+    update public.profiles
+    set coins = coins + 2, lifetime_coins_earned = lifetime_coins_earned + 2
+    where id in (select user_id from public.ranked_period_counts where games_count = top_count);
+
+    insert into public.coin_award_notifications (user_id, coins_amount, reason)
+    select user_id, 2, '48-hour ranked leaderboard'
+    from public.ranked_period_counts where games_count = top_count;
+
+    select max(games_count) into second_count
+    from public.ranked_period_counts where games_count > 0 and games_count < top_count;
+
+    if second_count is not null then
+      update public.profiles
+      set coins = coins + 1, lifetime_coins_earned = lifetime_coins_earned + 1
+      where id in (select user_id from public.ranked_period_counts where games_count = second_count);
+
+      insert into public.coin_award_notifications (user_id, coins_amount, reason)
+      select user_id, 1, '48-hour ranked leaderboard'
+      from public.ranked_period_counts where games_count = second_count;
+    end if;
+  end if;
+
+  delete from public.ranked_period_counts;
+  update public.ranked_leaderboard_period set started_at = now() where id = 1;
+end;
+$$;
+
+-- Redefines handle_ranked_game() one more time (full body copied forward
+-- from Phase 37) to also maintain ranked_period_counts: rolls over the
+-- period FIRST (so a stale outgoing period never absorbs this game), then
+-- credits this just-finished game to both players' current-period counts.
+create or replace function public.handle_ranked_game()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p1_elo integer;
+  p2_elo integer;
+  expected_p1 numeric;
+  actual_p1 numeric;
+  k constant integer := 32;
+  delta_p1 integer;
+  delta_p2 integer;
+  this_winner_id uuid;
+  p1_recent_opps uuid[];
+  p1_recent_winners uuid[];
+  p2_recent_opps uuid[];
+  is_halved boolean := false;
+  p1_won boolean;
+  p2_won boolean;
+begin
+  if new.mode <> 'ranked' or new.player1_id is null or new.player2_id is null then
+    return new;
+  end if;
+
+  perform public.rollover_ranked_period_if_needed();
+
+  insert into public.ranked_period_counts (user_id, games_count) values (new.player1_id, 1)
+    on conflict (user_id) do update set games_count = public.ranked_period_counts.games_count + 1;
+  insert into public.ranked_period_counts (user_id, games_count) values (new.player2_id, 1)
+    on conflict (user_id) do update set games_count = public.ranked_period_counts.games_count + 1;
+
+  select elo_rating into p1_elo from public.profiles where id = new.player1_id;
+  select elo_rating into p2_elo from public.profiles where id = new.player2_id;
+
+  expected_p1 := 1.0 / (1.0 + power(10, (p2_elo - p1_elo) / 400.0));
+  actual_p1 := case when new.winner = 2 then 0 else 1 end;
+
+  delta_p1 := round(k * (actual_p1 - expected_p1));
+
+  this_winner_id := case when new.winner = 1 then new.player1_id when new.winner = 2 then new.player2_id else new.player1_id end;
+
+  select array_agg(opp_id order by ended_at desc), array_agg(winner_id order by ended_at desc)
+  into p1_recent_opps, p1_recent_winners
+  from (
+    select
+      case when player1_id = new.player1_id then player2_id else player1_id end as opp_id,
+      case when winner = 1 then player1_id when winner = 2 then player2_id else player1_id end as winner_id,
+      ended_at
+    from public.games
+    where mode = 'ranked' and id <> new.id
+      and (player1_id = new.player1_id or player2_id = new.player1_id)
+    order by ended_at desc
+    limit 2
+  ) sub;
+
+  select array_agg(opp_id order by ended_at desc)
+  into p2_recent_opps
+  from (
+    select
+      case when player1_id = new.player2_id then player2_id else player1_id end as opp_id,
+      ended_at
+    from public.games
+    where mode = 'ranked' and id <> new.id
+      and (player1_id = new.player2_id or player2_id = new.player2_id)
+    order by ended_at desc
+    limit 2
+  ) sub;
+
+  if array_length(p1_recent_opps, 1) = 2 and array_length(p2_recent_opps, 1) = 2
+     and p1_recent_opps[1] = new.player2_id and p1_recent_opps[2] = new.player2_id
+     and p2_recent_opps[1] = new.player1_id and p2_recent_opps[2] = new.player1_id
+     and p1_recent_winners[1] = this_winner_id and p1_recent_winners[2] = this_winner_id then
+    is_halved := true;
+    delta_p1 := round(delta_p1 / 2.0);
+  end if;
+
+  delta_p2 := -delta_p1;
+
+  p1_won := (new.winner = 1 or new.winner is null);
+  p2_won := (new.winner = 2);
+
+  update public.profiles
+  set elo_rating = elo_rating + delta_p1,
+      highest_elo = greatest(highest_elo, elo_rating + delta_p1),
+      ranked_games_played = ranked_games_played + 1,
+      ranked_wins = ranked_wins + case when p1_won then 1 else 0 end,
+      ranked_losses = ranked_losses + case when p2_won then 1 else 0 end,
+      ranked_win_streak = case when p1_won then ranked_win_streak + 1 else 0 end,
+      highest_ranked_win_streak = case
+        when p1_won then greatest(highest_ranked_win_streak, ranked_win_streak + 1)
+        else highest_ranked_win_streak
+      end
+  where id = new.player1_id;
+
+  update public.profiles
+  set elo_rating = elo_rating + delta_p2,
+      highest_elo = greatest(highest_elo, elo_rating + delta_p2),
+      ranked_games_played = ranked_games_played + 1,
+      ranked_wins = ranked_wins + case when p2_won then 1 else 0 end,
+      ranked_losses = ranked_losses + case when p1_won then 1 else 0 end,
+      ranked_win_streak = case when p2_won then ranked_win_streak + 1 else 0 end,
+      highest_ranked_win_streak = case
+        when p2_won then greatest(highest_ranked_win_streak, ranked_win_streak + 1)
+        else highest_ranked_win_streak
+      end
+  where id = new.player2_id;
+
+  update public.games set elo_delta_p1 = delta_p1, elo_delta_p2 = delta_p2, elo_halved = is_halved where id = new.id;
+
+  return new;
+end;
+$$;
+
+-- Publicly callable: returns the current period's standings (top 10 by
+-- matches played), joined with the display info the client needs to
+-- render each row. Rolls over first, so simply viewing this leaderboard is
+-- enough to trigger a timely reset even on a day nobody plays ranked.
+create or replace function public.get_ranked_period_leaderboard()
+returns table (
+  user_id uuid,
+  username text,
+  avatar_id text,
+  title_id text,
+  games_count integer
+)
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  perform public.rollover_ranked_period_if_needed();
+
+  return query
+    select p.id, p.username, p.avatar_id, p.title_id, c.games_count
+    from public.ranked_period_counts c
+    join public.profiles p on p.id = c.user_id
+    where c.games_count > 0
+    order by c.games_count desc
+    limit 10;
+end;
+$$;
+
+create or replace function public.acknowledge_coin_award_notifications()
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  update public.coin_award_notifications set acknowledged = true where user_id = uid and not acknowledged;
+end;
+$$;

@@ -57,14 +57,32 @@ function renderLeaderboard() {
   // just clutters the list with a 0/0/0/0 row.
   const visible = rankedOnly ? players.filter((p) => p.ranked_games_played > 0) : players;
 
-  const sorted = [...visible].sort((a, b) => {
-    const field = fieldFor(sortKey);
-    let av = a[field], bv = b[field];
-    if (typeof av === 'string') { av = av.toLowerCase(); bv = bv.toLowerCase(); }
-    if (av < bv) return sortDescending ? 1 : -1;
-    if (av > bv) return sortDescending ? -1 : 1;
-    return 0;
-  });
+  // A player who's never queued ranked still carries the flat 1200 default
+  // in elo_rating - sorting on that verbatim would rank them above every
+  // real player below 1200, which is misleading since 1200 was never
+  // actually earned. When sorting by ELO specifically, unranked players
+  // (ranked_games_played === 0) always sink to the bottom regardless of
+  // sort direction, and are shown as "Unranked" in the ELO cell below
+  // rather than a number that looks like a real rating. Every other column
+  // sorts normally - Games/W/L are all-modes counts here (unless "ranked
+  // only" is checked, which already filters unranked players out entirely
+  // via `visible` above), so there's no equivalent fake-default problem.
+  const sorted = sortKey === 'elo_rating'
+    ? [
+        ...visible.filter((p) => p.ranked_games_played > 0).sort((a, b) => {
+          if (a.elo_rating !== b.elo_rating) return sortDescending ? b.elo_rating - a.elo_rating : a.elo_rating - b.elo_rating;
+          return 0;
+        }),
+        ...visible.filter((p) => p.ranked_games_played === 0).sort((a, b) => a.username.toLowerCase().localeCompare(b.username.toLowerCase())),
+      ]
+    : [...visible].sort((a, b) => {
+        const field = fieldFor(sortKey);
+        let av = a[field], bv = b[field];
+        if (typeof av === 'string') { av = av.toLowerCase(); bv = bv.toLowerCase(); }
+        if (av < bv) return sortDescending ? 1 : -1;
+        if (av > bv) return sortDescending ? -1 : 1;
+        return 0;
+      });
 
   const headerCells = COLUMNS.map((col) => {
     const active = col.key === sortKey;
@@ -76,7 +94,7 @@ function renderLeaderboard() {
     <tr class="${rankRowClass(i)}">
       <td>${i + 1}</td>
       <td class="leaderboard-player-cell">${avatarHtml(p.avatar_id, 20)} <a href="profile.html?user=${encodeURIComponent(p.id)}">${escapeHtml(p.username)}</a> ${titleBadgeHtml(p.title_id)}</td>
-      <td>${p.elo_rating}</td>
+      <td>${p.ranked_games_played > 0 ? p.elo_rating : 'Unranked'}</td>
       <td>${p[fieldFor('games')]}</td>
       <td>${p[fieldFor('wins')]}</td>
       <td>${p[fieldFor('losses')]}</td>

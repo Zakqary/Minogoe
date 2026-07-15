@@ -2235,7 +2235,19 @@ alter table public.singleplayer_runs add column if not exists score integer;
 -- it were still in place.
 alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
 update public.singleplayer_runs set mode = 'eogonim' where mode = 'golf';
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim'));
+
+-- Deliberately NOT re-adding singleplayer_runs_mode_check here (it used to
+-- be re-added as check (mode in ('speedrun', 'eogonim')) at this exact
+-- spot) - Phase 36 below adds a third mode ('ascension') to this same
+-- constraint, and since this whole file re-runs top-to-bottom every time,
+-- re-asserting THIS phase's narrower 2-value version on every re-run would
+-- permanently reject any real 'ascension' row a player has since saved,
+-- failing here before Phase 36's wider version ever got a chance to run -
+-- exactly what happened. Same recurring bug class as
+-- get_p1_p2_win_rates()/buy_seed_pack() earlier in this file, just for a
+-- constraint that itself got widened a second time. The constraint is now
+-- owned entirely by whichever phase last touches the mode column's allowed
+-- values (Phase 36 today) - do not add a narrower version of it here again.
 
 alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_user_id_key;
 alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_user_id_mode_key;

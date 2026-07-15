@@ -40,12 +40,43 @@ async function loadLeaderboard() {
   renderLeaderboard();
 }
 
-function rankRowClass(i) {
-  if (i === 0) return 'rank-gold';
-  if (i === 1) return 'rank-silver';
-  if (i === 2) return 'rank-bronze';
-  if (i === 3 || i === 4) return 'rank-top5';
+// Takes the actual rank NUMBER (1224 competition ranking - see
+// computeRankLabels() below), not a row index, so every player tied for
+// e.g. rank 1 gets the gold styling, not just whichever one happens to
+// render first. '-' (unranked, no numeric rank) never matches any of these.
+function rankRowClass(rank) {
+  if (rank === 1) return 'rank-gold';
+  if (rank === 2) return 'rank-silver';
+  if (rank === 3) return 'rank-bronze';
+  if (rank === 4 || rank === 5) return 'rank-top5';
   return '';
+}
+
+// Standard competition ("1224") ranking: players tied on the active sort
+// field share the same rank number, and the rank after a tie skips ahead
+// by the tie's size (two players tied for #1 are both #1, the next
+// distinct player is #3, not #2) - same idea as profile.js's own rank
+// stat (a "how many players are strictly better than me, plus one" count).
+// `rows` must already be sorted in the order they'll render. Unranked
+// players (elo sort only) get '-' instead of a number - there's nothing
+// meaningful to tie them on since their elo_rating is just the untouched
+// default, not a real rating.
+function computeRankLabels(rows, field) {
+  const labels = [];
+  let lastValue = null, lastRank = 0;
+  rows.forEach((p, i) => {
+    if (field === 'elo_rating' && p.ranked_games_played === 0) {
+      labels.push('-');
+      return;
+    }
+    const value = p[field];
+    if (lastValue === null || value !== lastValue) {
+      lastRank = i + 1;
+      lastValue = value;
+    }
+    labels.push(lastRank);
+  });
+  return labels;
 }
 
 function renderLeaderboard() {
@@ -90,9 +121,15 @@ function renderLeaderboard() {
     return `<th class="sortable-col${active ? ' sorted' : ''}" data-key="${col.key}">${escapeHtml(col.label)}${arrow}</th>`;
   }).join('');
 
+  // Ties computed against whichever field is actually driving the current
+  // sort (username sorting never ties, since usernames are unique).
+  // fieldFor('elo_rating') passes through unchanged, so this still
+  // correctly triggers computeRankLabels()'s "unranked" special case.
+  const rankLabels = computeRankLabels(sorted, fieldFor(sortKey));
+
   const rows = sorted.map((p, i) => `
-    <tr class="${rankRowClass(i)}">
-      <td>${i + 1}</td>
+    <tr class="${rankRowClass(rankLabels[i])}">
+      <td>${rankLabels[i]}</td>
       <td class="leaderboard-player-cell">${avatarHtml(p.avatar_id, 20)} <a href="profile.html?user=${encodeURIComponent(p.id)}">${escapeHtml(p.username)}</a> ${titleBadgeHtml(p.title_id)}</td>
       <td>${p.ranked_games_played > 0 ? p.elo_rating : 'Unranked'}</td>
       <td>${p[fieldFor('games')]}</td>

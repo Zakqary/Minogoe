@@ -1072,13 +1072,26 @@ async function refreshLeaderboard() {
   };
   const columnLabel = mode === 'speedrun' ? 'Time' : mode === 'ascension' ? 'Rounds' : 'Score';
 
-  const rows = (data || []).map((row, i) => `
-    <tr>
-      <td>${i + 1}</td>
-      <td class="leaderboard-player-cell">${avatarHtml(row.profiles.avatar_id, 20)} <a href="profile.html?user=${encodeURIComponent(row.profiles.id)}">${escapeHtml(row.profiles.username)}</a> ${titleBadgeHtml(row.profiles.title_id)}</td>
-      <td>${formatScore(row)}</td>
-    </tr>
-  `).join('');
+  // Standard competition ("1224") ranking: two runs with the identical
+  // time/score share the same rank number, and the rank after a tie skips
+  // ahead by the tie's size, same idea as leaderboard.js's own
+  // computeRankLabels(). data is already sorted by scoreColumn, so this is
+  // just a running comparison against the previous row's value.
+  let lastValue = null, lastRank = 0;
+  const rows = (data || []).map((row, i) => {
+    const value = mode === 'speedrun' ? row.time_ms : row.score;
+    if (lastValue === null || value !== lastValue) {
+      lastRank = i + 1;
+      lastValue = value;
+    }
+    return `
+      <tr>
+        <td>${lastRank}</td>
+        <td class="leaderboard-player-cell">${avatarHtml(row.profiles.avatar_id, 20)} <a href="profile.html?user=${encodeURIComponent(row.profiles.id)}">${escapeHtml(row.profiles.username)}</a> ${titleBadgeHtml(row.profiles.title_id)}</td>
+        <td>${formatScore(row)}</td>
+      </tr>
+    `;
+  }).join('');
 
   container.innerHTML = `
     <table class="games-table">

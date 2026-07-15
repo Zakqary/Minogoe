@@ -209,24 +209,6 @@ async function renderProfilePage() {
     ? `<span class="profile-companion" title="${escapeHtml(minoLabel(profile.companion))}${profile.companion.name ? ' - ' + escapeHtml(profile.companion.name) : ''}">${minoVisualHtml(profile.companion, 32)}</span>`
     : '';
 
-  // pvp_*/bot_* split out a vs-bot practice game from a "regular" game
-  // against a real opponent (schema.sql Phase 23) - shown as two clearly
-  // separate stat rows instead of blending them into one number the way
-  // games_played/wins/losses (still used as-is elsewhere, e.g. the
-  // leaderboard) do. The bot row only appears once there's actually
-  // something to show, so most profiles aren't cluttered with a zeroed-
-  // out row for a mode they've never touched. No ties column - ties are
-  // no longer reachable under the current 0.5 handicap, and historical
-  // ones are folded into wins (schema.sql Phase 28).
-  const botStatsHtml = profile.bot_games_played > 0 ? `
-    <h3>vs Bot</h3>
-    <div class="profile-stats">
-      <div class="stat"><div class="stat-value">${profile.bot_games_played}</div><div class="stat-label">Games</div></div>
-      <div class="stat"><div class="stat-value">${profile.bot_wins}</div><div class="stat-label">Wins</div></div>
-      <div class="stat"><div class="stat-value">${profile.bot_losses}</div><div class="stat-label">Losses</div></div>
-    </div>
-  ` : '';
-
   // numeric columns (score1/score2 and anything summed from them) come
   // back from PostgREST as strings, not numbers, to avoid float precision
   // loss - same reason stats.js wraps every numeric RPC result in Number().
@@ -257,7 +239,6 @@ async function renderProfilePage() {
       <div class="stat"><div class="stat-value">${formatPoints(pointsFor)}</div><div class="stat-label">Points Scored</div></div>
       <div class="stat"><div class="stat-value">${formatPoints(pointsAgainst)}</div><div class="stat-label">Points Against</div></div>
     </div>
-    ${botStatsHtml}
     ${singleplayerHtml}
     ${headToHeadHtml}
     <h3>Recent Games</h3>

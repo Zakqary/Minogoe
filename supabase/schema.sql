@@ -3527,3 +3527,65 @@ as $$
   where prev_best is distinct from running_best
   order by mode, achieved_at;
 $$;
+
+-- ---------- Phase 46: case-insensitive unique usernames ----------
+
+-- profiles.username's original "unique not null" (Phase 1) only ever
+-- enforced case-SENSITIVE uniqueness, the default for a plain text column
+-- - "AVNJ" and "avnj" were never actually the same value as far as the
+-- constraint was concerned, so both could be registered as separate
+-- accounts. That's a real impersonation risk (usernames are shown
+-- everywhere - leaderboard, profiles, replays, in-game - and the admin
+-- page's own access check, schema.sql's admin_get_monitor_data(), is
+-- itself just an exact-string username comparison), not just a cosmetic
+-- annoyance. Drops the old case-sensitive constraint and replaces it with
+-- a unique index on lower(username) instead - this enforces case-
+-- insensitive uniqueness (a second signup as "avnj" is rejected once
+-- "AVNJ" exists) while leaving every existing account's stored username
+-- exactly as-cased as it already is; nothing here forces usernames to
+-- lowercase or renames anyone.
+--
+-- If this fails on some already-registered database, it means two
+-- existing accounts already differ only by case (e.g. a real "avnj" and a
+-- real "AVNJ" both already exist) - that's a genuine naming collision this
+-- migration can't safely resolve on its own (which one keeps the name is
+-- a judgment call), so it intentionally surfaces as a clear duplicate-key
+-- error here instead of silently picking a winner. Rename one of the
+-- conflicting accounts' usernames by hand, then re-run this file.
+alter table public.profiles drop constraint if exists profiles_username_key;
+create unique index if not exists profiles_username_lower_key on public.profiles (lower(username));
+
+-- Redefines handle_new_user() one more time (full body copied forward
+-- from Phase 31, same as every other redefinition in this file) to add a
+-- friendly rejection message for a case-insensitive duplicate BEFORE
+-- hitting the unique index's raw "duplicate key value violates unique
+-- constraint" error. This check-then-insert has a narrow race-condition
+-- window (two simultaneous signups for the same name could both pass this
+-- check before either commits) - the unique index above is what actually
+-- guarantees correctness either way, this is purely for a nicer error
+-- message in the overwhelmingly common non-race case.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uname text := new.raw_user_meta_data->>'username';
+begin
+  if uname is null
+     or char_length(uname) < 3
+     or char_length(uname) > 20
+     or uname !~ '^[A-Za-z0-9_\- ]+$' then
+    raise exception 'Username must be 3-20 characters, using only letters, numbers, spaces, underscores, and hyphens.';
+  end if;
+
+  if exists (select 1 from public.profiles where lower(username) = lower(uname)) then
+    raise exception 'That username is already taken (usernames are not case-sensitive).';
+  end if;
+
+  insert into public.profiles (id, username) values (new.id, uname);
+  insert into public.user_inventory (user_id, item_id) values (new.id, 'avatar_default');
+  insert into public.user_inventory (user_id, item_id) values (new.id, 'title_freshy');
+  return new;
+end;
+$$;

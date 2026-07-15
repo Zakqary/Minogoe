@@ -23,11 +23,16 @@
 //     the "Ascension run flow" section below.
 //   - Exact Match: also built on Eogonim's no-removal capture rule, but
 //     inverted into a precision puzzle instead of an escalating one. Each
-//     round deals a hand of 15 random pieces (any of which may repeat) and
-//     rolls a random target between 5 and 30 - you choose which piece to
-//     place from your hand (rather than being handed one at a time), and
-//     must land your captured total on EXACTLY that target. Overshooting
-//     is unrecoverable (captures never reverse), and running out of
+//     round deals a hand of 15 random pieces (any of which may repeat), and
+//     rolls a target scaled to what THAT hand can actually deliver (using
+//     roughly 70%-95% of its total cells - see randomExactTarget()), since
+//     captured starts near the board's full size the moment the first
+//     piece touches it and only comes down from there - a flat target
+//     range would usually demand more cells than a 15-piece hand can ever
+//     supply. You choose which piece to place from your hand (rather than
+//     being handed one at a time), and must land your captured total on
+//     EXACTLY that target. Captured dropping below the target is
+//     unrecoverable (captures never reverse), and running out of
 //     placeable pieces before reaching the target also ends the run. Score
 //     is rounds cleared in a row - see the "Exact Match run flow" section.
 // Board size varies by mode (Speedrun: 9x9, everything else: 10x10) - see
@@ -117,7 +122,7 @@ const state = {
   finished: false,
   failed: false, // speedrun only - eogonim/blindeogonim/ascension/exactmatch have no fail state, every ending is a valid (scored) result
   illegalMove: false, // blindeogonim only - whether this run's ending was a click on an occupied square rather than running out of legal placements
-  exactOvershoot: false, // exactmatch only - whether this run's ending was overshooting the target rather than getting stuck under it
+  exactOvershoot: false, // exactmatch only - whether this run's ending was captured dropping below the target rather than getting stuck above it
   selected: null, // { shapeName, orientationIndex } - the current piece being placed
   pieceQueue: [], // shapeNames coming up after the current piece, length LOOKAHEAD_COUNT - speedrun only
   mouseRC: null,
@@ -277,10 +282,25 @@ function rollExactMatchHand() {
   return counts;
 }
 
-// Uniform random integer in [5, 30] - the "how much territory must you
-// capture exactly, this round" target.
-function randomExactTarget() {
-  return 5 + Math.floor(Math.random() * 26);
+function handTotalCells(handCounts) {
+  return Object.entries(handCounts).reduce((sum, [shapeName, count]) => sum + BASE_SHAPES[shapeName].length * count, 0);
+}
+
+// The target has to be set relative to what THIS round's actual hand can
+// deliver, not a flat range - captured starts near the board's full size
+// the moment the first piece touches the open board (see computeCaptured
+// Count()'s doc comment) and only comes down by however many cells get
+// placed after that, so a flat "5-30" target would usually demand more
+// total cells than a 15-piece hand (avg ~69, max 75) can ever supply,
+// making most rounds mathematically unwinnable regardless of skill. Instead,
+// this rolls how much of the hand's total capacity needs to actually get
+// used (70%-95%) and sets the target to whatever captured total that
+// implies - always achievable in principle for THIS hand, while still
+// requiring most (not necessarily literally every single piece) of it.
+function randomExactTarget(handTotal) {
+  const usageFraction = 0.70 + Math.random() * 0.25;
+  const cellsToPlace = Math.round(handTotal * usageFraction);
+  return Math.max(5, BOARD_SIZE * BOARD_SIZE - cellsToPlace);
 }
 
 // ---------- Capture / cascade ----------
@@ -628,7 +648,7 @@ function finishAscensionRun() {
 // this on the same call stack, same defensive re-set chooseShape() does.
 function startExactMatchRound() {
   state.handCounts = rollExactMatchHand();
-  state.exactTarget = randomExactTarget();
+  state.exactTarget = randomExactTarget(handTotalCells(state.handCounts));
   state.running = true;
   state.selected = null;
   state.hover = null;
@@ -646,14 +666,20 @@ function selectHandShape(shapeName) {
   render();
 }
 
-// Called after every placement in Exact Match mode. Captures never reverse
-// (same no-removal rule as Eogonim), so there are exactly three outcomes:
+// Called after every placement in Exact Match mode. computeCapturedCount()
+// counts EMPTY cells still touching a placed piece - that number starts
+// near the board's full size (an empty board's every cell is up for grabs)
+// and only ever goes DOWN as more of the board fills in, reaching 0 on a
+// completely tiled board. So the target is approached from ABOVE, not
+// built up from below - there are exactly three outcomes after a placement:
 //   - Captured total lands EXACTLY on this round's target: round cleared -
 //     advance the round counter and deal a fresh hand/target/board.
-//   - Captured total OVERSHOOTS the target: unrecoverable, run over.
-//   - Still under target: keep going, unless every shape with copies left
+//   - Captured total drops BELOW the target: it can only ever go down from
+//     here (captures never reverse, same no-removal rule as Eogonim), so
+//     skipping past the target this way is unrecoverable - run over.
+//   - Still ABOVE target: keep going, unless every shape with copies left
 //     in hand has nowhere left to fit anywhere on the board, in which case
-//     the target can never be reached either - run over.
+//     captured can never come down to the target either - run over.
 function evaluateExactMatchRound() {
   if (state.totalCaptured === state.exactTarget) {
     state.round += 1;
@@ -661,7 +687,7 @@ function evaluateExactMatchRound() {
     startExactMatchRound();
     return;
   }
-  if (state.totalCaptured > state.exactTarget) {
+  if (state.totalCaptured < state.exactTarget) {
     finishExactMatchRun(true);
     return;
   }
@@ -673,6 +699,9 @@ function evaluateExactMatchRound() {
   render();
 }
 
+// overshoot = true means captured dropped BELOW the target on this move
+// (skipped past it on the way down); false means the run got stuck ABOVE
+// the target with no more legal placements left in hand.
 function finishExactMatchRun(overshoot) {
   state.running = false;
   state.finished = true;
@@ -935,7 +964,7 @@ function render() {
         : state.mode === 'ascension'
           ? 'Pick a starting shape, then capture enough territory each round to keep unlocking more.'
           : state.mode === 'exactmatch'
-            ? "Each round deals a hand of 15 random pieces and a random target - capture EXACTLY that much territory. Overshoot or run out of moves and it's over."
+            ? "Each round deals a hand of 15 random pieces and a target scaled to what that hand can reach. Captured territory starts high and falls as you place more pieces - land it exactly on the target. Drop below it or run out of moves first and it's over."
             : "You'll get one random piece at a time - place it anywhere it fits.";
   } else if (state.mode === 'ascension' && state.awaitingPieceChoice) {
     banner.textContent = state.round === 1 ? 'Choose your starting shape!' : `Round ${state.round - 1} cleared! Choose your next shape.`;
@@ -956,8 +985,8 @@ function render() {
   } else if (state.mode === 'exactmatch' && state.finished) {
     banner.textContent = `Run over — cleared ${state.round - 1} round${state.round - 1 === 1 ? '' : 's'} in a row`;
     pieceInfo.textContent = state.exactOvershoot
-      ? `Overshot the target - captured ${state.totalCaptured}, needed exactly ${state.exactTarget}. Click Restart to try again.`
-      : `Ran out of placeable pieces at ${state.totalCaptured}/${state.exactTarget} captured. Click Restart to try again.`;
+      ? `Captured dropped to ${state.totalCaptured}, skipping past the target of ${state.exactTarget}. Click Restart to try again.`
+      : `Stuck at ${state.totalCaptured}/${state.exactTarget} captured with no placeable pieces left. Click Restart to try again.`;
   } else if (state.finished && state.failed) {
     banner.textContent = 'No legal moves - run failed';
     pieceInfo.textContent = "That piece didn't fit anywhere on the board. Click Restart to try again.";

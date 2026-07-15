@@ -563,6 +563,24 @@ function rotateSelected() {
   render();
 }
 
+// Desktop-only hotkey (F) - same approach as game.js's flipSelected(): find
+// the mirrored counterpart of the CURRENT orientation by matching mirror()
+// against every entry in ORIENTATIONS, rather than assuming a fixed offset
+// (wrong for shapes with fewer than 8 total orientations due to symmetry-
+// driven dedup in generateOrientations()). A no-op for a piece whose mirror
+// is itself (fully symmetric shapes, e.g. Q_O/P_X).
+function flipSelected() {
+  if (!state.selected) return;
+  const { shapeName, orientationIndex } = state.selected;
+  const orientations = ORIENTATIONS[shapeName];
+  const mirroredKey = JSON.stringify(mirror(orientations[orientationIndex]));
+  const mirroredIndex = orientations.findIndex((o) => JSON.stringify(o) === mirroredKey);
+  if (mirroredIndex === -1 || mirroredIndex === orientationIndex) return;
+  state.selected.orientationIndex = mirroredIndex;
+  recomputeHover();
+  render();
+}
+
 function recomputeHover() {
   if (!state.selected || !state.mouseRC) { state.hover = null; return; }
   const { shapeName, orientationIndex } = state.selected;
@@ -902,6 +920,7 @@ canvas.addEventListener('wheel', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'r' || e.key === 'R') rotateSelected();
+  else if (e.key === 'f' || e.key === 'F') flipSelected();
 });
 
 document.getElementById('mobileRotateBtn').addEventListener('click', rotateSelected);

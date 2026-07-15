@@ -15,7 +15,10 @@
 //     still going), so you have to remember where you've already put
 //     pieces. Clicking a square that's actually occupied (visible or not)
 //     ends the run immediately as an illegal move, instead of just being a
-//     harmless no-op like clicking off the edge of the board is.
+//     harmless no-op like clicking off the edge of the board is. Never
+//     draws the same shape twice in a row (drawWeightedPieceExcluding()) -
+//     with the board itself giving no visual feedback either way, a repeat
+//     piece would be indistinguishable from a click that did nothing.
 //   - Ascension: a roguelike built on Eogonim's no-removal capture rule.
 //     Start with one randomly-offered shape (infinite supply), place until
 //     stuck, and if that round's captured total clears an escalating
@@ -108,6 +111,7 @@ const state = {
   failed: false, // speedrun only - eogonim/blindeogonim/ascension have no fail state, every ending is a valid (scored) result
   illegalMove: false, // blindeogonim only - whether this run's ending was a click on an occupied square rather than running out of legal placements
   selected: null, // { shapeName, orientationIndex } - the current piece being placed
+  lastDrawnShape: null, // blindeogonim only - drawWeightedPieceExcluding() reads this to avoid drawing the same shape twice in a row
   pieceQueue: [], // shapeNames coming up after the current piece, length LOOKAHEAD_COUNT - speedrun only
   mouseRC: null,
   hover: null,
@@ -141,6 +145,7 @@ function resetBoardState() {
   state.failed = false;
   state.illegalMove = false;
   state.selected = null;
+  state.lastDrawnShape = null;
   state.pieceQueue = [];
   state.hover = null;
   state.lastTapCell = null;
@@ -203,6 +208,22 @@ function drawWeightedPiece() {
   const roll = Math.random();
   const pool = roll < 0.70 ? PENTOMINO_NAMES : roll < 0.90 ? TETROMINO_NAMES : TROMINO_NAMES;
   return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// Blind Eogonim only: re-rolls on a repeat of the immediately previous
+// shape. With placed pieces genuinely invisible, drawing the same shape
+// twice in a row looks identical to "my click did nothing" - same outline
+// shown, no visible board change either way - so this rules that out
+// entirely. Keeps the same 70/20/10 category weighting for everything
+// else; excludeName is only ever one of ~19 shapes, so this always
+// terminates quickly. excludeName = null (the very first piece of a run)
+// never matches anything, so this behaves exactly like drawWeightedPiece().
+function drawWeightedPieceExcluding(excludeName) {
+  let shapeName;
+  do {
+    shapeName = drawWeightedPiece();
+  } while (shapeName === excludeName);
+  return shapeName;
 }
 
 // Ascension-only: same 70/20/10 category weighting as drawWeightedPiece(),
@@ -402,8 +423,11 @@ function spawnNextPiece() {
     return;
   }
 
-  const shapeName = state.mode === 'speedrun' ? state.pieceQueue.shift() : drawWeightedPiece();
+  const shapeName = state.mode === 'speedrun' ? state.pieceQueue.shift()
+    : state.mode === 'blindeogonim' ? drawWeightedPieceExcluding(state.lastDrawnShape)
+    : drawWeightedPiece();
   if (state.mode === 'speedrun') state.pieceQueue.push(drawWeightedPiece());
+  state.lastDrawnShape = shapeName;
   state.selected = { shapeName, orientationIndex: 0 };
   recomputeHover();
   if (!hasAnyLegalMove(shapeName, state.board)) {

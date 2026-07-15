@@ -9,15 +9,22 @@
 //     captured territory (see computeCapturedCount(), which mirrors
 //     game.js's computeFinalScores() minus the two-player owner-conflict
 //     case, since there's only ever one color here).
+//   - Blind Eogonim: Eogonim's exact same rules and scoring, played on hard
+//     mode - a placed piece disappears from view the instant it's placed
+//     (drawBoard() renders every occupied cell as empty while the run is
+//     still going), so you have to remember where you've already put
+//     pieces. Clicking a square that's actually occupied (visible or not)
+//     ends the run immediately as an illegal move, instead of just being a
+//     harmless no-op like clicking off the edge of the board is.
 //   - Ascension: a roguelike built on Eogonim's no-removal capture rule.
 //     Start with one randomly-offered shape (infinite supply), place until
 //     stuck, and if that round's captured total clears an escalating
 //     threshold, unlock a new shape, reset the board, and go again - see
 //     the "Ascension run flow" section below.
-// Board size varies by mode (Speedrun: 9x9, Eogonim/Ascension: 10x10) - see
+// Board size varies by mode (Speedrun: 9x9, everything else: 10x10) - see
 // BOARD_SIZES and setMode() below - so this is reassigned rather than a const.
 let BOARD_SIZE = 9;
-const BOARD_SIZES = { speedrun: 9, eogonim: 10, ascension: 10 };
+const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10 };
 const CELL_PX = 52;
 const MAX_CAPTURE_SIZE = 4; // speedrun only - enclosures bigger than this don't count. Eogonim has no size cap, matching real Minogoe scoring.
 const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, eogonim has no preview
@@ -91,14 +98,15 @@ function idx(r, c) { return r * BOARD_SIZE + c; }
 // 2 at all, since pieces there never disappear; its captured count is only
 // ever a computed number (see computeCapturedCount()), not a board state.
 const state = {
-  mode: 'speedrun', // 'speedrun' | 'eogonim' | 'ascension' - persists across resetBoardState(), only setMode()/startRun() change it
+  mode: 'speedrun', // 'speedrun' | 'eogonim' | 'blindeogonim' | 'ascension' - persists across resetBoardState(), only setMode()/startRun() change it
   board: new Uint8Array(BOARD_SIZE * BOARD_SIZE),
   pieceIdAt: new Int32Array(BOARD_SIZE * BOARD_SIZE),
   pieceCells: new Map(), // pieceId -> number[] of cell indices
   nextPieceId: 1,
   running: false,
   finished: false,
-  failed: false, // speedrun only - eogonim/ascension have no fail state, every ending is a valid (scored) result
+  failed: false, // speedrun only - eogonim/blindeogonim/ascension have no fail state, every ending is a valid (scored) result
+  illegalMove: false, // blindeogonim only - whether this run's ending was a click on an occupied square rather than running out of legal placements
   selected: null, // { shapeName, orientationIndex } - the current piece being placed
   pieceQueue: [], // shapeNames coming up after the current piece, length LOOKAHEAD_COUNT - speedrun only
   mouseRC: null,
@@ -131,6 +139,7 @@ function resetBoardState() {
   state.running = false;
   state.finished = false;
   state.failed = false;
+  state.illegalMove = false;
   state.selected = null;
   state.pieceQueue = [];
   state.hover = null;
@@ -151,6 +160,25 @@ function isValidPlacement(shapeName, orientationIndex, r0, c0, board) {
     if (board[idx(r, c)] !== 0) return false;
   }
   return true;
+}
+
+// Blind Eogonim only: isValidPlacement() alone can't tell WHY a spot is
+// illegal, but that distinction matters here - clicking off the edge of the
+// board is harmless (the board's own edges are always visible, so that's
+// not a memory test), while clicking onto a square that's actually occupied
+// by an earlier, now-invisible piece is the one thing that ends the run.
+// 'occupied' wins over 'offboard' if a placement manages to be both at
+// once (some cells run off the board while others land on an existing
+// piece) - the player has attempted to overlap a real piece either way.
+function placementConflictReason(shapeName, orientationIndex, r0, c0, board) {
+  const orientation = ORIENTATIONS[shapeName][orientationIndex];
+  let offboard = false;
+  for (const [dr, dc] of orientation) {
+    const r = r0 + dr, c = c0 + dc;
+    if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) { offboard = true; continue; }
+    if (board[idx(r, c)] !== 0) return 'occupied';
+  }
+  return offboard ? 'offboard' : 'ok';
 }
 
 function hasAnyLegalMove(shapeName, board) {
@@ -380,6 +408,7 @@ function spawnNextPiece() {
   recomputeHover();
   if (!hasAnyLegalMove(shapeName, state.board)) {
     if (state.mode === 'speedrun') failRun();
+    else if (state.mode === 'blindeogonim') finishBlindEogonimRun(false);
     else finishEogonimRun();
     return;
   }
@@ -404,10 +433,10 @@ function commitPlacement(r0, c0) {
   state.hover = null;
 
   // Speedrun's cascade mutates the board (captures + removes the walling
-  // pieces); eogonim/ascension score like a real Minogoe match instead -
-  // pieces stay put forever, so the "captured" total (ascension's current
-  // ROUND score) is just recomputed fresh here for the live display, with
-  // no board mutation at all.
+  // pieces); eogonim/blindeogonim/ascension score like a real Minogoe match
+  // instead - pieces stay put forever, so the "captured" total (ascension's
+  // current ROUND score) is just recomputed fresh here for the live
+  // display, with no board mutation at all.
   if (state.mode === 'speedrun') {
     runCaptureCascade();
   } else {
@@ -424,6 +453,8 @@ function commitPlacement(r0, c0) {
       finishRun();
     } else if (state.mode === 'eogonim') {
       finishEogonimRun();
+    } else if (state.mode === 'blindeogonim') {
+      finishBlindEogonimRun(false);
     } else {
       // A completely full board is just a special case of "nothing fits
       // anywhere" for ascension too - same round-end evaluation either way.
@@ -462,6 +493,21 @@ function finishEogonimRun() {
   state.failed = false;
   render();
   saveEogonimScoreIfBest(state.totalCaptured);
+}
+
+// Blind Eogonim's run always ends one of two ways: the normal Eogonim
+// ending (out of legal placements, or the board filled up), or a click on
+// an occupied-but-invisible square (illegal = true). Either way the score
+// is the same "however much you'd captured so far" - the illegal-move case
+// just cuts the run short at whatever point that happened, the same way a
+// misremembered piece naturally would.
+function finishBlindEogonimRun(illegal) {
+  state.running = false;
+  state.finished = true;
+  state.failed = false;
+  state.illegalMove = illegal;
+  render();
+  saveBlindEogonimScoreIfBest(state.totalCaptured);
 }
 
 // ---------- Ascension run flow ----------
@@ -575,21 +621,23 @@ function updateModeUI() {
   const mode = state.mode;
   document.getElementById('spTabSpeedrun').classList.toggle('active', mode === 'speedrun');
   document.getElementById('spTabEogonim').classList.toggle('active', mode === 'eogonim');
+  document.getElementById('spTabBlindEogonim').classList.toggle('active', mode === 'blindeogonim');
   document.getElementById('spTabAscension').classList.toggle('active', mode === 'ascension');
   document.getElementById('spModeTitle').textContent =
-    mode === 'ascension' ? 'Ascension' : mode === 'eogonim' ? 'Eogonim' : 'Speedrun';
+    mode === 'ascension' ? 'Ascension' : mode === 'blindeogonim' ? 'Blind Eogonim' : mode === 'eogonim' ? 'Eogonim' : 'Speedrun';
   document.getElementById('spModeCredit').style.display = mode === 'eogonim' ? '' : 'none';
   document.getElementById('spUpcomingLabel').style.display = mode === 'speedrun' ? '' : 'none';
   document.getElementById('spUpcomingPieces').style.display = mode === 'speedrun' ? '' : 'none';
   document.getElementById('spRulesSpeedrun').style.display = mode === 'speedrun' ? '' : 'none';
   document.getElementById('spRulesEogonim').style.display = mode === 'eogonim' ? '' : 'none';
+  document.getElementById('spRulesBlindEogonim').style.display = mode === 'blindeogonim' ? '' : 'none';
   document.getElementById('spRulesAscension').style.display = mode === 'ascension' ? '' : 'none';
   document.getElementById('spLeaderboardTitle').textContent =
-    mode === 'ascension' ? 'Deepest Runs' : mode === 'eogonim' ? 'Lowest Scores' : 'Top Times';
+    mode === 'ascension' ? 'Deepest Runs' : (mode === 'eogonim' || mode === 'blindeogonim') ? 'Lowest Scores' : 'Top Times';
   document.getElementById('spSaveStatus').textContent = '';
   document.getElementById('spPieceChoices').style.display = 'none';
   document.getElementById('spTimer').textContent =
-    mode === 'eogonim' ? 'Captured: 0' : mode === 'ascension' ? `Round 1 - 0/${ascensionThreshold(1)}` : formatTime(0);
+    (mode === 'eogonim' || mode === 'blindeogonim') ? 'Captured: 0' : mode === 'ascension' ? `Round 1 - 0/${ascensionThreshold(1)}` : formatTime(0);
 }
 
 // ---------- Rendering ----------
@@ -610,9 +658,15 @@ function drawShapeIcon(canvasEl, coords, px = 8) {
 
 function drawBoard() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Blind Eogonim's whole gimmick: every occupied cell renders as if empty
+  // while the run is still going, so a placed piece is genuinely invisible
+  // from the moment it's placed. Once the run ends, the true board is
+  // revealed (same rendering as every other mode) so the player can see
+  // exactly what they were working with.
+  const hidePieces = state.mode === 'blindeogonim' && !state.finished;
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
-      const val = state.board[idx(r, c)];
+      const val = hidePieces ? 0 : state.board[idx(r, c)];
       ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#74ae82' : '#1e1b24';
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
     }
@@ -626,7 +680,13 @@ function drawBoard() {
 
   if (state.selected && state.hover) {
     const orientation = ORIENTATIONS[state.selected.shapeName][state.selected.orientationIndex];
-    ctx.fillStyle = state.hover.valid ? 'rgba(91,127,217,0.55)' : 'rgba(140,140,140,0.5)';
+    // Blind Eogonim never color-codes valid vs. invalid - doing so would
+    // just tell the player exactly which hidden squares are occupied by
+    // hovering over them, defeating the entire memory mechanic. Every
+    // other mode keeps the normal blue/gray valid/invalid preview.
+    ctx.fillStyle = state.mode === 'blindeogonim'
+      ? 'rgba(255,255,255,0.35)'
+      : state.hover.valid ? 'rgba(91,127,217,0.55)' : 'rgba(140,140,140,0.5)';
     for (const [dr, dc] of orientation) {
       const r = state.hover.r0 + dr, c = state.hover.c0 + dc;
       if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) continue;
@@ -669,9 +729,10 @@ function render() {
 
   document.getElementById('spTabSpeedrun').disabled = state.running;
   document.getElementById('spTabEogonim').disabled = state.running;
+  document.getElementById('spTabBlindEogonim').disabled = state.running;
   document.getElementById('spTabAscension').disabled = state.running;
 
-  if (state.mode === 'eogonim') {
+  if (state.mode === 'eogonim' || state.mode === 'blindeogonim') {
     document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured}`;
   } else if (state.mode === 'ascension') {
     document.getElementById('spTimer').textContent = `Round ${state.round} - ${state.totalCaptured}/${ascensionThreshold(state.round)}`;
@@ -681,9 +742,11 @@ function render() {
     banner.textContent = 'Click Start to begin';
     pieceInfo.textContent = state.mode === 'eogonim'
       ? "You'll get one random piece at a time, with no preview of what's coming - keep your captured territory as low as possible."
-      : state.mode === 'ascension'
-        ? 'Pick a starting shape, then capture enough territory each round to keep unlocking more.'
-        : "You'll get one random piece at a time - place it anywhere it fits.";
+      : state.mode === 'blindeogonim'
+        ? "Same as Eogonim, but every piece vanishes the instant you place it. Remember where you've put them - clicking an occupied square ends your run."
+        : state.mode === 'ascension'
+          ? 'Pick a starting shape, then capture enough territory each round to keep unlocking more.'
+          : "You'll get one random piece at a time - place it anywhere it fits.";
   } else if (state.mode === 'ascension' && state.awaitingPieceChoice) {
     banner.textContent = state.round === 1 ? 'Choose your starting shape!' : `Round ${state.round - 1} cleared! Choose your next shape.`;
     pieceInfo.textContent = 'Pick a shape below to add it to your collection.';
@@ -693,6 +756,13 @@ function render() {
   } else if (state.mode === 'eogonim' && state.finished) {
     banner.textContent = `Run over — captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
     pieceInfo.textContent = 'Click Restart to try for a lower score.';
+  } else if (state.mode === 'blindeogonim' && state.finished) {
+    banner.textContent = state.illegalMove
+      ? `Illegal move — run over. Captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`
+      : `Run over — captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
+    pieceInfo.textContent = state.illegalMove
+      ? 'That square was already occupied. The board above shows where everything actually was - click Restart to try again.'
+      : 'Click Restart to try for a lower score.';
   } else if (state.finished && state.failed) {
     banner.textContent = 'No legal moves - run failed';
     pieceInfo.textContent = "That piece didn't fit anywhere on the board. Click Restart to try again.";
@@ -780,8 +850,19 @@ canvas.addEventListener('mouseleave', () => {
 });
 
 canvas.addEventListener('click', () => {
-  if (!state.running || !state.selected || !state.hover || !state.hover.valid) return;
-  commitPlacement(state.hover.r0, state.hover.c0);
+  if (!state.running || !state.selected || !state.hover) return;
+  if (state.hover.valid) {
+    commitPlacement(state.hover.r0, state.hover.c0);
+    return;
+  }
+  // Every other mode just silently ignores a click on an invalid square.
+  // Blind Eogonim only ends the run for the 'occupied' case - clicking off
+  // the edge of the board stays a harmless no-op, same as everywhere else,
+  // since the board's edges are always visible regardless of mode.
+  if (state.mode === 'blindeogonim') {
+    const reason = placementConflictReason(state.selected.shapeName, state.selected.orientationIndex, state.hover.r0, state.hover.c0, state.board);
+    if (reason === 'occupied') finishBlindEogonimRun(true);
+  }
 });
 
 canvas.addEventListener('touchstart', (e) => {
@@ -792,10 +873,20 @@ canvas.addEventListener('touchstart', (e) => {
   const wasSameCell = state.lastTapCell && state.lastTapCell.row === cell.row && state.lastTapCell.col === cell.col;
   state.lastTapCell = cell;
 
-  if (wasSameCell && state.hover && state.hover.valid) {
-    commitPlacement(state.hover.r0, state.hover.c0);
-    state.lastTapCell = null;
-    return;
+  if (wasSameCell && state.hover) {
+    if (state.hover.valid) {
+      commitPlacement(state.hover.r0, state.hover.c0);
+      state.lastTapCell = null;
+      return;
+    }
+    if (state.mode === 'blindeogonim') {
+      const reason = placementConflictReason(state.selected.shapeName, state.selected.orientationIndex, state.hover.r0, state.hover.c0, state.board);
+      if (reason === 'occupied') {
+        finishBlindEogonimRun(true);
+        state.lastTapCell = null;
+        return;
+      }
+    }
   }
 
   state.mouseRC = cell;
@@ -817,6 +908,7 @@ document.getElementById('mobileRotateBtn').addEventListener('click', rotateSelec
 document.getElementById('spStartBtn').addEventListener('click', startRun);
 document.getElementById('spTabSpeedrun').addEventListener('click', () => setMode('speedrun'));
 document.getElementById('spTabEogonim').addEventListener('click', () => setMode('eogonim'));
+document.getElementById('spTabBlindEogonim').addEventListener('click', () => setMode('blindeogonim'));
 document.getElementById('spTabAscension').addEventListener('click', () => setMode('ascension'));
 
 // ---------- Leaderboard ----------
@@ -850,6 +942,27 @@ async function saveEogonimScoreIfBest(score) {
     return;
   }
   const { data: bestScore, error } = await supabaseClient.rpc('submit_singleplayer_score', { p_score: score });
+  if (error) {
+    document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
+    return;
+  }
+  document.getElementById('spSaveStatus').textContent = bestScore === score
+    ? 'New personal best - saved!'
+    : `Saved. Your best is still ${bestScore}.`;
+  refreshLeaderboard();
+}
+
+// Same discipline again, via submit_blindeogonim_score() - a separate RPC
+// (rather than reusing submit_singleplayer_score()) since that one is
+// hardcoded to mode = 'eogonim' and Blind Eogonim keeps its own leaderboard
+// row per user, same as every other mode.
+async function saveBlindEogonimScoreIfBest(score) {
+  const user = Auth.getUser();
+  if (!user) {
+    document.getElementById('spSaveStatus').textContent = 'Sign in to save your score to the leaderboard.';
+    return;
+  }
+  const { data: bestScore, error } = await supabaseClient.rpc('submit_blindeogonim_score', { p_score: score });
   if (error) {
     document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
     return;

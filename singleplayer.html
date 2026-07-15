@@ -60,6 +60,7 @@
         <div class="sp-mode-tabs">
           <button type="button" id="spTabSpeedrun" class="sp-mode-tab active">Speedrun</button>
           <button type="button" id="spTabEogonim" class="sp-mode-tab">Eogonim</button>
+          <button type="button" id="spTabBlindEogonim" class="sp-mode-tab">Blind Eogonim</button>
           <button type="button" id="spTabAscension" class="sp-mode-tab">Ascension</button>
         </div>
         <h3 id="spModeTitle">Speedrun</h3>
@@ -94,6 +95,15 @@
           <li>The goal is the <em>opposite</em> of a real match: keep your total captured territory as low as possible.</li>
           <li>The run ends the moment your current piece has no legal placement anywhere &mdash; that's just how every run ends, not a failure. Your final captured total is your score.</li>
           <li>Lowest total captured territory wins a spot on the Eogonim leaderboard.</li>
+        </ul>
+        <ul id="spRulesBlindEogonim" style="display:none;">
+          <li><em>10&times;10</em> board, same one-random-piece-at-a-time draw as Eogonim &mdash; no preview of what's coming.</li>
+          <li>The twist: the instant you place a piece, it disappears from view. The board only ever shows what's currently in your hand &mdash; nothing you've already placed.</li>
+          <li>Those pieces are still there, occupying their squares, even though you can't see them anymore &mdash; you have to remember where you put them.</li>
+          <li>Click a square that's actually occupied (visible or not) and your run ends immediately as an illegal move.</li>
+          <li>Capturing works exactly like Eogonim &mdash; any fully enclosed empty pocket counts as captured territory, of any size. Running out of legal placements (or filling the board) ends the run normally too, same as Eogonim.</li>
+          <li>Once the run is over, the whole board is revealed so you can see exactly where everything was.</li>
+          <li>Lowest total captured territory wins a spot on the Blind Eogonim leaderboard.</li>
         </ul>
         <ul id="spRulesAscension" style="display:none;">
           <li><em>10&times;10</em> board, played in escalating rounds. Pick 1 of 3 random shapes to start &mdash; that's your only piece, in unlimited supply.</li>

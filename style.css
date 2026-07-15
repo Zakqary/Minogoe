@@ -816,12 +816,14 @@ h2, h3 {
 
 .sp-mode-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 10px;
 }
 
 .sp-mode-tab {
   flex: 1;
+  min-width: 84px;
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 6px;

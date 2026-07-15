@@ -3131,3 +3131,62 @@ begin
   order by p.lifetime_coins_earned desc;
 end;
 $$;
+
+-- ---------- Phase 40: singleplayer "Blind Eogonim" mode (memory variant of Eogonim) ----------
+
+-- Same explicit drop-then-add pattern as every earlier mode addition in
+-- this file (Phase 33/36's comments explain why an inline "check (...)" on
+-- "add column if not exists" would be wrong here) - this is now the latest
+-- phase to touch these two constraints, so it's the one that owns them;
+-- nothing earlier in the file should ever re-add a narrower version again.
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension'));
+
+-- Blind Eogonim reuses the existing "score" column exactly like Eogonim
+-- does (a captured-square count, lower is better) - it's the same scoring
+-- rule, just played with pieces hidden after placement, so no new column
+-- is needed, only a new allowed mode value.
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
+  check (
+    (mode = 'speedrun' and time_ms is not null and score is null)
+    or (mode = 'eogonim' and score is not null and time_ms is null)
+    or (mode = 'blindeogonim' and score is not null and time_ms is null)
+    or (mode = 'ascension' and score is not null and time_ms is null)
+  );
+
+-- A separate RPC rather than reusing submit_singleplayer_score() - that one
+-- is hardcoded to mode = 'eogonim', and Blind Eogonim keeps its own
+-- leaderboard row per user (singleplayer_runs_user_id_mode_key is a unique
+-- constraint on (user_id, mode), so a second mode value for the same user
+-- is a separate row, not a conflict). Same "server decides if it's actually
+-- an improvement" discipline as every other submit_*() function here.
+create or replace function public.submit_blindeogonim_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < 0 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'blindeogonim' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'blindeogonim', p_score);
+    return p_score;
+  elsif p_score < existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'blindeogonim';
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;

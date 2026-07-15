@@ -97,8 +97,8 @@ async function renderProfilePage() {
     }
   }
 
-  // Lower is better for Speedrun/Eogonim (fastest time / fewest captured
-  // squares), but HIGHER is better for Ascension (more rounds cleared) -
+  // Lower is better for Speedrun/Eogonim/Blind Eogonim (fastest time / fewest
+  // captured squares), but HIGHER is better for Ascension (more rounds cleared) -
   // rank is "how many OTHER runs in that mode beat this one", plus one,
   // same count-query-instead-of-fetch-everyone technique as the ELO rank
   // above, just flipped (.gt instead of .lt) for ascension. Only shown for
@@ -126,6 +126,13 @@ async function renderProfilePage() {
           .eq('mode', 'eogonim')
           .lt('score', run.score);
         boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Eogonim &middot; ${run.score} captured</div></div>`);
+      } else if (run.mode === 'blindeogonim') {
+        const { count } = await supabaseClient
+          .from('singleplayer_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('mode', 'blindeogonim')
+          .lt('score', run.score);
+        boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Blind Eogonim &middot; ${run.score} captured</div></div>`);
       } else if (run.mode === 'ascension') {
         const { count } = await supabaseClient
           .from('singleplayer_runs')

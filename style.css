@@ -1300,6 +1300,39 @@ h2, h3 {
   font-weight: 700;
 }
 
+/* Singleplayer page only - sits right below .rules-panel in the same
+   column, so collapsing the rules panel naturally shifts this up with no
+   extra layout logic needed. */
+.queue-status-panel {
+  background: linear-gradient(160deg, var(--surface), #26212d);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.queue-status-panel h3 {
+  margin: 0 0 2px;
+  font-size: 16px;
+  color: var(--accent-hover);
+}
+
+.queue-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.queue-status-value {
+  color: var(--text);
+  font-weight: 700;
+}
+
 .top-announcement {
   display: flex;
   justify-content: center;

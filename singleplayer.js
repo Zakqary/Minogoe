@@ -1085,7 +1085,37 @@ async function refreshLeaderboard() {
   `;
 }
 
+// ---------- Live queue counts ----------
+// Duplicated from game.js's refreshQueueCounts()/formatQueueCount() rather
+// than shared - same standalone-page convention this file already follows
+// for BASE_SHAPES/ORIENTATIONS. This page never loads net.js at all (no
+// WebRTC connection happens here), so it polls the signaling server's
+// plain HTTP /queue-counts endpoint directly instead - lets a player
+// keep an eye on the real queues while playing singleplayer.
+const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
+const SIGNALING_HTTP_URL = SIGNALING_SERVER_URL.replace(/^ws/, 'http');
+const QUEUE_COUNT_POLL_MS = 7000;
+
+function formatQueueCount(n) {
+  if (n === 1) return '1 waiting';
+  return `${n} waiting`;
+}
+
+async function refreshQueueCounts() {
+  try {
+    const res = await fetch(`${SIGNALING_HTTP_URL}/queue-counts`);
+    if (!res.ok) return;
+    const { casual, ranked } = await res.json();
+    document.getElementById('spCasualQueueCount').textContent = formatQueueCount(casual);
+    document.getElementById('spRankedQueueCount').textContent = formatQueueCount(ranked);
+  } catch {
+    // signaling server unreachable - leave whatever was last shown
+  }
+}
+
 // ---------- Init ----------
 updateModeUI();
 render();
 refreshLeaderboard();
+refreshQueueCounts();
+setInterval(refreshQueueCounts, QUEUE_COUNT_POLL_MS);

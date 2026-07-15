@@ -3269,3 +3269,57 @@ alter table public.singleplayer_runs add constraint singleplayer_runs_mode_field
     or (mode = 'blindeogonim' and score is not null and time_ms is null)
     or (mode = 'ascension' and score is not null and time_ms is null)
   );
+
+-- ---------- Phase 43: fold Q_Z/Q_J into Q_S/Q_L on the Stats page's "Win Rate by First Piece" chart ----------
+
+-- Q_Z is Q_S mirrored, and Q_J is Q_L mirrored - the exact same physical
+-- tetromino under a second name, not a distinct piece (see the matching
+-- TETROMINO_NAMES comment in game.js/singleplayer.js: since a piece can
+-- already be flipped in play, dealing both names separately just doubled
+-- one physical tetromino's odds - TETROMINO_NAMES has excluded Q_Z/Q_J
+-- from hand-dealing for a while now). Any move_log row from before that
+-- exclusion existed can still have 'Q_Z' or 'Q_J' recorded as its
+-- shapeName, which get_first_piece_win_rates() was grouping as their own
+-- separate bars on the Stats page - splitting one physical piece's win
+-- rate across two rows instead of combining it into one. Folds both into
+-- their canonical name before grouping - this only changes how that chart
+-- reports historical results, the underlying games rows/move_log are
+-- untouched.
+create or replace function public.get_first_piece_win_rates()
+returns table (
+  shape_name text,
+  games_count bigint,
+  win_count bigint,
+  win_rate numeric
+)
+language sql
+stable
+as $$
+  with first_moves as (
+    select
+      g.winner,
+      (elem.value->>'player')::int as player,
+      case elem.value->>'shapeName'
+        when 'Q_Z' then 'Q_S'
+        when 'Q_J' then 'Q_L'
+        else elem.value->>'shapeName'
+      end as shape_name,
+      row_number() over (
+        partition by g.id, (elem.value->>'player')::int
+        order by elem.ord
+      ) as rn
+    from public.games g,
+         jsonb_array_elements(g.move_log) with ordinality as elem(value, ord)
+    where g.move_log is not null
+      and g.player2_id is not null
+  )
+  select
+    shape_name,
+    count(*) as games_count,
+    count(*) filter (where winner = player) as win_count,
+    round(100.0 * count(*) filter (where winner = player) / count(*), 1) as win_rate
+  from first_moves
+  where rn = 1
+  group by shape_name
+  order by win_rate desc;
+$$;

@@ -1249,10 +1249,35 @@ h2, h3 {
   box-shadow: var(--shadow-sm);
 }
 
+/* Clicking the header collapses/expands the whole panel - see the shared
+   click handler wired in game.js and singleplayer.js. */
 .rules-panel h3 {
   margin: 0 0 10px;
   font-size: 16px;
   color: var(--accent-hover);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+
+.rules-panel h3::after {
+  content: '\25BE';
+  font-size: 11px;
+  transition: transform 0.15s;
+}
+
+.rules-panel.collapsed h3 {
+  margin-bottom: 0;
+}
+
+.rules-panel.collapsed h3::after {
+  transform: rotate(-90deg);
+}
+
+.rules-panel.collapsed ul {
+  display: none;
 }
 
 .rules-panel ul {

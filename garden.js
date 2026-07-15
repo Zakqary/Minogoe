@@ -76,7 +76,7 @@ function gardenStatsHtml(plantedCount, potCount, waitingSeedCount, companionMino
         <div class="stat-label">Seeds Waiting</div>
       </div>
       <div class="garden-stat-box stat-companion">
-        ${companionMino ? minoVisualHtml(companionMino, 32) : '<div class="stat-value">&mdash;</div>'}
+        ${companionMino ? minoVisualHtml(companionMino, 32) : '<div class="stat-value">-</div>'}
         <div class="stat-label">${companionMino ? escapeHtml(minoLabel(companionMino)) : 'No Companion'}</div>
       </div>
     </div>

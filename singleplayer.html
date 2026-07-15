@@ -81,36 +81,28 @@
       <div class="rules-panel">
         <h3>How to Play</h3>
         <ul id="spRulesSpeedrun">
-          <li>You get one random piece at a time &mdash; 70% pentomino (5 squares), 20% tetromino (4), 10% tromino (3). Rotate/flip it however you like before placing.</li>
-          <li>You can see your next <em>3</em> upcoming pieces, so plan your board space ahead of time instead of leaving it to luck.</li>
-          <li>Place it anywhere it legally fits on the board.</li>
-          <li>Fully enclose a pocket of <em>4 or fewer</em> empty squares and it's captured forever &mdash; the pieces that walled it in are cleared away, freeing that space back up. Bigger enclosures don't count, so you can't just wall off the whole board at once.</li>
-          <li>Clear every square on the board to finish your run &mdash; the timer stops and your time is saved if it's your best.</li>
-          <li>If your current piece has no legal placement anywhere, the run ends early. Fastest completed times appear on the leaderboard.</li>
+          <li>One random piece at a time (70% pentomino, 20% tetromino, 10% tromino). Your next 3 pieces are shown ahead.</li>
+          <li>Enclose a pocket of <em>4 or fewer</em> empty squares to clear it and free the space.</li>
+          <li>Clear the whole board to finish. Fastest times make the leaderboard.</li>
+          <li>No legal placement for your current piece ends the run early.</li>
         </ul>
         <ul id="spRulesEogonim" style="display:none;">
-          <li><em>10&times;10</em> board. You get one random piece at a time &mdash; same 70% pentomino / 20% tetromino / 10% tromino odds as Speedrun, and any of them can come up.</li>
-          <li>Unlike Speedrun, you don't get a preview &mdash; only the piece you must place right now is shown.</li>
-          <li>This is scored like regular Minogoe, not Speedrun: pieces never disappear. An empty pocket fully enclosed by your own pieces (and/or the board edge) counts as captured territory, no matter how big it is.</li>
-          <li>The goal is the <em>opposite</em> of a real match: keep your total captured territory as low as possible.</li>
-          <li>The run ends the moment your current piece has no legal placement anywhere &mdash; that's just how every run ends, not a failure. Your final captured total is your score.</li>
-          <li>Lowest total captured territory wins a spot on the Eogonim leaderboard.</li>
+          <li><em>10&times;10</em> board, one random piece at a time, no preview.</li>
+          <li>Pieces never disappear. Any fully enclosed pocket counts as captured territory, no matter the size.</li>
+          <li>Goal is the <em>opposite</em> of a real match: keep captured territory as low as possible.</li>
+          <li>Run ends when your piece has no legal spot. Lowest captured wins.</li>
         </ul>
         <ul id="spRulesBlindEogonim" style="display:none;">
-          <li><em>10&times;10</em> board, same one-random-piece-at-a-time draw as Eogonim &mdash; no preview of what's coming.</li>
-          <li>The twist: the instant you place a piece, it disappears from view. The board only ever shows what's currently in your hand &mdash; nothing you've already placed.</li>
-          <li>Those pieces are still there, occupying their squares, even though you can't see them anymore &mdash; you have to remember where you put them.</li>
-          <li>Click a square that's actually occupied (visible or not) and your run ends immediately as an illegal move.</li>
-          <li>Capturing works exactly like Eogonim &mdash; any fully enclosed empty pocket counts as captured territory, of any size. Running out of legal placements (or filling the board) ends the run normally too, same as Eogonim.</li>
-          <li>Once the run is over, the whole board is revealed so you can see exactly where everything was.</li>
-          <li>Lowest total captured territory wins a spot on the Blind Eogonim leaderboard.</li>
+          <li>Same rules as Eogonim, but placed pieces vanish from view instantly.</li>
+          <li>They still occupy their squares. Remember where you put them.</li>
+          <li>Clicking an occupied square ends your run immediately.</li>
+          <li>The board reveals fully once your run ends.</li>
         </ul>
         <ul id="spRulesAscension" style="display:none;">
-          <li><em>10&times;10</em> board, played in escalating rounds. Pick 1 of 3 random shapes to start &mdash; that's your only piece, in unlimited supply.</li>
-          <li>Pieces are drawn randomly from whichever shapes you've unlocked, and never disappear once placed &mdash; same enclosure scoring as Eogonim, any size pocket counts.</li>
-          <li>Each round has a target amount of territory to capture before you get stuck. Targets start at 10 and climb every round.</li>
-          <li>Clear a round's target and you'll pick a new shape to add to your collection, the board resets empty, and the next round begins.</li>
-          <li>Fail to hit a round's target before getting stuck and the run ends. Your leaderboard score is how many rounds you cleared.</li>
+          <li><em>10&times;10</em> board, played in rounds. Pick 1 of 3 shapes to start, with unlimited supply.</li>
+          <li>Capturing works like Eogonim: no removal, any pocket size counts.</li>
+          <li>Each round has a rising target (10, then 15, then 18, +2 after that).</li>
+          <li>Clear it to unlock a new shape and reset the board. Miss it and the run ends. Score is rounds cleared.</li>
         </ul>
       </div>
     </div>

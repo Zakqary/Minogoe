@@ -769,15 +769,15 @@ function render() {
     banner.textContent = state.round === 1 ? 'Choose your starting shape!' : `Round ${state.round - 1} cleared! Choose your next shape.`;
     pieceInfo.textContent = 'Pick a shape below to add it to your collection.';
   } else if (state.mode === 'ascension' && state.finished) {
-    banner.textContent = `Run over — cleared ${state.round - 1} round${state.round - 1 === 1 ? '' : 's'}`;
+    banner.textContent = `Run over. Cleared ${state.round - 1} round${state.round - 1 === 1 ? '' : 's'}`;
     pieceInfo.textContent = `Needed ${ascensionThreshold(state.round)} this round, got ${state.totalCaptured}. Click Restart to try again.`;
   } else if (state.mode === 'eogonim' && state.finished) {
-    banner.textContent = `Run over — captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
+    banner.textContent = `Run over. Captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
     pieceInfo.textContent = 'Click Restart to try for a lower score.';
   } else if (state.mode === 'blindeogonim' && state.finished) {
     banner.textContent = state.illegalMove
-      ? `Illegal move — run over. Captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`
-      : `Run over — captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
+      ? `Illegal move. Run over. Captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`
+      : `Run over. Captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
     pieceInfo.textContent = state.illegalMove
       ? 'That square was already occupied. The board above shows where everything actually was - click Restart to try again.'
       : 'Click Restart to try for a lower score.';
@@ -929,6 +929,11 @@ document.getElementById('spTabSpeedrun').addEventListener('click', () => setMode
 document.getElementById('spTabEogonim').addEventListener('click', () => setMode('eogonim'));
 document.getElementById('spTabBlindEogonim').addEventListener('click', () => setMode('blindeogonim'));
 document.getElementById('spTabAscension').addEventListener('click', () => setMode('ascension'));
+
+// Clicking the "How to Play" header collapses/expands the whole rules panel.
+document.querySelector('.rules-panel h3')?.addEventListener('click', () => {
+  document.querySelector('.rules-panel').classList.toggle('collapsed');
+});
 
 // ---------- Leaderboard ----------
 async function saveScoreIfBest(timeMs) {

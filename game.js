@@ -1341,7 +1341,7 @@ function endGame(reason, forcedWinner) {
   const scoreLine = state.forfeit
     ? `${playerLabel(1)}: ${winner === 1 ? 'W' : 'FF'}, ${playerLabel(2)}: ${winner === 2 ? 'W' : 'FF'}`
     : `${playerLabel(1)}: ${state.score1}, ${playerLabel(2)}: ${state.score2}, Undecided: ${undecided}`;
-  log(`Game over — ${reason} Final score - ${scoreLine}. ${result}`);
+  log(`Game over. ${reason} Final score - ${scoreLine}. ${result}`);
   recordGameResult(winner, state.forfeit);
   render();
 }
@@ -2165,6 +2165,11 @@ document.getElementById('undoDeclineBtn').addEventListener('click', () => respon
 document.getElementById('newGameAcceptBtn').addEventListener('click', () => respondToNewGameRequest(true));
 document.getElementById('newGameDeclineBtn').addEventListener('click', () => respondToNewGameRequest(false));
 
+// Clicking the "How to Play" header collapses/expands the whole rules panel.
+document.querySelector('.rules-panel h3')?.addEventListener('click', () => {
+  document.querySelector('.rules-panel').classList.toggle('collapsed');
+});
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'r' || e.key === 'R') {
     rotateSelected();
@@ -2257,7 +2262,7 @@ function handleOpponentDisconnected(graceMs) {
 
   let remainingSec = Math.ceil((graceMs || 30000) / 1000);
   const tick = () => {
-    setLobbyStatus(`Opponent disconnected — waiting up to ${remainingSec}s for them to reconnect...`);
+    setLobbyStatus(`Opponent disconnected. Waiting up to ${remainingSec}s for them to reconnect...`);
     remainingSec--;
   };
   clearInterval(reconnectCountdownTimer);
@@ -2615,7 +2620,7 @@ function handleNetDataInner(msg) {
         }
         log("Your opponent's move had actually gone through - resuming.");
       } else {
-        log('Reconnected — game state restored.');
+        log('Reconnected. Game state restored.');
       }
     }
 

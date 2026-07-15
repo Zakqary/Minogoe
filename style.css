@@ -2014,9 +2014,7 @@ h2, h3 {
 }
 
 #rankedPeriodContent .games-table th:last-child,
-#rankedPeriodContent .games-table td:last-child,
-#rankedPeriodContent .games-table th:nth-last-child(2),
-#rankedPeriodContent .games-table td:nth-last-child(2) {
+#rankedPeriodContent .games-table td:last-child {
   width: 44px;
   padding-left: 4px;
   padding-right: 8px;
@@ -2034,6 +2032,11 @@ h2, h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: center;
+}
+
+.ranked-period-coins {
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .profile-heading {

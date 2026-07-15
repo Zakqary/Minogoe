@@ -47,29 +47,32 @@ async function refreshRankedPeriodLeaderboard() {
 
   // Same tie-aware ranking as leaderboard.js/singleplayer.js - ties share a
   // rank. Coin prizes follow the DISTINCT-value tier, not the rank number:
-  // everyone in the top tier gets 2 coins each, everyone in the next
-  // distinct tier gets 1 coin each, matching rollover_ranked_period_if_needed().
+  // everyone in the top tier gets a 2-coin badge, everyone in the next
+  // distinct tier gets a 1-coin badge, matching
+  // rollover_ranked_period_if_needed(). Only the top 3 ROWS are shown (a
+  // wide tie for 1st could mean fewer than 3 distinct tiers are visible -
+  // acceptable for a small "at a glance" panel).
   let lastValue = null, lastRank = 0, tierIndex = 0;
-  const rows = data.map((row, i) => {
+  const rows = data.slice(0, 3).map((row, i) => {
     if (lastValue === null || row.games_count !== lastValue) {
       lastRank = i + 1;
       lastValue = row.games_count;
       tierIndex += 1;
     }
     const coinPrize = tierIndex === 1 ? 2 : tierIndex === 2 ? 1 : 0;
+    const coinBadge = coinPrize > 0 ? ` <span class="ranked-period-coins">${'\u{1FA99}'.repeat(coinPrize)}</span>` : '';
     return `
       <tr>
         <td>${lastRank}</td>
-        <td class="leaderboard-player-cell">${avatarHtml(row.avatar_id, 18)} <a href="profile.html?user=${encodeURIComponent(row.user_id)}">${escapeHtml(row.username)}</a> ${titleBadgeHtml(row.title_id)}</td>
+        <td class="leaderboard-player-cell">${avatarHtml(row.avatar_id, 18)} <a href="profile.html?user=${encodeURIComponent(row.user_id)}">${escapeHtml(row.username)}</a> ${titleBadgeHtml(row.title_id)}${coinBadge}</td>
         <td>${row.games_count}</td>
-        <td>${coinPrize > 0 ? `+${coinPrize}` : ''}</td>
       </tr>
     `;
   }).join('');
 
   container.innerHTML = `
     <table class="games-table">
-      <thead><tr><th>#</th><th>Player</th><th>Matches</th><th>Prize</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>Matches</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;

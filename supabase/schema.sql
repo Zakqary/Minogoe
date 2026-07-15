@@ -3834,10 +3834,11 @@ begin
 end;
 $$;
 
--- Publicly callable: returns the current period's standings (top 10 by
--- matches played), joined with the display info the client needs to
--- render each row. Rolls over first, so simply viewing this leaderboard is
--- enough to trigger a timely reset even on a day nobody plays ranked.
+-- Publicly callable: returns the current period's standings (top 3 by
+-- matches played - this is a small "at a glance" panel, not a full
+-- leaderboard), joined with the display info the client needs to render
+-- each row. Rolls over first, so simply viewing this leaderboard is enough
+-- to trigger a timely reset even on a day nobody plays ranked.
 create or replace function public.get_ranked_period_leaderboard()
 returns table (
   user_id uuid,
@@ -3858,7 +3859,7 @@ begin
     join public.profiles p on p.id = c.user_id
     where c.games_count > 0
     order by c.games_count desc
-    limit 10;
+    limit 3;
 end;
 $$;
 

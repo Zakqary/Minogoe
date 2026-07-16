@@ -4107,3 +4107,93 @@ as $$
   where prev_best is distinct from running_best
   order by mode, achieved_at;
 $$;
+
+-- ---------- Phase 50: mino coin gifts are exactly 1 coin, not 5-15 ----------
+
+-- A planted adult mino's coin gift was always meant to be a flat 1 coin
+-- per successful roll (the coin_drop_rate percentage - 0.1-5% depending on
+-- rarity - is the only randomness that's supposed to exist here); the
+-- "coins_granted := 5 + floor(random() * 11)::integer" line below was a
+-- bug, not a design choice - every successful roll since Phase 16 has been
+-- silently handing out 5-15 coins instead of 1. Full body carried forward
+-- from Phase 39 (the last redefinition), with just that one line fixed.
+create or replace function public.handle_human_game_played()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p_id uuid;
+  m record;
+  gift_item record;
+  coins_granted integer;
+  wants_title boolean;
+begin
+  foreach p_id in array array[new.player1_id, new.player2_id] loop
+    if p_id is null then
+      continue;
+    end if;
+
+    update public.minos
+    set growth_progress = growth_progress + 1
+    where user_id = p_id and planted and stage <> 'adult';
+
+    update public.minos
+    set stage = case stage
+          when 'seed' then 'sapling'
+          when 'sapling' then 'adolescent'
+          when 'adolescent' then 'adult'
+          else stage
+        end,
+        growth_progress = 0
+    where user_id = p_id and planted and stage <> 'adult' and growth_progress >= 10;
+
+    if random() < 0.1 then
+      update public.profiles
+      set unopened_seed_packs = unopened_seed_packs + 1,
+          pending_pack_notifications = pending_pack_notifications + 1
+      where id = p_id;
+    end if;
+
+    for m in
+      select * from public.minos
+      where user_id = p_id and planted and stage = 'adult'
+    loop
+      if (m.last_gift_at is null or now() - m.last_gift_at >= interval '7 days') and random() < 0.02 then
+        wants_title := random() < 0.25;
+        select * into gift_item from public.shop_items
+        where mino_giftable and type = case when wants_title then 'title' else 'avatar' end
+          and id not in (select item_id from public.user_inventory where user_id = p_id)
+        order by random()
+        limit 1;
+
+        if gift_item.id is null then
+          -- Preferred type had nothing left to give - fall back to
+          -- whichever giftable type actually has an unowned item.
+          select * into gift_item from public.shop_items
+          where mino_giftable
+            and id not in (select item_id from public.user_inventory where user_id = p_id)
+          order by random()
+          limit 1;
+        end if;
+
+        if gift_item.id is not null then
+          insert into public.user_inventory (user_id, item_id) values (p_id, gift_item.id);
+          insert into public.mino_gifts (user_id, mino_id, gift_type, item_id) values (p_id, m.id, 'item', gift_item.id);
+          update public.minos set last_gift_at = now() where id = m.id;
+        end if;
+      end if;
+
+      if random() < m.coin_drop_rate / 100.0 then
+        coins_granted := 1;
+        update public.profiles
+        set coins = coins + coins_granted, lifetime_coins_earned = lifetime_coins_earned + coins_granted
+        where id = p_id;
+        insert into public.mino_gifts (user_id, mino_id, gift_type, coins_amount) values (p_id, m.id, 'coins', coins_granted);
+      end if;
+    end loop;
+  end loop;
+
+  return new;
+end;
+$$;

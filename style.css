@@ -2993,7 +2993,8 @@ h2, h3 {
   display: block;
 }
 
-/* 2x2 grid of small per-mode record-progression charts. */
+/* Grid of small per-mode record-progression charts, 2 per row (auto-wraps
+   to however many rows the current mode count needs). */
 .stats-record-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

@@ -24,10 +24,19 @@
 //     stuck, and if that round's captured total clears an escalating
 //     threshold, unlock a new shape, reset the board, and go again - see
 //     the "Ascension run flow" section below.
+//   - Blight: Eogonim's no-removal capture rule again, but the goal flips to
+//     MAXIMIZING captured territory, and the board actively works against
+//     you - it starts with 5 random "dead" squares, and one more spawns
+//     (on a random still-empty square) after every placement. A dead square
+//     can never be placed on, and it poisons enclosure the same way an
+//     opponent's piece would in a real match: an empty pocket bordering a
+//     dead square never counts as your captured territory, even if it's
+//     also bordered by your own pieces. See computeBlightScore()/
+//     spawnDeadCell() and the "Blight run flow" section below.
 // Board size varies by mode (Speedrun: 9x9, everything else: 10x10) - see
 // BOARD_SIZES and setMode() below - so this is reassigned rather than a const.
 let BOARD_SIZE = 9;
-const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10 };
+const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10, blight: 10 };
 const CELL_PX = 52;
 const MAX_CAPTURE_SIZE = 4; // speedrun only - enclosures bigger than this don't count. Eogonim has no size cap, matching real Minogoe scoring.
 const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, eogonim has no preview
@@ -97,11 +106,15 @@ function idx(r, c) { return r * BOARD_SIZE + c; }
 
 // ---------- State ----------
 // board cell values: 0 = empty, 1 = placed. Speedrun also uses 2 = captured
-// (permanent, cleared of its walling pieces) - eogonim never sets a cell to
-// 2 at all, since pieces there never disappear; its captured count is only
-// ever a computed number (see computeCapturedCount()), not a board state.
+// (permanent, cleared of its walling pieces) - eogonim/blindeogonim/ascension
+// never set a cell to 2 at all, since pieces there never disappear; their
+// captured count is only ever a computed number (see computeCapturedCount()),
+// not a board state. Blight is the one other mode that uses 2 - there it
+// means a dead square (see computeBlightScore()/spawnDeadCell()), a
+// permanent board fixture from the moment it spawns, same "never mutates
+// back" spirit as speedrun's captured cells just for a different reason.
 const state = {
-  mode: 'speedrun', // 'speedrun' | 'eogonim' | 'blindeogonim' | 'ascension' - persists across resetBoardState(), only setMode()/startRun() change it
+  mode: 'speedrun', // 'speedrun' | 'eogonim' | 'blindeogonim' | 'ascension' | 'blight' - persists across resetBoardState(), only setMode()/startRun() change it
   board: new Uint8Array(BOARD_SIZE * BOARD_SIZE),
   pieceIdAt: new Int32Array(BOARD_SIZE * BOARD_SIZE),
   pieceCells: new Map(), // pieceId -> number[] of cell indices
@@ -366,6 +379,60 @@ function computeCapturedCount(board) {
   return captured;
 }
 
+// Blight's scoring - same flood fill as computeCapturedCount(), but dead
+// squares (board value 2) poison a region instead of scoring it: a region
+// only counts if it borders your own pieces AND never borders a dead
+// square, mirroring how a real match's computeFinalScores() only scores a
+// region bordered by exactly one owner (here, "the other owner" is dead
+// squares standing in for an opponent). A region bordered by nothing at
+// all, or only dead squares, is never yours - this is what guarantees the
+// score starts at 0 even though dead squares already exist on turn one.
+function computeBlightScore(board) {
+  const visited = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
+  let captured = 0;
+  for (let i = 0; i < board.length; i++) {
+    if (board[i] === 0 && !visited[i]) {
+      const region = [i];
+      visited[i] = 1;
+      let qi = 0;
+      let touchesPlayer = false;
+      let touchesDead = false;
+      while (qi < region.length) {
+        const cur = region[qi++];
+        const r = Math.floor(cur / BOARD_SIZE), c = cur % BOARD_SIZE;
+        for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+          if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+          const nidx = idx(nr, nc);
+          if (board[nidx] === 0) {
+            if (!visited[nidx]) { visited[nidx] = 1; region.push(nidx); }
+          } else if (board[nidx] === 1) {
+            touchesPlayer = true;
+          } else {
+            touchesDead = true;
+          }
+        }
+      }
+      if (touchesPlayer && !touchesDead) captured += region.length;
+    }
+  }
+  return captured;
+}
+
+// Picks one random still-empty (0) square and marks it dead (2) - used both
+// for the 5 starting dead squares (startRun()) and the one more that spawns
+// after every placement (commitPlacement()). No-ops if the board is
+// somehow already full (nothing left to kill). Deliberately unconstrained
+// about WHERE it can land, including inside a pocket you'd already
+// captured - that pocket simply stops counting on the next scoring pass,
+// which is the whole point of the mode (nothing is safe forever).
+function spawnDeadCell() {
+  const emptyCells = [];
+  for (let i = 0; i < state.board.length; i++) if (state.board[i] === 0) emptyCells.push(i);
+  if (emptyCells.length === 0) return;
+  const pick = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+  state.board[pick] = 2;
+}
+
 // The board is complete once no empty (0) cells remain - NOT once every
 // cell is specifically captured (2). A piece that exactly fills the last
 // remaining gap (leaving nothing empty behind it to enclose) never
@@ -391,6 +458,9 @@ function startRun() {
   if (state.mode === 'ascension') {
     state.round = 1;
     state.unlockedShapes = [];
+  }
+  if (state.mode === 'blight') {
+    for (let i = 0; i < 5; i++) spawnDeadCell();
   }
   state.running = true;
   if (state.mode === 'ascension') {
@@ -433,6 +503,7 @@ function spawnNextPiece() {
   if (!hasAnyLegalMove(shapeName, state.board)) {
     if (state.mode === 'speedrun') failRun();
     else if (state.mode === 'blindeogonim') finishBlindEogonimRun(false);
+    else if (state.mode === 'blight') finishBlightRun();
     else finishEogonimRun();
     return;
   }
@@ -460,9 +531,17 @@ function commitPlacement(r0, c0) {
   // pieces); eogonim/blindeogonim/ascension score like a real Minogoe match
   // instead - pieces stay put forever, so the "captured" total (ascension's
   // current ROUND score) is just recomputed fresh here for the live
-  // display, with no board mutation at all.
+  // display, with no board mutation at all. Blight uses its own dead-square-
+  // aware scoring, and additionally spawns this placement's one new dead
+  // square right here, AFTER scoring (so the just-placed piece's own
+  // capture reflects only that placement) and BEFORE the board-complete/
+  // next-piece checks below (so a dead square landing in the last open gap
+  // can itself end the run, same as the player's own placement can).
   if (state.mode === 'speedrun') {
     runCaptureCascade();
+  } else if (state.mode === 'blight') {
+    state.totalCaptured = computeBlightScore(state.board);
+    spawnDeadCell();
   } else {
     state.totalCaptured = computeCapturedCount(state.board);
   }
@@ -479,6 +558,8 @@ function commitPlacement(r0, c0) {
       finishEogonimRun();
     } else if (state.mode === 'blindeogonim') {
       finishBlindEogonimRun(false);
+    } else if (state.mode === 'blight') {
+      finishBlightRun();
     } else {
       // A completely full board is just a special case of "nothing fits
       // anywhere" for ascension too - same round-end evaluation either way.
@@ -517,6 +598,17 @@ function finishEogonimRun() {
   state.failed = false;
   render();
   saveEogonimScoreIfBest(state.totalCaptured);
+}
+
+// Same "no separate failed ending" shape as Eogonim - running out of legal
+// placements (increasingly likely as dead squares pile up) and filling the
+// board are both just "the run is over," scored the same way either way.
+function finishBlightRun() {
+  state.running = false;
+  state.finished = true;
+  state.failed = false;
+  render();
+  saveBlightScoreIfBest(state.totalCaptured);
 }
 
 // Blind Eogonim's run always ends one of two ways: the normal Eogonim
@@ -667,8 +759,9 @@ function updateModeUI() {
   document.getElementById('spTabEogonim').classList.toggle('active', mode === 'eogonim');
   document.getElementById('spTabBlindEogonim').classList.toggle('active', mode === 'blindeogonim');
   document.getElementById('spTabAscension').classList.toggle('active', mode === 'ascension');
+  document.getElementById('spTabBlight').classList.toggle('active', mode === 'blight');
   document.getElementById('spModeTitle').textContent =
-    mode === 'ascension' ? 'Ascension' : mode === 'blindeogonim' ? 'Blind Eogonim' : mode === 'eogonim' ? 'Eogonim' : 'Speedrun';
+    mode === 'ascension' ? 'Ascension' : mode === 'blindeogonim' ? 'Blind Eogonim' : mode === 'eogonim' ? 'Eogonim' : mode === 'blight' ? 'Blight' : 'Speedrun';
   document.getElementById('spModeCredit').style.display = mode === 'eogonim' ? '' : 'none';
   document.getElementById('spUpcomingLabel').style.display = mode === 'speedrun' ? '' : 'none';
   document.getElementById('spUpcomingPieces').style.display = mode === 'speedrun' ? '' : 'none';
@@ -676,12 +769,13 @@ function updateModeUI() {
   document.getElementById('spRulesEogonim').style.display = mode === 'eogonim' ? '' : 'none';
   document.getElementById('spRulesBlindEogonim').style.display = mode === 'blindeogonim' ? '' : 'none';
   document.getElementById('spRulesAscension').style.display = mode === 'ascension' ? '' : 'none';
+  document.getElementById('spRulesBlight').style.display = mode === 'blight' ? '' : 'none';
   document.getElementById('spLeaderboardTitle').textContent =
-    mode === 'ascension' ? 'Deepest Runs' : (mode === 'eogonim' || mode === 'blindeogonim') ? 'Lowest Scores' : 'Top Times';
+    mode === 'ascension' ? 'Deepest Runs' : mode === 'blight' ? 'Highest Scores' : (mode === 'eogonim' || mode === 'blindeogonim') ? 'Lowest Scores' : 'Top Times';
   document.getElementById('spSaveStatus').textContent = '';
   document.getElementById('spPieceChoices').style.display = 'none';
   document.getElementById('spTimer').textContent =
-    (mode === 'eogonim' || mode === 'blindeogonim') ? 'Captured: 0' : mode === 'ascension' ? `Round 1 - 0/${ascensionThreshold(1)}` : formatTime(0);
+    (mode === 'eogonim' || mode === 'blindeogonim' || mode === 'blight') ? 'Captured: 0' : mode === 'ascension' ? `Round 1 - 0/${ascensionThreshold(1)}` : formatTime(0);
 }
 
 // ---------- Rendering ----------
@@ -708,10 +802,15 @@ function drawBoard() {
   // revealed (same rendering as every other mode) so the player can see
   // exactly what they were working with.
   const hidePieces = state.mode === 'blindeogonim' && !state.finished;
+  // Board value 2 means two different things depending on mode (see the
+  // state.board comment up top) - speedrun's cleared-pocket green vs
+  // blight's dead-square color, a dark blighted red distinct from both the
+  // background and either player color.
+  const deadColor = '#4a2a30';
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
       const val = hidePieces ? 0 : state.board[idx(r, c)];
-      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#74ae82' : '#1e1b24';
+      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? (state.mode === 'blight' ? deadColor : '#74ae82') : '#1e1b24';
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
     }
   }
@@ -775,11 +874,15 @@ function render() {
   document.getElementById('spTabEogonim').disabled = state.running;
   document.getElementById('spTabBlindEogonim').disabled = state.running;
   document.getElementById('spTabAscension').disabled = state.running;
+  document.getElementById('spTabBlight').disabled = state.running;
 
   if (state.mode === 'eogonim' || state.mode === 'blindeogonim') {
     document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured}`;
   } else if (state.mode === 'ascension') {
     document.getElementById('spTimer').textContent = `Round ${state.round} - ${state.totalCaptured}/${ascensionThreshold(state.round)}`;
+  } else if (state.mode === 'blight') {
+    const deadCount = state.running || state.finished ? state.board.reduce((n, v) => n + (v === 2 ? 1 : 0), 0) : 0;
+    document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured} (${deadCount} dead)`;
   }
 
   if (!state.running && !state.finished) {
@@ -790,7 +893,9 @@ function render() {
         ? "Same as Eogonim, but every piece vanishes the instant you place it. Remember where you've put them - clicking an occupied square ends your run."
         : state.mode === 'ascension'
           ? 'Pick a starting shape, then capture enough territory each round to keep unlocking more.'
-          : "You'll get one random piece at a time - place it anywhere it fits.";
+          : state.mode === 'blight'
+            ? 'The board starts with 5 dead squares, and one more spreads after every piece you place - maximize your captured territory before you run out of room.'
+            : "You'll get one random piece at a time - place it anywhere it fits.";
   } else if (state.mode === 'ascension' && state.awaitingPieceChoice) {
     banner.textContent = state.round === 1 ? 'Choose your starting shape!' : `Round ${state.round - 1} cleared! Choose your next shape.`;
     pieceInfo.textContent = 'Pick a shape below to add it to your collection.';
@@ -800,6 +905,9 @@ function render() {
   } else if (state.mode === 'eogonim' && state.finished) {
     banner.textContent = `Run over. Captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
     pieceInfo.textContent = 'Click Restart to try for a lower score.';
+  } else if (state.mode === 'blight' && state.finished) {
+    banner.textContent = `Run over. Captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
+    pieceInfo.textContent = 'Click Restart to try for a higher score.';
   } else if (state.mode === 'blindeogonim' && state.finished) {
     banner.textContent = state.illegalMove
       ? `Illegal move. Run over. Captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`
@@ -956,6 +1064,7 @@ document.getElementById('spTabSpeedrun').addEventListener('click', () => setMode
 document.getElementById('spTabEogonim').addEventListener('click', () => setMode('eogonim'));
 document.getElementById('spTabBlindEogonim').addEventListener('click', () => setMode('blindeogonim'));
 document.getElementById('spTabAscension').addEventListener('click', () => setMode('ascension'));
+document.getElementById('spTabBlight').addEventListener('click', () => setMode('blight'));
 
 // Clicking the "How to Play" header collapses/expands the whole rules panel.
 document.querySelector('.rules-panel h3')?.addEventListener('click', () => {
@@ -1043,14 +1152,34 @@ async function saveAscensionScoreIfBest(rounds) {
   refreshLeaderboard();
 }
 
+// Same discipline again, via submit_blight_score() - higher is better, same
+// direction as submit_ascension_score(), just captured squares instead of
+// rounds cleared.
+async function saveBlightScoreIfBest(score) {
+  const user = Auth.getUser();
+  if (!user) {
+    document.getElementById('spSaveStatus').textContent = 'Sign in to save your score to the leaderboard.';
+    return;
+  }
+  const { data: bestScore, error } = await supabaseClient.rpc('submit_blight_score', { p_score: score });
+  if (error) {
+    document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
+    return;
+  }
+  document.getElementById('spSaveStatus').textContent = bestScore === score
+    ? 'New personal best - saved!'
+    : `Saved. Your best is still ${bestScore}.`;
+  refreshLeaderboard();
+}
+
 async function refreshLeaderboard() {
   const container = document.getElementById('spLeaderboard');
   const mode = state.mode;
   const scoreColumn = mode === 'speedrun' ? 'time_ms' : 'score';
-  // Every mode except ascension is "lower is better" (fastest time, fewest
-  // captured squares) - ascension is the one case where more (rounds
-  // cleared) is better.
-  const ascending = mode !== 'ascension';
+  // Most modes are "lower is better" (fastest time, fewest captured
+  // squares) - ascension (rounds cleared) and blight (captured territory,
+  // maximized instead of minimized) are the two where more is better.
+  const ascending = mode !== 'ascension' && mode !== 'blight';
   const { data, error } = await supabaseClient
     .from('singleplayer_runs')
     .select(`${scoreColumn}, profiles(id, username, avatar_id, title_id)`)

@@ -3881,3 +3881,100 @@ begin
   update public.coin_award_notifications set acknowledged = true where user_id = uid and not acknowledged;
 end;
 $$;
+
+-- ---------- Phase 48: singleplayer "Blight" mode (encroaching dead squares) ----------
+
+-- Same explicit drop-then-add pattern as every earlier mode change in this
+-- file - this is now the latest phase to touch these two constraints, so
+-- it's the one that owns them (see Phase 42's comment for why nothing
+-- earlier should ever be edited to re-add a narrower version instead of
+-- just adding a new phase like this one).
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension', 'blight'));
+
+-- Blight reuses the existing "score" column exactly like Ascension does (an
+-- integer, higher is better) - it's a captured-territory count instead of a
+-- round count, but the same shape.
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
+  check (
+    (mode = 'speedrun' and time_ms is not null and score is null)
+    or (mode = 'eogonim' and score is not null and time_ms is null)
+    or (mode = 'blindeogonim' and score is not null and time_ms is null)
+    or (mode = 'ascension' and score is not null and time_ms is null)
+    or (mode = 'blight' and score is not null and time_ms is null)
+  );
+
+-- Same "server decides if it's actually an improvement" discipline as
+-- submit_ascension_score(), and the same higher-is-better comparison
+-- direction (more captured territory is better here, the opposite of
+-- submit_singleplayer_score()'s Eogonim).
+create or replace function public.submit_blight_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < 0 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'blight' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'blight', p_score);
+    return p_score;
+  elsif p_score > existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'blight';
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;
+
+-- Redefines get_record_progression() (Phase 45) one more time - blight is
+-- the second mode (after ascension) where a higher score is the record,
+-- not a lower one; the body is otherwise identical.
+create or replace function public.get_record_progression()
+returns table (
+  mode text,
+  achieved_at timestamptz,
+  value numeric
+)
+language sql
+stable
+as $$
+  with runs as (
+    select
+      mode,
+      completed_at,
+      case when mode = 'speedrun' then time_ms::numeric else score::numeric end as raw_value
+    from public.singleplayer_runs
+  ),
+  running as (
+    select
+      mode,
+      completed_at,
+      case
+        when mode in ('ascension', 'blight') then max(raw_value) over (partition by mode order by completed_at rows between unbounded preceding and current row)
+        else min(raw_value) over (partition by mode order by completed_at rows between unbounded preceding and current row)
+      end as running_best
+    from runs
+  ),
+  with_prev as (
+    select mode, completed_at, running_best,
+      lag(running_best) over (partition by mode order by completed_at) as prev_best
+    from running
+  )
+  select mode, completed_at as achieved_at, running_best as value
+  from with_prev
+  where prev_best is distinct from running_best
+  order by mode, achieved_at;
+$$;

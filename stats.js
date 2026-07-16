@@ -224,8 +224,8 @@ function formatTimeMs(ms) {
   return `${m}:${s.toFixed(2).padStart(5, '0')}`;
 }
 
-const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension' };
-const RECORD_MODE_COLORS = { speedrun: '#5b7fd9', eogonim: 'var(--accent)', blindeogonim: '#8b6fd9', ascension: '#6fbf73' };
+const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension', blight: 'Blight' };
+const RECORD_MODE_COLORS = { speedrun: '#5b7fd9', eogonim: 'var(--accent)', blindeogonim: '#8b6fd9', ascension: '#6fbf73', blight: '#c05c5c' };
 
 function formatRecordValue(mode, value) {
   if (mode === 'speedrun') return formatTimeMs(value);
@@ -345,7 +345,7 @@ async function renderStatsPage() {
     eloChart = '<p class="stats-chart-empty">Not enough ranked players yet.</p>';
   }
 
-  const recordsByMode = { speedrun: [], eogonim: [], blindeogonim: [], ascension: [] };
+  const recordsByMode = { speedrun: [], eogonim: [], blindeogonim: [], ascension: [], blight: [] };
   for (const row of recordProgression.data || []) {
     if (recordsByMode[row.mode]) recordsByMode[row.mode].push(row);
   }

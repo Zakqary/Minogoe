@@ -199,6 +199,13 @@ async function renderProfilePage() {
           .eq('mode', 'ascension')
           .gt('score', run.score);
         boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Ascension &middot; ${run.score} round${run.score === 1 ? '' : 's'}</div></div>`);
+      } else if (run.mode === 'blight') {
+        const { count } = await supabaseClient
+          .from('singleplayer_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('mode', 'blight')
+          .gt('score', run.score);
+        boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Blight &middot; ${run.score} captured</div></div>`);
       }
     }
     if (boxes.length > 0) {

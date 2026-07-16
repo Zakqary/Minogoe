@@ -65,6 +65,7 @@
           <button type="button" id="spTabEogonim" class="sp-mode-tab">Eogonim</button>
           <button type="button" id="spTabBlindEogonim" class="sp-mode-tab">Blind Eogonim</button>
           <button type="button" id="spTabAscension" class="sp-mode-tab">Ascension</button>
+          <button type="button" id="spTabBlight" class="sp-mode-tab">Blight</button>
         </div>
         <h3 id="spModeTitle">Speedrun</h3>
         <div class="sp-mode-credit" id="spModeCredit" style="display:none;">Idea by SgtBird08</div>
@@ -107,6 +108,13 @@
           <li>Capturing works like Eogonim: no removal, any pocket size counts.</li>
           <li>Each round has a rising target (10, then 15, then 18, +2 after that).</li>
           <li>Clear it to unlock a new shape and reset the board. Miss it and the run ends. Score is rounds cleared.</li>
+        </ul>
+        <ul id="spRulesBlight" style="display:none;">
+          <li><em>10&times;10</em> board, one random piece at a time, no preview. Starts with 5 dead squares already on the board.</li>
+          <li>One more square dies (at random) after every piece you place.</li>
+          <li>Dead squares can't be placed on, and they poison capturing - a pocket bordering one never counts, even if your own pieces surround the rest of it.</li>
+          <li>Goal is the opposite of Eogonim: maximize captured territory, not minimize it.</li>
+          <li>Run ends when your piece has no legal spot. Highest captured wins.</li>
         </ul>
       </div>
 

@@ -590,7 +590,17 @@ h2, h3 {
    a column with .right-panel underneath it. */
 .app {
   display: grid;
-  grid-template-columns: 320px auto 240px;
+  /* The middle "board" track used to be auto - sized to fit its widest
+     child on one line rather than to the actual board. #board itself is
+     always <= 624px (12x12 @ 52px/cell, the largest board any mode uses -
+     see CELL_PX in game.js/singleplayer.js), but .selection-info's text
+     (the "You'll get one random piece..."/GodBot's/Curse's longer rules
+     blurbs especially) has no width of its own to wrap against, so the
+     auto track just grew to fit it on one line instead, pushing the
+     side/right columns outward. Fixing the track to the real board's max
+     width forces that text (and anything else in .board-panel) to wrap
+     within it instead. */
+  grid-template-columns: 320px 624px 240px;
   grid-template-areas:
     "side board hands"
     "side board right";

@@ -96,6 +96,8 @@
           <div class="sp-power-label">Bot's bonus action</div>
           <div class="sp-power-line" data-power="again">Goes again</div>
           <div class="sp-power-line" data-power="remove">Removes one of your pieces</div>
+          <div class="sp-power-line" data-power="blight">Blights one of your territories</div>
+          <div class="sp-power-line" data-power="reroll">Rerolls your hand</div>
         </div>
 
         <!-- Curse only - same grayed-out/highlighted treatment, one line per
@@ -147,7 +149,7 @@
         <ul id="spRulesGodbot" style="display:none;">
           <li><em>12&times;12</em> board, a real hand (7 pentominoes, 2 tetrominoes, 1 tromino) - place them one at a time like a real match.</li>
           <li>The bot can place any piece at all, unlimited supply, and territory is scored the same way a real match's is.</li>
-          <li>Every bot turn, after its own move, it gets exactly one bonus action: it either goes again, or deletes one of your placed pieces.</li>
+          <li>Every bot turn, after its own move, it gets exactly one bonus action: goes again, deletes one of your pieces, blights one of your territories, or rerolls your hand.</li>
           <li>Run ends once you have no legal placement left. Score is your territory minus the bot's - negative is common.</li>
         </ul>
         <ul id="spRulesCurse" style="display:none;">

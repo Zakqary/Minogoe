@@ -787,11 +787,14 @@ function finishBlindEogonimRun(illegal) {
 // A real match against the bot on a real (12x12) board, with a real 10-piece
 // hand for the player - but the bot can place any of the 19 distinct shapes,
 // unlimited supply (ALL_SHAPE_NAMES, never depleted), and gets a bonus
-// action every single turn on top of its own normal placement: either go
-// again (place a second time immediately) or delete one of the player's
-// placed pieces from the board. Final score is the player's real territory
-// minus the bot's (computeGodbotFinalScores()) - higher is better, negative
-// is the common/expected outcome.
+// action every single turn on top of its own normal placement, one of:
+// go again (place a second time immediately), delete one of the player's
+// placed pieces, blight one of the player's secured territories (poisons
+// the whole region's scoring, same idea as Blight mode's dead squares -
+// see pickGodbotBlightTarget()), or reroll the player's remaining hand for
+// an equal number of fresh random pieces. Final score is the player's real
+// territory minus the bot's (computeGodbotFinalScores()) - higher is
+// better, negative is the common/expected outcome.
 //
 // The bot's move-selection heuristic (godbotScoreCandidate/
 // computeGodbotTrustedScores/godbotOpponentCanReachRegion/
@@ -1046,8 +1049,11 @@ function computeGodbotFinalScores(board) {
 // Picks whichever of the player's currently-placed pieces, if deleted,
 // would cost the player the most real secured score right now. Returns null
 // if the player has no pieces on the board yet, or if no removal would
-// actually cost them anything (nothing secured yet to sabotage) - the
-// caller falls back to "go again" in that case. Ties broken randomly.
+// actually cost them anything (nothing secured yet to sabotage). Ties
+// broken randomly. Returns { id, damage } (damage always > 0) rather than
+// just the id, so godbotRunBotTurn() can compare it directly against
+// pickGodbotBlightTarget()'s damage to decide which sabotage is worse for
+// the player.
 function pickGodbotRemovalTarget() {
   const playerPieceIds = [...state.pieceOwner.entries()].filter(([, owner]) => owner === 1).map(([id]) => id);
   if (playerPieceIds.length === 0) return null;
@@ -1062,7 +1068,7 @@ function pickGodbotRemovalTarget() {
     else if (damage === bestDamage && damage > 0) { tied.push(id); }
   }
   if (bestDamage <= 0) return null;
-  return tied[Math.floor(Math.random() * tied.length)];
+  return { id: tied[Math.floor(Math.random() * tied.length)], damage: bestDamage };
 }
 
 function godbotRemovePiece(pieceId) {
@@ -1072,6 +1078,69 @@ function godbotRemovePiece(pieceId) {
   }
   state.pieceCells.delete(pieceId);
   state.pieceOwner.delete(pieceId);
+}
+
+// Finds the player's largest currently-secured region (a mono-owner=1
+// empty pocket, same flood fill computeGodbotFinalScores() itself uses)
+// and drops a permanent blight marker (board value 3 - deliberately a
+// THIRD distinct value, never player/bot) on one random cell inside it.
+// This needs no special-casing anywhere else: every existing flood fill in
+// this section (computeGodbotFinalScores, computeGodbotTrustedScores,
+// godbotBoundedRegionSize, godbotOpponentCanReachRegion) already treats any
+// non-zero board value as "not empty" for placement/traversal purposes and
+// folds it into a generic borderOwners Set for scoring - a region bordering
+// both owner 1 and owner 3 has borderOwners.size 2, so it's automatically
+// undecided (poisoned) exactly like Blight mode's dead squares poison a
+// region there, without computeGodbotFinalScores itself needing to know
+// blight markers exist at all. "Damage" is the whole region's cell count,
+// the same currency pickGodbotRemovalTarget() uses, since blighting one
+// cell disqualifies the entire region's score, not just that one cell.
+// Returns null if the player has nothing secured yet to target.
+function pickGodbotBlightTarget() {
+  const visited = new Uint8Array(state.board.length);
+  let bestCell = null;
+  let bestDamage = 0;
+  for (let i = 0; i < state.board.length; i++) {
+    if (state.board[i] === 0 && !visited[i]) {
+      const regionCells = [i];
+      visited[i] = 1;
+      let qi = 0;
+      const borderOwners = new Set();
+      while (qi < regionCells.length) {
+        const cur = regionCells[qi++];
+        const r = Math.floor(cur / BOARD_SIZE), c = cur % BOARD_SIZE;
+        for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+          if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+          const nidx = idx(nr, nc);
+          const val = state.board[nidx];
+          if (val === 0) {
+            if (!visited[nidx]) { visited[nidx] = 1; regionCells.push(nidx); }
+          } else {
+            borderOwners.add(val);
+          }
+        }
+      }
+      if (borderOwners.size === 1 && [...borderOwners][0] === 1 && regionCells.length > bestDamage) {
+        bestDamage = regionCells.length;
+        bestCell = regionCells[Math.floor(Math.random() * regionCells.length)];
+      }
+    }
+  }
+  if (bestCell === null) return null;
+  return { cell: bestCell, damage: bestDamage };
+}
+
+// Rerolls the player's remaining hand for an equal number of fresh random
+// pieces (the same 70/20/10 category weighting every other piece draw in
+// this file uses) - deliberately NOT the original 7/2/1 composition, since
+// a partially-played hand's remaining count rarely divides evenly into
+// that ratio anyway. A hand of N pieces always rerolls into exactly N new
+// ones, per the user's own spec ("if you only have 6 left, you only get 6
+// new ones").
+function godbotRerollHand() {
+  const count = state.gbHand.length;
+  state.gbHand = [];
+  for (let i = 0; i < count; i++) state.gbHand.push(drawWeightedPiece());
 }
 
 function godbotApplyPlacement(candidate, player) {
@@ -1115,8 +1184,16 @@ function godbotCommitPlacement(r0, c0) {
 
 // The bot's own turn: its one normal placement, then - after a short pause,
 // so the two sub-actions read as distinct turns rather than an instant
-// double-move - its bonus action. See pickGodbotRemovalTarget()'s own
-// comment for the remove-vs-go-again decision rule.
+// double-move - its bonus action, chosen from 4 options. The two sabotage
+// options (remove a piece / blight a territory) are compared directly by
+// how much real score each would cost the player right now (both measured
+// in the same "cells of secured territory" currency - see
+// pickGodbotRemovalTarget()/pickGodbotBlightTarget()'s own comments);
+// whichever does more damage wins, as long as either would do ANY damage.
+// If neither would (nothing secured yet to sabotage - the common case
+// early in a run), the bot has nothing worth attacking, so it instead
+// picks between building more board presence (go again) or scrambling the
+// player's options (reroll hand), 50/50.
 function godbotRunBotTurn() {
   if (!state.running || state.mode !== 'godbot') return;
   const normalMove = pickGodbotPlacement(ALL_SHAPE_NAMES, state.board, 2);
@@ -1126,13 +1203,23 @@ function godbotRunBotTurn() {
   setTimeout(() => {
     if (!state.running || state.mode !== 'godbot') return;
     const removalTarget = pickGodbotRemovalTarget();
-    if (removalTarget !== null) {
-      godbotRemovePiece(removalTarget);
+    const blightTarget = pickGodbotBlightTarget();
+    const removalDamage = removalTarget ? removalTarget.damage : 0;
+    const blightDamage = blightTarget ? blightTarget.damage : 0;
+
+    if (removalDamage > 0 && removalDamage >= blightDamage) {
+      godbotRemovePiece(removalTarget.id);
       state.gbLastPowerup = 'remove';
-    } else {
+    } else if (blightDamage > 0) {
+      state.board[blightTarget.cell] = 3;
+      state.gbLastPowerup = 'blight';
+    } else if (Math.random() < 0.5) {
       const againMove = pickGodbotPlacement(ALL_SHAPE_NAMES, state.board, 2);
       if (againMove) godbotApplyPlacement(againMove, 2);
       state.gbLastPowerup = 'again';
+    } else {
+      godbotRerollHand();
+      state.gbLastPowerup = 'reroll';
     }
     godbotEndBotTurn();
   }, 500);
@@ -1373,6 +1460,7 @@ function drawBoard() {
       const val = hidePieces ? 0 : state.board[idx(r, c)];
       ctx.fillStyle = val === 1 ? '#5b7fd9'
         : val === 2 ? (state.mode === 'godbot' ? '#d97a52' : (state.mode === 'blight' || state.mode === 'curse') ? deadColor : '#74ae82')
+        : val === 3 ? deadColor // GodBot's "blight one of your territories" bonus action only - see pickGodbotBlightTarget()
         : '#1e1b24';
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
     }
@@ -1471,7 +1559,7 @@ function render() {
           : state.mode === 'blight'
             ? 'The board starts with 5 dead squares, and one more spreads after every piece you place - maximize your captured territory before you run out of room.'
             : state.mode === 'godbot'
-              ? "You get a real hand. The bot can place any piece, unlimited supply, and gets a bonus move every turn - either it goes again, or it removes one of your pieces. Beat it anyway."
+              ? "You get a real hand. The bot can place any piece, unlimited supply, and gets a bonus move every turn - it goes again, removes one of your pieces, blights your territory, or rerolls your hand. Beat it anyway."
               : state.mode === 'curse'
                 ? "One random piece at a time, no preview, nothing ever disappears - but every piece comes cursed. Pack the board as tight as you can; an illegal move ends your run instantly."
                 : "You'll get one random piece at a time - place it anywhere it fits.";
@@ -1615,11 +1703,15 @@ function renderGodbotHand() {
 // (godbotRunBotTurn()) and cleared the moment the player's next placement
 // hands the turn back to the bot (godbotCommitPlacement()), so it always
 // reflects "what the bot just did," not a stale action from turns ago.
+const GODBOT_POWERUPS = ['again', 'remove', 'reroll', 'blight'];
+
 function renderGodbotPowerups() {
   const container = document.getElementById('spGodbotPowerups');
   if (state.mode !== 'godbot') return;
-  container.querySelector('[data-power="again"]').classList.toggle('sp-power-active', state.gbLastPowerup === 'again');
-  container.querySelector('[data-power="remove"]').classList.toggle('sp-power-active', state.gbLastPowerup === 'remove');
+  for (const power of GODBOT_POWERUPS) {
+    const el = container.querySelector(`[data-power="${power}"]`);
+    if (el) el.classList.toggle('sp-power-active', state.gbLastPowerup === power);
+  }
 }
 
 // Same "grayed out, current one highlighted red" treatment as GodBot's

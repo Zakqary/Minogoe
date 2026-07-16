@@ -1028,6 +1028,175 @@ h2, h3 {
   cursor: default;
 }
 
+/* ---------- Lobby (pre-game) view ----------
+   Shown on page load and whenever no game has started yet - the calm
+   "before you play" screen. Swaps out for #gameView (the .app grid, the
+   markup/CSS above this block) the moment state.gameStarted flips true,
+   via game.js's updateLobbyGameVisibility(). */
+.lobby-view {
+  position: relative;
+  min-height: 560px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 20px 40px;
+}
+
+#pieceCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.lobby-view .resume-match-banner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 560px;
+  margin-bottom: 16px;
+}
+
+.play-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 560px;
+  background: rgba(34, 31, 40, 0.82);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: var(--shadow-md);
+  padding: 28px;
+}
+
+.play-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 20px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 4px;
+}
+
+.play-tab {
+  flex: 1;
+  text-align: center;
+  padding: 9px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-faint);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  font-family: var(--font-body);
+  transition: color 0.15s, background 0.15s;
+}
+
+.play-tab:hover { color: var(--text-dim); }
+
+.play-tab.active {
+  background: var(--surface-2);
+  color: var(--accent-hover);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.play-panel { display: none; flex-direction: column; gap: 10px; }
+.play-panel.active { display: flex; }
+
+.play-panel .mode-buttons { display: flex; gap: 10px; }
+.play-panel .mode-btn { padding: 14px 12px; font-size: 14px; opacity: 1; }
+
+.panel-row {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  width: 100%;
+  max-width: 760px;
+  margin-top: 28px;
+}
+
+/* Same .online-panel used for #rankedPeriodPanel/#liveGamesPanel while
+   they live in the lobby, just with a bit more room to breathe than the
+   compact 320px-sidebar version they revert to once relocated into
+   #inGameQueuesPanel below. */
+.panel-row .online-panel {
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+.panel-row .online-panel h3 { font-size: 14px; color: var(--text); }
+
+@media (max-width: 720px) {
+  .panel-row { grid-template-columns: 1fr; }
+}
+
+/* ---------- In-game "Queues & Live Games" panel ----------
+   Collapsed by default so it never competes with the board for attention,
+   but always one click away rather than disappearing entirely once a
+   match starts. */
+.collapsible-panel { padding: 0; overflow: hidden; }
+
+.collapsible-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: none;
+  border: none;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: var(--text);
+  font-family: var(--font-body);
+  text-align: left;
+}
+.collapsible-toggle h3 { margin: 0; }
+.collapsible-toggle .chevron {
+  color: var(--text-faint);
+  transition: transform 0.18s ease;
+  font-size: 11px;
+}
+.collapsible-panel.open .chevron { transform: rotate(90deg); }
+
+.collapsible-body {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+.collapsible-panel.open .collapsible-body { display: flex; padding-top: 2px; }
+
+.in-game-queue-counts {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 10px;
+}
+.mini-queue-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 3px 0;
+}
+.mini-queue-row span:last-child { color: var(--success); font-weight: 600; }
+
+/* The relocated #rankedPeriodPanel/#liveGamesPanel already have their own
+   .online-panel card chrome - nested inside this drawer that reads as a
+   second card-within-a-card, so it's stripped back to a plain section
+   here instead, separated by a hairline like the queue counts above. */
+.collapsible-body .online-panel {
+  background: none;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border-soft);
+}
+
 .scoreboard {
   display: flex;
   gap: 10px;

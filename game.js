@@ -1813,7 +1813,42 @@ function drawBoard() {
   }
 }
 
+// Swaps between the pre-game lobby (#lobbyView - queues, 48h leaderboard,
+// live games, ambient background) and the actual game UI (#gameView, the
+// existing .app grid) the moment a game is underway. state.gameStarted
+// flips true from two separate places (newGame() for a fresh game,
+// applyFullState() for a rejoin/resync) rather than one, so this is called
+// unconditionally from render() (already called after both) instead of
+// threading a call into each - cheap and idempotent either way.
+//
+// #rankedPeriodPanel/#liveGamesPanel are a single shared instance, not
+// duplicated - they're physically relocated between the lobby's panel row
+// and the in-game collapsed drawer via appendChild(), which just re-parents
+// the existing DOM nodes (ranked-period.js/live-games.js keep polling the
+// same element IDs regardless of which container currently holds them, so
+// neither file needed any changes for this).
+function updateLobbyGameVisibility() {
+  const lobbyView = document.getElementById('lobbyView');
+  const gameView = document.getElementById('gameView');
+  if (!lobbyView || !gameView) return;
+
+  const showGame = !!state.gameStarted;
+  lobbyView.style.display = showGame ? 'none' : '';
+  gameView.style.display = showGame ? '' : 'none';
+
+  const target = showGame
+    ? document.getElementById('inGameQueuesPanel')?.querySelector('.collapsible-body')
+    : document.querySelector('.panel-row');
+  const rankedPanel = document.getElementById('rankedPeriodPanel');
+  const liveGamesPanel = document.getElementById('liveGamesPanel');
+  if (target && rankedPanel && liveGamesPanel) {
+    target.appendChild(rankedPanel);
+    target.appendChild(liveGamesPanel);
+  }
+}
+
 function render() {
+  updateLobbyGameVisibility();
   drawBoard();
 
   const banner = document.getElementById('turnBanner');
@@ -2802,6 +2837,11 @@ async function refreshQueueCounts() {
     const { casual, ranked } = await res.json();
     document.getElementById('casualQueueCount').textContent = formatQueueCount(casual);
     document.getElementById('rankedQueueCount').textContent = formatQueueCount(ranked);
+    // Read-only duplicate shown in the in-game "Queues & Live Games" drawer
+    // (see updateLobbyGameVisibility()) - same counts, no Find Match
+    // buttons, since queueing while already in a match makes no sense.
+    document.getElementById('casualQueueCountInGame').textContent = formatQueueCount(casual);
+    document.getElementById('rankedQueueCountInGame').textContent = formatQueueCount(ranked);
   } catch {
     // signaling server unreachable - leave whatever was last shown
   }

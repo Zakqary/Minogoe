@@ -41,7 +41,68 @@
       <div id="playerSearchResults" class="nav-search-results"></div>
     </div>
   </nav>
-  <div class="app">
+  <div id="lobbyView" class="lobby-view">
+    <canvas id="pieceCanvas"></canvas>
+
+    <div id="resumeMatchBanner" class="resume-match-banner" style="display:none;">
+      <span>You have an unfinished ranked/casual match.</span>
+      <button id="resumeMatchBtn">Rejoin</button>
+    </div>
+
+    <div class="play-card">
+      <div class="play-tabs">
+        <button type="button" class="play-tab active" id="playTabOnline" data-tab="online">Play Online</button>
+        <button type="button" class="play-tab" id="playTabLocal" data-tab="local">Local Mode</button>
+      </div>
+
+      <div class="play-panel active" data-panel="online">
+        <div class="online-option">
+          <div class="online-option-label">Casual Queue</div>
+          <button id="casualQueueBtn">Find Match</button>
+          <span id="casualQueueCount" class="queue-count"></span>
+        </div>
+
+        <div class="online-option">
+          <div class="online-option-label">Ranked Queue</div>
+          <button id="rankedQueueBtn">Find Match</button>
+          <span id="rankedQueueCount" class="queue-count"></span>
+        </div>
+
+        <div class="online-option">
+          <div class="online-option-label">Direct Connect</div>
+          <button id="createRoomBtn">Create Room</button>
+          <div class="private-room-divider">or join with a code a friend shared:</div>
+          <input id="roomInput" type="text" placeholder="Room code">
+          <button id="connectBtn">Join Room</button>
+        </div>
+
+        <button id="cancelConnectBtn" style="display:none;">Cancel</button>
+        <div class="online-status" id="onlineStatus">Not connected.</div>
+      </div>
+
+      <div class="play-panel" data-panel="local">
+        <div class="mode-buttons">
+          <button id="hotseatBtn" class="mode-btn">2-Player Hotseat</button>
+          <button id="vsBotBtn" class="mode-btn">vs Bot</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-row">
+      <div class="online-panel" id="rankedPeriodPanel">
+        <h3>48-Hour Ranked Challenge</h3>
+        <div class="ranked-period-sub" id="rankedPeriodCountdown">Resets in ...</div>
+        <div id="rankedPeriodContent">Loading...</div>
+      </div>
+
+      <div class="online-panel" id="liveGamesPanel">
+        <h3>Live Games</h3>
+        <div id="liveGamesContent">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="app" id="gameView" style="display:none;">
     <div class="board-panel">
       <div class="board-wrapper">
         <canvas id="board"></canvas>
@@ -73,46 +134,6 @@
     </div>
 
     <div class="side-panel">
-      <div id="resumeMatchBanner" class="resume-match-banner" style="display:none;">
-        <span>You have an unfinished ranked/casual match.</span>
-        <button id="resumeMatchBtn">Rejoin</button>
-      </div>
-
-      <div class="online-panel">
-        <h3>Local Mode</h3>
-        <div class="mode-buttons">
-          <button id="hotseatBtn" class="mode-btn">2-Player Hotseat</button>
-          <button id="vsBotBtn" class="mode-btn">vs Bot</button>
-        </div>
-      </div>
-
-      <div class="online-panel">
-        <h3>Play Online</h3>
-
-        <div class="online-option">
-          <div class="online-option-label">Casual Queue</div>
-          <button id="casualQueueBtn">Find Match</button>
-          <span id="casualQueueCount" class="queue-count"></span>
-        </div>
-
-        <div class="online-option">
-          <div class="online-option-label">Ranked Queue</div>
-          <button id="rankedQueueBtn">Find Match</button>
-          <span id="rankedQueueCount" class="queue-count"></span>
-        </div>
-
-        <div class="online-option">
-          <div class="online-option-label">Direct Connect</div>
-          <button id="createRoomBtn">Create Room</button>
-          <div class="private-room-divider">or join with a code a friend shared:</div>
-          <input id="roomInput" type="text" placeholder="Room code">
-          <button id="connectBtn">Join Room</button>
-        </div>
-
-        <button id="cancelConnectBtn" style="display:none;">Cancel</button>
-        <div class="online-status" id="onlineStatus">Not connected.</div>
-      </div>
-
       <div class="scoreboard">
         <div class="score p1">
           <div class="label" id="scoreLabel1">Player 1</div>
@@ -133,15 +154,20 @@
         <button id="forfeitBtn" class="danger-btn">Forfeit</button>
       </div>
 
-      <div class="online-panel" id="rankedPeriodPanel">
-        <h3>48-Hour Ranked Challenge</h3>
-        <div class="ranked-period-sub" id="rankedPeriodCountdown">Resets in ...</div>
-        <div id="rankedPeriodContent">Loading...</div>
-      </div>
-
-      <div class="online-panel" id="liveGamesPanel">
-        <h3>Live Games</h3>
-        <div id="liveGamesContent">Loading...</div>
+      <div class="online-panel collapsible-panel" id="inGameQueuesPanel">
+        <button type="button" class="collapsible-toggle" id="inGameQueuesToggle">
+          <h3>Queues &amp; Live Games</h3>
+          <span class="chevron">&#9656;</span>
+        </button>
+        <div class="collapsible-body">
+          <div class="in-game-queue-counts">
+            <div class="mini-queue-row"><span>Casual Queue</span><span id="casualQueueCountInGame"></span></div>
+            <div class="mini-queue-row"><span>Ranked Queue</span><span id="rankedQueueCountInGame"></span></div>
+          </div>
+          <!-- #rankedPeriodPanel and #liveGamesPanel are relocated here (from
+               the lobby view above) while a game is in progress - see
+               game.js's updateLobbyGameVisibility(). -->
+        </div>
       </div>
     </div>
 
@@ -199,6 +225,7 @@
 <script src="search.js"></script>
 <script src="checkin.js"></script>
 <script src="mino-notify.js"></script>
+<script src="lobby.js"></script>
 <script src="ranked-period.js"></script>
 <script src="live-games.js"></script>
 <script src="net.js"></script>

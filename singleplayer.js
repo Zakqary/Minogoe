@@ -27,12 +27,12 @@
 //   - Blight: Eogonim's no-removal capture rule again, but the goal flips to
 //     MAXIMIZING captured territory, and the board actively works against
 //     you - it starts with 5 random "dead" squares, and one more spawns
-//     (on a random still-empty square) after every placement. A dead square
-//     can never be placed on, and it poisons enclosure the same way an
-//     opponent's piece would in a real match: an empty pocket bordering a
-//     dead square never counts as your captured territory, even if it's
-//     also bordered by your own pieces. See computeBlightScore()/
-//     spawnDeadCell() and the "Blight run flow" section below.
+//     (on a random still-empty square, but never inside territory you've
+//     already captured) after every placement. A dead square can never be
+//     placed on, and it poisons enclosure the same way an opponent's piece
+//     would in a real match: an empty pocket bordering a dead square never
+//     counts as your captured territory, even if it's also bordered by
+//     your own pieces. See computeBlightRegions()/spawnDeadCell().
 // Board size varies by mode (Speedrun: 9x9, everything else: 10x10) - see
 // BOARD_SIZES and setMode() below - so this is reassigned rather than a const.
 let BOARD_SIZE = 9;
@@ -110,7 +110,7 @@ function idx(r, c) { return r * BOARD_SIZE + c; }
 // never set a cell to 2 at all, since pieces there never disappear; their
 // captured count is only ever a computed number (see computeCapturedCount()),
 // not a board state. Blight is the one other mode that uses 2 - there it
-// means a dead square (see computeBlightScore()/spawnDeadCell()), a
+// means a dead square (see computeBlightRegions()/spawnDeadCell()), a
 // permanent board fixture from the moment it spawns, same "never mutates
 // back" spirit as speedrun's captured cells just for a different reason.
 const state = {
@@ -387,9 +387,13 @@ function computeCapturedCount(board) {
 // squares standing in for an opponent). A region bordered by nothing at
 // all, or only dead squares, is never yours - this is what guarantees the
 // score starts at 0 even though dead squares already exist on turn one.
-function computeBlightScore(board) {
+// Also returns every cell index that's part of a captured region, so
+// spawnDeadCell() can keep new dead squares out of territory you've
+// already secured (see its own comment).
+function computeBlightRegions(board) {
   const visited = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
-  let captured = 0;
+  let score = 0;
+  const capturedCells = new Set();
   for (let i = 0; i < board.length; i++) {
     if (board[i] === 0 && !visited[i]) {
       const region = [i];
@@ -412,22 +416,29 @@ function computeBlightScore(board) {
           }
         }
       }
-      if (touchesPlayer && !touchesDead) captured += region.length;
+      if (touchesPlayer && !touchesDead) {
+        score += region.length;
+        for (const cellIdx of region) capturedCells.add(cellIdx);
+      }
     }
   }
-  return captured;
+  return { score, capturedCells };
 }
 
-// Picks one random still-empty (0) square and marks it dead (2) - used both
-// for the 5 starting dead squares (startRun()) and the one more that spawns
-// after every placement (commitPlacement()). No-ops if the board is
-// somehow already full (nothing left to kill). Deliberately unconstrained
-// about WHERE it can land, including inside a pocket you'd already
-// captured - that pocket simply stops counting on the next scoring pass,
-// which is the whole point of the mode (nothing is safe forever).
-function spawnDeadCell() {
+// Picks one random still-empty (0) square that ISN'T part of already-
+// captured territory and marks it dead (2) - used both for the 5 starting
+// dead squares (startRun(), no exclusions needed since nothing's captured
+// yet) and the one more that spawns after every placement
+// (commitPlacement(), passing the capturedCells set computeBlightRegions()
+// just computed). No-ops if there's nowhere eligible left, including the
+// edge case where every remaining empty cell happens to already be
+// captured - dead squares never invade secured territory, full stop, even
+// if that means skipping a spawn this turn.
+function spawnDeadCell(excludeCells) {
   const emptyCells = [];
-  for (let i = 0; i < state.board.length; i++) if (state.board[i] === 0) emptyCells.push(i);
+  for (let i = 0; i < state.board.length; i++) {
+    if (state.board[i] === 0 && !(excludeCells && excludeCells.has(i))) emptyCells.push(i);
+  }
   if (emptyCells.length === 0) return;
   const pick = emptyCells[Math.floor(Math.random() * emptyCells.length)];
   state.board[pick] = 2;
@@ -540,8 +551,9 @@ function commitPlacement(r0, c0) {
   if (state.mode === 'speedrun') {
     runCaptureCascade();
   } else if (state.mode === 'blight') {
-    state.totalCaptured = computeBlightScore(state.board);
-    spawnDeadCell();
+    const blightRegions = computeBlightRegions(state.board);
+    state.totalCaptured = blightRegions.score;
+    spawnDeadCell(blightRegions.capturedCells);
   } else {
     state.totalCaptured = computeCapturedCount(state.board);
   }

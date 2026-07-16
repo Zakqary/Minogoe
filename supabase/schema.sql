@@ -3878,26 +3878,21 @@ $$;
 
 -- ---------- Phase 48: singleplayer "Blight" mode (encroaching dead squares) ----------
 
--- Same explicit drop-then-add pattern as every earlier mode change in this
--- file - this is now the latest phase to touch these two constraints, so
--- it's the one that owns them (see Phase 42's comment for why nothing
--- earlier should ever be edited to re-add a narrower version instead of
--- just adding a new phase like this one).
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension', 'blight'));
+-- This phase originally also dropped-then-re-added both constraints here,
+-- widened to include 'blight' (on top of the 4 values that existed at the
+-- time). Exactly the landmine pattern described in Phase 41/42's
+-- comments, just not caught here until it actually fired: Phase 49 below
+-- widens this same constraint again to add 'godbot'/'curse', and since
+-- this whole file re-runs top-to-bottom on every "safe to re-run in full"
+-- execution, a re-run against a database that already has real
+-- 'godbot'/'curse' rows hit THIS 5-value version first (it runs earlier
+-- in the file than Phase 49) and failed outright - the exact error this
+-- was rewritten to stop causing. The constraint is correctly left owned
+-- by whichever phase touches it LAST (Phase 49 today).
 
 -- Blight reuses the existing "score" column exactly like Ascension does (an
 -- integer, higher is better) - it's a captured-territory count instead of a
 -- round count, but the same shape.
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
-  check (
-    (mode = 'speedrun' and time_ms is not null and score is null)
-    or (mode = 'eogonim' and score is not null and time_ms is null)
-    or (mode = 'blindeogonim' and score is not null and time_ms is null)
-    or (mode = 'ascension' and score is not null and time_ms is null)
-    or (mode = 'blight' and score is not null and time_ms is null)
-  );
 
 -- Same "server decides if it's actually an improvement" discipline as
 -- submit_ascension_score(), and the same higher-is-better comparison

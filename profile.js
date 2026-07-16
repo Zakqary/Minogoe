@@ -8,6 +8,44 @@ function formatSpTime(ms) {
   return `${m}:${s.toFixed(2).padStart(5, '0')}`;
 }
 
+// Achievement badges - purely derived from stats already present on the
+// profile row, so there's no separate "earned" table or grant trigger to
+// maintain: every requirement here is just a threshold on a column this
+// site already tracks (games_played, pvp_games_played, pvp_wins,
+// highest_ranked_win_streak, highest_elo). Pentagon shape ties into the
+// site's pentomino theme. "Surpass" is treated inclusively (>=), same as
+// every other threshold here, to avoid a confusing "100/100 but still
+// locked" display at the exact boundary.
+const BADGES = [
+  { id: 'player', name: 'Player', description: 'Play 100 games', statKey: 'games_played', threshold: 100 },
+  { id: 'peoples_person', name: "People's Person", description: 'Play 100 pvp games', statKey: 'pvp_games_played', threshold: 100 },
+  { id: 'winner', name: 'Winner', description: 'Win 50 pvp games', statKey: 'pvp_wins', threshold: 50 },
+  { id: 'hot_stuff', name: 'Hot Stuff', description: 'Win 5 ranked matches in a row', statKey: 'highest_ranked_win_streak', threshold: 5 },
+  { id: 'hottest_stuff', name: 'Hottest Stuff', description: 'Win 10 ranked matches in a row', statKey: 'highest_ranked_win_streak', threshold: 10 },
+  { id: 'breaker', name: 'Breaker', description: 'Surpass 1300 ELO', statKey: 'highest_elo', threshold: 1300 },
+];
+
+function badgesHtml(profile) {
+  const items = BADGES.map((b) => {
+    const value = Number(profile[b.statKey]) || 0;
+    const earned = value >= b.threshold;
+    const progress = Math.min(value, b.threshold);
+    const tooltip = earned
+      ? `${b.name}: ${b.description} (earned)`
+      : `${b.name}: ${b.description} - ${progress}/${b.threshold}`;
+    return `
+      <div class="badge${earned ? '' : ' locked'}" title="${escapeHtml(tooltip)}">
+        <div class="badge-icon"></div>
+        <div class="badge-name">${escapeHtml(b.name)}</div>
+      </div>
+    `;
+  }).join('');
+  return `
+    <h3>Badges</h3>
+    <div class="badge-grid">${items}</div>
+  `;
+}
+
 async function renderProfilePage() {
   const container = document.getElementById('profileContent');
   const params = new URLSearchParams(location.search);
@@ -227,6 +265,7 @@ async function renderProfilePage() {
   container.innerHTML = `
     <h2 class="profile-heading">${avatarHtml(profile.avatar_id, 36)} ${escapeHtml(profile.username)} ${titleBadgeHtml(profile.title_id)} ${companionHtml}</h2>
     ${joinedText ? `<div class="profile-joined">Account created on ${escapeHtml(joinedText)}</div>` : ''}
+    ${badgesHtml(profile)}
     <div class="profile-stats">
       <div class="stat"><div class="stat-value">${profile.ranked_games_played > 0 ? (rank != null ? '#' + rank : '-') : 'Unranked'}</div><div class="stat-label">Rank</div></div>
       <div class="stat"><div class="stat-value">${profile.ranked_games_played > 0 ? profile.elo_rating : 'Unranked'}</div><div class="stat-label">ELO</div></div>

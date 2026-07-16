@@ -364,6 +364,47 @@ h2, h3 {
   margin-top: 2px;
 }
 
+.badge-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px;
+  margin: 16px 0 24px;
+}
+
+.badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 76px;
+}
+
+/* Pentagon, matching the site's pentomino theme. */
+.badge-icon {
+  width: 52px;
+  height: 52px;
+  clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%);
+  background: linear-gradient(160deg, var(--accent-hover), var(--accent));
+  box-shadow: var(--shadow-sm);
+}
+
+.badge.locked .badge-icon {
+  background: var(--surface-2);
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+
+.badge-name {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.badge.locked .badge-name {
+  color: var(--text-faint);
+}
+
 .games-table {
   width: 100%;
   border-collapse: collapse;

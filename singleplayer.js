@@ -1526,9 +1526,14 @@ function render() {
     banner.textContent = 'Go!';
   }
 
-  document.getElementById('spCurrentPieceLabel').textContent = state.selected ? state.selected.shapeName : '-';
+  // Curse's "invisible while placing" curse would otherwise be pointless -
+  // the current-piece panel names/draws the exact shape right next to the
+  // board, so the hover preview being suppressed (see drawBoard()'s
+  // skipPreview) wouldn't actually hide anything without this too.
+  const hideCurrentPiece = state.mode === 'curse' && state.curseActive === 'invisible';
+  document.getElementById('spCurrentPieceLabel').textContent = (state.selected && !hideCurrentPiece) ? state.selected.shapeName : '-';
   const iconCanvas = document.getElementById('spCurrentPieceIcon');
-  if (state.selected) {
+  if (state.selected && !hideCurrentPiece) {
     iconCanvas.style.display = '';
     drawShapeIcon(iconCanvas, BASE_SHAPES[state.selected.shapeName]);
   } else {

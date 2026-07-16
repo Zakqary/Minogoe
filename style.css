@@ -111,6 +111,16 @@ h2, h3 {
   border-bottom-color: #6fbf73;
 }
 
+.site-nav a[href="singleplayer.html"] {
+  color: #b48ee0;
+  text-shadow: 0 0 8px rgba(180, 142, 224, 0.55);
+}
+
+.site-nav a[href="singleplayer.html"]:hover {
+  color: #c7a6ea;
+  border-bottom-color: #b48ee0;
+}
+
 .nav-search {
   position: relative;
   display: inline-flex;

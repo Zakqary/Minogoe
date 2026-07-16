@@ -3088,7 +3088,11 @@ as $$
 declare
   caller_username text;
 begin
-  select username into caller_username from public.profiles where id = auth.uid();
+  -- Must be qualified (p.username, not bare username) - this function's own
+  -- `returns table (..., username text, ...)` implicitly declares a
+  -- same-named OUT parameter in scope here, so a bare "username" is
+  -- ambiguous between that and profiles.username.
+  select p.username into caller_username from public.profiles p where p.id = auth.uid();
   if caller_username is distinct from 'AVNJ' then
     raise exception 'Not authorized';
   end if;

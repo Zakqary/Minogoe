@@ -9,10 +9,16 @@
 const LIVE_GAMES_SIGNALING_HTTP_URL = 'https://minogoe.onrender.com';
 const LIVE_GAMES_POLL_MS = 8000;
 
+// "private" is the internal mode value (still what's stored in the
+// database and used in code) for what the site now calls "Direct Connect"
+// everywhere a user actually sees it - a raw room-code connection between
+// two specific people was never actually kept private from anyone who
+// knows/finds the code (and, now that this very panel lists it, is
+// publicly visible like any other match), so the old name overpromised.
 function liveGamesModeLabel(mode) {
   if (mode === 'ranked') return 'Ranked';
   if (mode === 'casual') return 'Casual';
-  if (mode === 'private') return 'Private';
+  if (mode === 'private') return 'Direct Connect';
   return mode || '';
 }
 

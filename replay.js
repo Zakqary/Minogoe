@@ -55,6 +55,14 @@ function generateOrientations(base) {
 const ORIENTATIONS = {};
 for (const name of Object.keys(BASE_SHAPES)) ORIENTATIONS[name] = generateOrientations(BASE_SHAPES[name]);
 
+// "private" is the internal mode value (still what's stored in the
+// database and used in code) for what the site now calls "Direct Connect"
+// everywhere a user actually sees it - see recent.js's own copy of this
+// function for the full reasoning.
+function modeLabel(mode) {
+  return mode === 'private' ? 'Direct Connect' : mode;
+}
+
 // ---------- Replay state ----------
 let boardSize = 12;
 let moveLog = [];
@@ -328,7 +336,7 @@ async function loadReplay() {
 
   metaEl.innerHTML = `
     <div><strong>${escapeHtml(p1Name)}</strong> (Player 1, blue) vs <strong>${escapeHtml(p2Name)}</strong> (Player 2, red)</div>
-    <div>Mode: ${escapeHtml(data.mode)} &middot; Final score: ${scoreText} &middot; ${escapeHtml(resultText)}</div>
+    <div>Mode: ${escapeHtml(modeLabel(data.mode))} &middot; Final score: ${scoreText} &middot; ${escapeHtml(resultText)}</div>
     <div>${new Date(data.ended_at).toLocaleString()}</div>
   `;
 

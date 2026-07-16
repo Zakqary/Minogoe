@@ -1,3 +1,13 @@
+// "private" is the internal mode value (still what's stored in the
+// database and used in code) for what the site now calls "Direct Connect"
+// everywhere a user actually sees it - a raw room-code connection between
+// two specific people was never actually kept private from anyone who
+// knows/finds the code (and, since the live spectate feature, is now
+// publicly listed like any other match), so the old name overpromised.
+function modeLabel(mode) {
+  return mode === 'private' ? 'Direct Connect' : mode;
+}
+
 function timeAgo(isoString) {
   const seconds = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
   if (seconds < 60) return 'just now';
@@ -41,7 +51,7 @@ async function renderRecentGames() {
     return `<tr>
       <td>${p1Link} vs ${p2Link}</td>
       <td>${scoreText}</td>
-      <td>${escapeHtml(g.mode)}</td>
+      <td>${escapeHtml(modeLabel(g.mode))}</td>
       <td>${timeAgo(g.ended_at)}</td>
       <td><a href="replay.html?game=${encodeURIComponent(g.id)}">Replay</a></td>
     </tr>`;

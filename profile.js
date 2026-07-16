@@ -8,6 +8,14 @@ function formatSpTime(ms) {
   return `${m}:${s.toFixed(2).padStart(5, '0')}`;
 }
 
+// "private" is the internal mode value (still what's stored in the
+// database and used in code) for what the site now calls "Direct Connect"
+// everywhere a user actually sees it - see recent.js's own copy of this
+// function for the full reasoning.
+function modeLabel(mode) {
+  return mode === 'private' ? 'Direct Connect' : mode;
+}
+
 // Achievement badges - purely derived from stats already present on the
 // profile row, so there's no separate "earned" table or grant trigger to
 // maintain: every requirement here is just a threshold on a column this
@@ -231,7 +239,7 @@ async function renderProfilePage() {
       : `${myScore} - ${oppScore}`;
     return `<tr>
       <td>${date}</td>
-      <td>${escapeHtml(g.mode)}</td>
+      <td>${escapeHtml(modeLabel(g.mode))}</td>
       <td>${oppLink}</td>
       <td>${scoreText}</td>
       <td class="result-${resultText.toLowerCase()}">${resultText}</td>

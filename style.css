@@ -1121,13 +1121,36 @@ h2, h3 {
 .play-panel .mode-buttons { display: flex; gap: 10px; }
 .play-panel .mode-btn { padding: 14px 12px; font-size: 14px; opacity: 1; }
 
-/* The 7px/10px .online-panel button sizing was scaled for the old 320px
-   sidebar - proportionally tiny inside the much wider play-card, so
-   everything here gets a larger touch target/type size to match. */
+/* The 7px/10px .online-panel button/input sizing and dark theming
+   (background/border/color) both used to come from an .online-panel
+   ancestor wrapping these controls - that wrapper doesn't exist any more
+   now that they live in .play-panel instead, so both need restating here
+   (padding/font-size scaled up too - proportionally tiny inside the much
+   wider play-card). Without this, buttons/inputs fell back to the
+   browser's default light-theme chrome, which is what actually looked
+   "hideous" against the rest of the page. */
 .play-panel button {
   padding: 11px 18px;
   font-size: 14px;
   border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-body);
+}
+
+.play-panel button:hover { border-color: var(--accent); color: var(--accent-hover); }
+.play-panel button:disabled { opacity: 0.4; cursor: default; border-color: var(--border); color: var(--text); }
+
+.play-panel input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 11px 14px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: var(--font-body);
 }
 
 /* The compact vertically-stacked .online-option (label, then button, then

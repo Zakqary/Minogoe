@@ -1111,6 +1111,46 @@ h2, h3 {
 .play-panel .mode-buttons { display: flex; gap: 10px; }
 .play-panel .mode-btn { padding: 14px 12px; font-size: 14px; opacity: 1; }
 
+/* The compact vertically-stacked .online-option (label, then button, then
+   count) was designed for the old 320px sidebar - roomy enough in the
+   wider play-card to lay label+count and the button out side by side
+   instead, matching the reviewed mockup. Direct Connect keeps its own
+   internal stack (it has more than one row of content), just with the
+   same breathing room. */
+.play-panel .online-option {
+  padding: 14px 16px;
+  gap: 10px;
+}
+
+.play-panel .online-option:not(.online-option-direct) {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.play-panel .online-option:not(.online-option-direct) button {
+  flex-shrink: 0;
+}
+
+.online-option-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.online-option-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.join-line {
+  display: flex;
+  gap: 8px;
+}
+.join-line input { flex: 1; min-width: 0; }
+
 .panel-row {
   position: relative;
   z-index: 1;

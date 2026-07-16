@@ -35,11 +35,10 @@ function initLobbyBackground() {
 
   function sizeCanvas() {
     const w = hero.clientWidth, h = hero.clientHeight;
-    canvas.width = w * devicePixelRatio;
-    canvas.height = h * devicePixelRatio;
+    canvas.width = Math.round(w * devicePixelRatio);
+    canvas.height = Math.round(h * devicePixelRatio);
     canvas.style.width = w + 'px';
     canvas.style.height = h + 'px';
-    pctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
   }
 
   function makeSprites() {
@@ -77,13 +76,30 @@ function initLobbyBackground() {
     pctx.restore();
   }
 
-  function drawStatic() {
+  // Resets to the identity transform before clearing, then reapplies a
+  // FRESH devicePixelRatio scale for drawing - always, every frame, rather
+  // than setting the scale once in sizeCanvas() and assuming it stays
+  // correct. Browser zoom (Ctrl -/+) changes devicePixelRatio without
+  // necessarily changing canvas.width/height's already-scaled pixel
+  // buffer or firing a layout resize - drawing under a now-stale scale
+  // while clearing under an even-more-stale one is exactly what left
+  // trails of every previous frame's shapes never actually erased, the
+  // "continuous exposure" effect. Clearing at identity first guarantees
+  // the FULL raw buffer is wiped regardless of whatever scale is active
+  // this frame.
+  function clearAndScale() {
+    pctx.setTransform(1, 0, 0, 1, 0, 0);
     pctx.clearRect(0, 0, canvas.width, canvas.height);
+    pctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  }
+
+  function drawStatic() {
+    clearAndScale();
     for (const s of sprites) drawSprite(s, 0);
   }
 
   function animate(t) {
-    pctx.clearRect(0, 0, canvas.width, canvas.height);
+    clearAndScale();
     for (const s of sprites) drawSprite(s, t / 1000);
     if (!lobbyReduceMotion) requestAnimationFrame(animate);
   }
@@ -105,6 +121,18 @@ function initLobbyBackground() {
   if (window.ResizeObserver) {
     new ResizeObserver(reinit).observe(hero);
   }
+
+  // Browser zoom changes devicePixelRatio but doesn't reliably fire a
+  // window resize event on its own (page layout/clientWidth genuinely
+  // doesn't change from a pure zoom, only the CSS-pixel-to-device-pixel
+  // ratio does) - matchMedia's resolution query is the standard reliable
+  // way to detect that specifically. Re-subscribes after every change,
+  // since the query string itself embeds the ratio it's watching for.
+  function watchDevicePixelRatio() {
+    const mq = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+    mq.addEventListener('change', () => { reinit(); watchDevicePixelRatio(); }, { once: true });
+  }
+  watchDevicePixelRatio();
 }
 
 // ---------- Play card tab switching (Play Online / Local Mode) ----------

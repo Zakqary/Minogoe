@@ -32,6 +32,79 @@ const socketRoom = new Map();  // socket -> roomCode
 const casualQueue = [];        // { socket, userId, eloRating }
 const rankedQueue = [];
 
+// Read-only spectator support. Deliberately built entirely on TOP of the
+// existing room/relay machinery above, never modifying it - a spectator
+// socket never enters `rooms`/`socketRoom` (it isn't a player, doesn't get
+// relayed offer/answer/ice, and can't be paired) and a playing client's
+// normal P2P game flow never depends on any of this existing or working.
+// Every hook added to net.js/game.js for this is a fire-and-forget extra
+// send alongside the real one, over the signaling socket the client already
+// keeps open for the whole match (not the WebRTC data channel) - if a
+// spectator message is lost or this whole system fell over, the actual
+// P2P game is completely unaffected.
+//
+// roomCode -> { mode, boardSize, initialHand, moveLog: [], startedAt,
+//               hostPlayerNum (1|2|null - which board-color the HOST is
+//               playing as THIS game; can flip between rematches, see
+//               game.js's computeMyPlayerForCurrentGame()),
+//               players: { host: {username,avatarId,titleId} | null,
+//                          joiner: same | null },
+//               spectators: Set<socket> }
+const liveGames = new Map();
+const socketSpectating = new Map(); // spectator socket -> roomCode
+
+const MAX_SPECTATORS_PER_GAME = 100;
+const MAX_LIVE_GAMES_LISTED = 8;
+
+function getOrCreateLiveGame(roomCode) {
+  let game = liveGames.get(roomCode);
+  if (!game) {
+    game = {
+      mode: null,
+      boardSize: null,
+      initialHand: null,
+      moveLog: [],
+      startedAt: Date.now(),
+      hostPlayerNum: null,
+      players: { host: null, joiner: null },
+      spectators: new Set(),
+    };
+    liveGames.set(roomCode, game);
+  }
+  return game;
+}
+
+// Maps the internal {host, joiner} identity slots onto the {1, 2} board
+// colors the moveLog/spectator client actually use - hostPlayerNum can be
+// null very briefly (identify can arrive before the host's own newGame()
+// broadcast) or after a rematch flips it; defaults to "host is player 1"
+// in that narrow window rather than showing no names at all.
+function resolvedLivePlayers(game) {
+  const hostNum = game.hostPlayerNum || 1;
+  const joinerNum = hostNum === 1 ? 2 : 1;
+  return { [hostNum]: game.players.host, [joinerNum]: game.players.joiner };
+}
+
+function broadcastToSpectators(game, msg) {
+  const raw = JSON.stringify(msg);
+  for (const s of game.spectators) {
+    if (s.readyState === WebSocket.OPEN) s.send(raw);
+  }
+}
+
+// Called from every path that tears down a real match room (normal end,
+// forfeit/timeout, private room departure) - tells any spectators the game
+// is over and forgets it. Safe to call even if no one was ever spectating,
+// or if live-game-start never actually arrived (e.g. a vs-bot/hotseat game
+// never registers one in the first place).
+function endLiveGame(roomCode) {
+  const game = liveGames.get(roomCode);
+  if (!game) return;
+  broadcastToSpectators(game, { type: 'spectate-ended' });
+  for (const s of game.spectators) socketSpectating.delete(s);
+  liveGames.delete(roomCode);
+}
+
 // This server only ever relays small handshake messages (SDP offers/
 // answers, ICE candidates, room codes, chat text) - actual game moves flow
 // peer-to-peer once WebRTC connects (see net.js). Nothing legitimate is
@@ -71,6 +144,29 @@ const httpServer = http.createServer((req, res) => {
       'Access-Control-Allow-Origin': '*',
     });
     res.end(JSON.stringify({ casual: casualQueue.length, ranked: rankedQueue.length }));
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/live-games') {
+    const list = [...liveGames.entries()]
+      .filter(([, game]) => game.moveLog.length > 0) // skip games that haven't had a real move yet
+      .sort((a, b) => b[1].startedAt - a[1].startedAt)
+      .slice(0, MAX_LIVE_GAMES_LISTED)
+      .map(([matchId, game]) => {
+        const players = resolvedLivePlayers(game);
+        return {
+          matchId,
+          mode: game.mode,
+          player1: players[1],
+          player2: players[2],
+          moveCount: game.moveLog.length,
+          startedAt: game.startedAt,
+        };
+      });
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify(list));
     return;
   }
   res.writeHead(404);
@@ -179,7 +275,10 @@ function removePrivateRoomSlot(socket, roomCode, room) {
       s.socket.send(JSON.stringify({ type: 'peer-left' }));
     }
   }
-  if (room.slots.length === 0) rooms.delete(roomCode);
+  if (room.slots.length === 0) {
+    rooms.delete(roomCode);
+    endLiveGame(roomCode);
+  }
 }
 
 // Casual/ranked: don't tear the match down immediately - hold the slot open
@@ -198,6 +297,7 @@ function startDisconnectGrace(socket, roomCode, room, slot) {
       socketRoom.delete(stillHere.socket);
     }
     rooms.delete(roomCode);
+    endLiveGame(roomCode);
   }, RECONNECT_GRACE_MS);
 }
 
@@ -406,7 +506,96 @@ wss.on('connection', (socket) => {
       if (roomCode) {
         rooms.delete(roomCode);
         socketRoom.delete(socket);
+        endLiveGame(roomCode);
       }
+      return;
+    }
+
+    // ---- Spectator support (see the liveGames comment above) ----
+    // Every handler below is sent by a PLAYING client, fire-and-forget,
+    // alongside (never instead of) that client's real P2P message - a
+    // missing/malformed room here just means this one update never reaches
+    // spectators, nothing more.
+
+    if (msg.type === 'live-game-start') {
+      const roomCode = socketRoom.get(socket);
+      const room = roomCode && rooms.get(roomCode);
+      if (!room) return;
+      const game = getOrCreateLiveGame(roomCode);
+      game.mode = room.mode;
+      game.boardSize = Number(msg.boardSize) || null;
+      game.initialHand = Array.isArray(msg.initialHand) ? msg.initialHand : [];
+      game.moveLog = [];
+      game.hostPlayerNum = msg.hostPlayerNum === 2 ? 2 : 1;
+      const players = resolvedLivePlayers(game);
+      broadcastToSpectators(game, {
+        type: 'spectate-reset',
+        mode: game.mode,
+        boardSize: game.boardSize,
+        initialHand: game.initialHand,
+        player1: players[1],
+        player2: players[2],
+      });
+      return;
+    }
+
+    if (msg.type === 'live-player-info') {
+      const roomCode = socketRoom.get(socket);
+      const room = roomCode && rooms.get(roomCode);
+      if (!room) return;
+      const slot = room.slots.find((s) => s.socket === socket);
+      if (!slot) return;
+      const game = getOrCreateLiveGame(roomCode);
+      const info = {
+        username: typeof msg.username === 'string' ? msg.username.slice(0, 40) : null,
+        avatarId: typeof msg.avatarId === 'string' ? msg.avatarId.slice(0, 40) : null,
+        titleId: typeof msg.titleId === 'string' ? msg.titleId.slice(0, 40) : null,
+      };
+      if (slot.isHost) game.players.host = info; else game.players.joiner = info;
+      return;
+    }
+
+    if (msg.type === 'live-game-move') {
+      const roomCode = socketRoom.get(socket);
+      const game = roomCode && liveGames.get(roomCode);
+      if (!game) return;
+      const move = {
+        player: msg.player === 2 ? 2 : 1,
+        shapeName: String(msg.shapeName || ''),
+        orientationIndex: Number(msg.orientationIndex) || 0,
+        r0: Number(msg.r0) || 0,
+        c0: Number(msg.c0) || 0,
+        t: Number(msg.t) || Date.now(),
+      };
+      game.moveLog.push(move);
+      broadcastToSpectators(game, { type: 'spectate-move', ...move });
+      return;
+    }
+
+    if (msg.type === 'spectate-join') {
+      const matchId = String(msg.matchId || '').trim().toUpperCase().slice(0, MAX_ROOM_CODE_LENGTH);
+      const game = liveGames.get(matchId);
+      if (!game) {
+        socket.send(JSON.stringify({ type: 'spectate-not-found' }));
+        return;
+      }
+      if (game.spectators.size >= MAX_SPECTATORS_PER_GAME) {
+        socket.send(JSON.stringify({ type: 'spectate-full' }));
+        return;
+      }
+      game.spectators.add(socket);
+      socketSpectating.set(socket, matchId);
+      const players = resolvedLivePlayers(game);
+      socket.send(JSON.stringify({
+        type: 'spectate-snapshot',
+        mode: game.mode,
+        boardSize: game.boardSize,
+        initialHand: game.initialHand,
+        moveLog: game.moveLog,
+        player1: players[1],
+        player2: players[2],
+        startedAt: game.startedAt,
+      }));
       return;
     }
 
@@ -432,6 +621,12 @@ wss.on('connection', (socket) => {
     if (joinedRoom) {
       removeFromRoom(socket, joinedRoom);
       socketRoom.delete(socket);
+    }
+    const spectatingMatch = socketSpectating.get(socket);
+    if (spectatingMatch) {
+      const game = liveGames.get(spectatingMatch);
+      if (game) game.spectators.delete(socket);
+      socketSpectating.delete(socket);
     }
   });
 });

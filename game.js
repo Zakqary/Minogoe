@@ -547,6 +547,11 @@ function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase) {
 
   if (state.online && Net.isHost && !isRemote) {
     Net.send({ type: 'newgame', hand, gameSequence: state.gameSequence, hostIsPlayerOneBase: state.hostIsPlayerOneBase });
+    // Registers/resets this match's spectator feed - host-only (mirroring
+    // the 'newgame' send above), and re-sent on every rematch since the
+    // board and hostPlayerNum (who's coloring is who this game) both reset
+    // too. See signaling-server/server.js's liveGames comment.
+    Net.sendToServer({ type: 'live-game-start', boardSize: BOARD_SIZE, initialHand: hand, hostPlayerNum: state.myPlayer });
   }
 
   scheduleBotMove(); // no-op unless this is a vs Bot game where the bot won the coin flip to go first
@@ -1216,6 +1221,12 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
 
   if (state.online && !fromRemote) {
     Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq });
+    // Separately relayed to the signaling server for any spectators - only
+    // ever sent for a move THIS client itself just committed (never one
+    // that arrived fromRemote), same as the P2P send above, so a spectator
+    // only ever sees a move once the player who made it has already
+    // applied and sent it onward for real.
+    Net.sendToServer({ type: 'live-game-move', player, shapeName, orientationIndex, r0, c0, t });
   }
 
   scheduleBotMove();
@@ -2336,6 +2347,12 @@ function handleRejoinReady() {
     eloRating: myProfile ? myProfile.elo_rating : null,
     companion: myProfile ? myProfile.companion : null,
   });
+  Net.sendToServer({
+    type: 'live-player-info',
+    username: myProfile ? myProfile.username : null,
+    avatarId: myProfile ? myProfile.avatar_id : null,
+    titleId: myProfile ? myProfile.title_id : null,
+  });
 
   const iHaveLiveGame = state.gameStarted && !state.gameOver;
   if (iHaveLiveGame && !iInitiatedThisRejoin) {
@@ -2508,6 +2525,12 @@ function handleNetReady() {
     titleId: myProfile ? myProfile.title_id : null,
     eloRating: myProfile ? myProfile.elo_rating : null,
     companion: myProfile ? myProfile.companion : null,
+  });
+  Net.sendToServer({
+    type: 'live-player-info',
+    username: myProfile ? myProfile.username : null,
+    avatarId: myProfile ? myProfile.avatar_id : null,
+    titleId: myProfile ? myProfile.title_id : null,
   });
 
   if (Net.isHost) {

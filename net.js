@@ -367,6 +367,20 @@ const Net = (() => {
     }
   }
 
+  // Separate from send() (which goes over the WebRTC data channel straight
+  // to the opponent) - this goes to the signaling server itself, which
+  // stays connected for the whole match (see openSocket()/leaveRoom()).
+  // Currently used only for the live-game spectator feed: fire-and-forget,
+  // exactly like send() - a spectator-feed hiccup must never have any
+  // bearing on the actual P2P game, so this never throws, retries, or
+  // blocks anything, and callers don't need to check state.online first
+  // (ws is simply null/closed for any mode that never called connect()).
+  function sendToServer(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(obj));
+    }
+  }
+
   function clearSelfInitiatedRejoin() {
     selfInitiatedRejoin = false;
   }
@@ -375,6 +389,7 @@ const Net = (() => {
     connect,
     rejoin,
     send,
+    sendToServer,
     cancelQueue,
     leaveRoom,
     checkConnectionNow,

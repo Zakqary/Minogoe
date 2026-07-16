@@ -1049,11 +1049,12 @@ function computeGodbotFinalScores(board) {
 // Picks whichever of the player's currently-placed pieces, if deleted,
 // would cost the player the most real secured score right now. Returns null
 // if the player has no pieces on the board yet, or if no removal would
-// actually cost them anything (nothing secured yet to sabotage). Ties
-// broken randomly. Returns { id, damage } (damage always > 0) rather than
-// just the id, so godbotRunBotTurn() can compare it directly against
-// pickGodbotBlightTarget()'s damage to decide which sabotage is worse for
-// the player.
+// actually cost them anything (nothing secured yet to sabotage) - that's
+// what keeps this option out of godbotRunBotTurn()'s random pool until
+// there's actually something worth removing. Ties broken randomly. The
+// returned damage figure isn't currently used for anything beyond that
+// null/non-null gate (the bot's bonus action is picked uniformly at random
+// among whichever options apply, not by comparing damage sizes).
 function pickGodbotRemovalTarget() {
   const playerPieceIds = [...state.pieceOwner.entries()].filter(([, owner]) => owner === 1).map(([id]) => id);
   if (playerPieceIds.length === 0) return null;
@@ -1092,10 +1093,10 @@ function godbotRemovePiece(pieceId) {
 // both owner 1 and owner 3 has borderOwners.size 2, so it's automatically
 // undecided (poisoned) exactly like Blight mode's dead squares poison a
 // region there, without computeGodbotFinalScores itself needing to know
-// blight markers exist at all. "Damage" is the whole region's cell count,
-// the same currency pickGodbotRemovalTarget() uses, since blighting one
-// cell disqualifies the entire region's score, not just that one cell.
-// Returns null if the player has nothing secured yet to target.
+// blight markers exist at all. Returns null if the player has nothing
+// secured yet to target - same as pickGodbotRemovalTarget(), that's what
+// keeps this option out of godbotRunBotTurn()'s random pool until there's
+// something worth blighting.
 function pickGodbotBlightTarget() {
   const visited = new Uint8Array(state.board.length);
   let bestCell = null;
@@ -1184,16 +1185,14 @@ function godbotCommitPlacement(r0, c0) {
 
 // The bot's own turn: its one normal placement, then - after a short pause,
 // so the two sub-actions read as distinct turns rather than an instant
-// double-move - its bonus action, chosen from 4 options. The two sabotage
-// options (remove a piece / blight a territory) are compared directly by
-// how much real score each would cost the player right now (both measured
-// in the same "cells of secured territory" currency - see
-// pickGodbotRemovalTarget()/pickGodbotBlightTarget()'s own comments);
-// whichever does more damage wins, as long as either would do ANY damage.
-// If neither would (nothing secured yet to sabotage - the common case
-// early in a run), the bot has nothing worth attacking, so it instead
-// picks between building more board presence (go again) or scrambling the
-// player's options (reroll hand), 50/50.
+// double-move - its bonus action, picked uniformly at random from whichever
+// of the 4 options actually apply this turn. "Go again" and "reroll hand"
+// are always available; "remove a piece" and "blight a territory" only
+// join the pool when they'd actually cost the player something (see
+// pickGodbotRemovalTarget()/pickGodbotBlightTarget()'s own comments) - so
+// early in a run, before anything's secured, the bot can only go again or
+// reroll, but once there's real territory to attack, all 4 are equally
+// likely rather than the strongest sabotage always winning.
 function godbotRunBotTurn() {
   if (!state.running || state.mode !== 'godbot') return;
   const normalMove = pickGodbotPlacement(ALL_SHAPE_NAMES, state.board, 2);
@@ -1204,23 +1203,23 @@ function godbotRunBotTurn() {
     if (!state.running || state.mode !== 'godbot') return;
     const removalTarget = pickGodbotRemovalTarget();
     const blightTarget = pickGodbotBlightTarget();
-    const removalDamage = removalTarget ? removalTarget.damage : 0;
-    const blightDamage = blightTarget ? blightTarget.damage : 0;
 
-    if (removalDamage > 0 && removalDamage >= blightDamage) {
+    const options = ['again', 'reroll'];
+    if (removalTarget) options.push('remove');
+    if (blightTarget) options.push('blight');
+    const choice = options[Math.floor(Math.random() * options.length)];
+
+    if (choice === 'remove') {
       godbotRemovePiece(removalTarget.id);
-      state.gbLastPowerup = 'remove';
-    } else if (blightDamage > 0) {
+    } else if (choice === 'blight') {
       state.board[blightTarget.cell] = 3;
-      state.gbLastPowerup = 'blight';
-    } else if (Math.random() < 0.5) {
+    } else if (choice === 'again') {
       const againMove = pickGodbotPlacement(ALL_SHAPE_NAMES, state.board, 2);
       if (againMove) godbotApplyPlacement(againMove, 2);
-      state.gbLastPowerup = 'again';
     } else {
       godbotRerollHand();
-      state.gbLastPowerup = 'reroll';
     }
+    state.gbLastPowerup = choice;
     godbotEndBotTurn();
   }, 500);
 }

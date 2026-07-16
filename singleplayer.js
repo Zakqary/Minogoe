@@ -323,14 +323,25 @@ function curseAllowsPlacement(shapeName, orientationIndex, r0, c0) {
   return curseNoBorderAllows(shapeName, orientationIndex, r0, c0);
 }
 
+// A blight-spot cell (board value 2) is permanently unplaceable, same as a
+// literal empty cell for the purpose of "how tightly did you pack the
+// board" - it counts AGAINST the player, not for them. Counting only
+// val===0 would have let a blight spot quietly shrink the open-square
+// total (since it's no longer literally empty), rewarding the very curse
+// that's supposed to be a handicap. Curse's board only ever holds 0
+// (empty), 1 (placed), or 2 (blight spot), so "not player-placed" and
+// "empty or blighted" are exactly the same set of cells.
+function countCurseOpenSquares(board) {
+  return board.reduce((n, v) => n + (v !== 1 ? 1 : 0), 0);
+}
+
 function finishCurseRun(illegal) {
   state.running = false;
   state.finished = true;
   state.failed = false;
   state.illegalMove = illegal;
   render();
-  const openSquares = state.board.reduce((n, v) => n + (v === 0 ? 1 : 0), 0);
-  saveCurseScoreIfBest(openSquares);
+  saveCurseScoreIfBest(countCurseOpenSquares(state.board));
 }
 
 // ---------- Piece supply ----------
@@ -1543,7 +1554,7 @@ function render() {
       ? `You: ${state.godbotScore1} - Bot: ${state.godbotScore2}`
       : `You: ${computeGodbotFinalScores(state.board).score1} - Bot: ${computeGodbotFinalScores(state.board).score2}`;
   } else if (state.mode === 'curse') {
-    const openCount = state.running || state.finished ? state.board.reduce((n, v) => n + (v === 0 ? 1 : 0), 0) : BOARD_SIZE * BOARD_SIZE;
+    const openCount = state.running || state.finished ? countCurseOpenSquares(state.board) : BOARD_SIZE * BOARD_SIZE;
     document.getElementById('spTimer').textContent = `Open squares: ${openCount}`;
   }
 
@@ -1575,7 +1586,7 @@ function render() {
       ? `Placing ${state.selected.shapeName}. Click the board to place, or press R / scroll to rotate.`
       : 'Pick a piece from your hand below.';
   } else if (state.mode === 'curse' && state.finished) {
-    const openCount = state.board.reduce((n, v) => n + (v === 0 ? 1 : 0), 0);
+    const openCount = countCurseOpenSquares(state.board);
     banner.textContent = state.illegalMove
       ? `Illegal move. Run over. ${openCount} open square${openCount === 1 ? '' : 's'} left`
       : `Run over. ${openCount} open square${openCount === 1 ? '' : 's'} left`;

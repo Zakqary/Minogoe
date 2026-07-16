@@ -206,11 +206,25 @@ async function renderProfilePage() {
           .eq('mode', 'blight')
           .gt('score', run.score);
         boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Blight &middot; ${run.score} captured</div></div>`);
+      } else if (run.mode === 'godbot') {
+        const { count } = await supabaseClient
+          .from('singleplayer_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('mode', 'godbot')
+          .gt('score', run.score);
+        boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">GodBot &middot; ${run.score > 0 ? '+' : ''}${run.score}</div></div>`);
+      } else if (run.mode === 'curse') {
+        const { count } = await supabaseClient
+          .from('singleplayer_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('mode', 'curse')
+          .lt('score', run.score);
+        boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Curse &middot; ${run.score} open</div></div>`);
       }
     }
     if (boxes.length > 0) {
       singleplayerHtml = `
-        <h3>Singleplayer Leaderboards</h3>
+        <h3>Minigame Leaderboards</h3>
         <div class="profile-stats">${boxes.join('')}</div>
       `;
     }

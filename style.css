@@ -957,6 +957,79 @@ h2, h3 {
   padding: 4px;
 }
 
+/* GodBot's hand-of-many picker - same clickable-icon-card look as the
+   Ascension piece-choice buttons above, just without a text label and with
+   a selected/disabled state layered on (see renderGodbotHand() in
+   singleplayer.js). */
+.sp-godbot-hand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.sp-godbot-hand-item {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.sp-godbot-hand-item:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.sp-godbot-hand-item-active {
+  border-color: var(--p1);
+  background: var(--p1-soft);
+}
+
+.sp-godbot-hand-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sp-godbot-hand-item canvas {
+  background: var(--surface);
+  border-radius: 5px;
+  padding: 3px;
+  display: block;
+}
+
+/* Shared by GodBot's powerup readout and Curse's curse readout - a
+   deliberately grayed-out, low-key list of every possible thing that could
+   happen, with whichever one is actually active this turn picked out in
+   red so it reads at a glance without competing with the board. */
+.sp-power-panel {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.sp-power-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.sp-power-line {
+  font-size: 13px;
+  color: var(--text-faint);
+  padding: 2px 0;
+  transition: color 0.15s, font-weight 0.15s;
+}
+
+.sp-power-line.sp-power-active {
+  color: var(--danger-hover);
+  font-weight: 700;
+}
+
 #connectBtn:hover:not(:disabled), #casualQueueBtn:hover:not(:disabled),
 #rankedQueueBtn:hover:not(:disabled), #newGameBtn:hover:not(:disabled), #spStartBtn:hover:not(:disabled) {
   background: var(--accent-hover);

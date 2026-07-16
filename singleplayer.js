@@ -36,7 +36,7 @@
 // Board size varies by mode (Speedrun: 9x9, everything else: 10x10) - see
 // BOARD_SIZES and setMode() below - so this is reassigned rather than a const.
 let BOARD_SIZE = 9;
-const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10, blight: 10 };
+const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10, blight: 10, godbot: 12, curse: 10 };
 const CELL_PX = 52;
 const MAX_CAPTURE_SIZE = 4; // speedrun only - enclosures bigger than this don't count. Eogonim has no size cap, matching real Minogoe scoring.
 const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, eogonim has no preview
@@ -78,6 +78,26 @@ const PENTOMINO_NAMES = Object.keys(BASE_SHAPES).filter((n) => n.startsWith('P_'
 const TETROMINO_NAMES = ['Q_I', 'Q_O', 'Q_T', 'Q_S', 'Q_L'];
 const TROMINO_NAMES = Object.keys(BASE_SHAPES).filter((n) => n.startsWith('R_'));
 
+// GodBot only - a real match hand, same composition as game.js's own
+// HAND_COMPOSITION/drawHand()/pickRandom() (duplicated here for the same
+// self-contained reason as everything else in this file). ALL_SHAPE_NAMES
+// is what models the bot's "access to every piece" - passed as its
+// candidate pool on every single turn instead of a real, depleting hand.
+const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
+const ALL_SHAPE_NAMES = [...PENTOMINO_NAMES, ...TETROMINO_NAMES, ...TROMINO_NAMES];
+function pickRandom(names, count) {
+  const picks = [];
+  for (let i = 0; i < count; i++) picks.push(names[Math.floor(Math.random() * names.length)]);
+  return picks;
+}
+function drawGodbotHand() {
+  return [
+    ...pickRandom(PENTOMINO_NAMES, HAND_COMPOSITION.pentomino),
+    ...pickRandom(TETROMINO_NAMES, HAND_COMPOSITION.tetromino),
+    ...pickRandom(TROMINO_NAMES, HAND_COMPOSITION.tromino),
+  ];
+}
+
 function normalize(coords) {
   const minR = Math.min(...coords.map((p) => p[0]));
   const minC = Math.min(...coords.map((p) => p[1]));
@@ -114,10 +134,11 @@ function idx(r, c) { return r * BOARD_SIZE + c; }
 // permanent board fixture from the moment it spawns, same "never mutates
 // back" spirit as speedrun's captured cells just for a different reason.
 const state = {
-  mode: 'speedrun', // 'speedrun' | 'eogonim' | 'blindeogonim' | 'ascension' | 'blight' - persists across resetBoardState(), only setMode()/startRun() change it
+  mode: 'speedrun', // 'speedrun' | 'eogonim' | 'blindeogonim' | 'ascension' | 'blight' | 'godbot' | 'curse' - persists across resetBoardState(), only setMode()/startRun() change it
   board: new Uint8Array(BOARD_SIZE * BOARD_SIZE),
   pieceIdAt: new Int32Array(BOARD_SIZE * BOARD_SIZE),
   pieceCells: new Map(), // pieceId -> number[] of cell indices
+  pieceOwner: new Map(), // pieceId -> 1|2, GodBot only - every mode already assigns a piece ID on placement, this just additionally tracks who placed it, which is exactly what "remove one of your pieces" needs to target only the player's own
   nextPieceId: 1,
   running: false,
   finished: false,
@@ -143,6 +164,19 @@ const state = {
   // state, not run-progress state.
   awaitingPieceChoice: false,
   pieceChoices: [], // shapeNames currently offered during the interstitial
+  // GodBot-only - gbHand is the player's real, depleting hand (unlike every
+  // other mode's one-piece-at-a-time flow). gbTurn/gbBotBusy gate input to
+  // the player's own turns; gbLastPowerup ('again'|'remove'|null) drives the
+  // required powerup-highlight UI, reset at the start of every bot turn.
+  gbHand: [],
+  gbTurn: 'player',
+  gbBotBusy: false,
+  gbLastPowerup: null,
+  godbotScore1: 0,
+  godbotScore2: 0,
+  // Curse-only - the curse rolled for the currently-dealt piece, re-rolled
+  // by spawnNextPiece() every time a new piece is drawn.
+  curseActive: null,
 };
 
 // Used both for a brand new run (startRun()) AND between Ascension rounds
@@ -152,6 +186,7 @@ function resetBoardState() {
   state.board = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
   state.pieceIdAt = new Int32Array(BOARD_SIZE * BOARD_SIZE);
   state.pieceCells = new Map();
+  state.pieceOwner = new Map();
   state.nextPieceId = 1;
   state.running = false;
   state.finished = false;
@@ -167,6 +202,13 @@ function resetBoardState() {
   state.totalCaptured = 0;
   state.awaitingPieceChoice = false;
   state.pieceChoices = [];
+  state.gbHand = [];
+  state.gbTurn = 'player';
+  state.gbBotBusy = false;
+  state.gbLastPowerup = null;
+  state.godbotScore1 = 0;
+  state.godbotScore2 = 0;
+  state.curseActive = null;
 }
 
 // ---------- Placement legality ----------
@@ -214,6 +256,81 @@ function hasAnyLegalMove(shapeName, board) {
     }
   }
   return false;
+}
+
+// ---------- Curse mode ----------
+// Eogonim's exact engine (spawnNextPiece()/commitPlacement() both fall into
+// the same generic branches Eogonim/Blight already use), scored by leftover
+// empty cells instead of captured territory (confirmed with the user - see
+// the plan), with one random curse dealt alongside every piece.
+const CURSE_TYPES = ['norotate', 'noborder', 'invisible', 'blightspot'];
+const CURSE_LABELS = {
+  norotate: "Can't rotate or flip this piece",
+  noborder: "This piece can't touch the border",
+  invisible: 'This piece is invisible while placing',
+  blightspot: 'A blight spot appears after you place it',
+};
+
+// Only the no-border curse actually restricts WHERE a piece can go -
+// no-rotate restricts WHICH orientation is usable (locked to orientation 0,
+// the same default every mode already deals a piece at), so both need their
+// own "would this leave zero legal placements" safety check before being
+// offered - see rollCurse()'s own comment for why norotate gets the same
+// treatment the user only explicitly asked for on noborder.
+function curseNoBorderAllows(shapeName, orientationIndex, r0, c0) {
+  for (const [dr, dc] of ORIENTATIONS[shapeName][orientationIndex]) {
+    const r = r0 + dr, c = c0 + dc;
+    if (r === 0 || r === BOARD_SIZE - 1 || c === 0 || c === BOARD_SIZE - 1) return false;
+  }
+  return true;
+}
+
+function hasLegalPlacementForOrientation(shapeName, orientationIndex, board, requireNoBorder) {
+  const orientation = ORIENTATIONS[shapeName][orientationIndex];
+  const maxDr = Math.max(...orientation.map((p) => p[0]));
+  const maxDc = Math.max(...orientation.map((p) => p[1]));
+  for (let r0 = 0; r0 <= BOARD_SIZE - 1 - maxDr; r0++) {
+    for (let c0 = 0; c0 <= BOARD_SIZE - 1 - maxDc; c0++) {
+      if (!isValidPlacement(shapeName, orientationIndex, r0, c0, board)) continue;
+      if (requireNoBorder && !curseNoBorderAllows(shapeName, orientationIndex, r0, c0)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+// Only ever called once spawnNextPiece() has already confirmed the piece
+// has a legal placement SOMEWHERE (hasAnyLegalMove(), across every
+// orientation) - norotate/noborder just narrow that down further, and
+// invisible/blightspot never restrict legality at all, so the candidate
+// pool can never end up empty.
+function rollCurse(shapeName, board) {
+  let candidates = CURSE_TYPES.slice();
+  if (!hasLegalPlacementForOrientation(shapeName, 0, board, false)) {
+    candidates = candidates.filter((c) => c !== 'norotate');
+  }
+  if (!hasLegalPlacementForOrientation(shapeName, 0, board, true)) {
+    candidates = candidates.filter((c) => c !== 'noborder');
+  }
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+// The extra placement constraint the no-border curse layers on top of the
+// normal isValidPlacement() check - a no-op for every other curse (or no
+// curse at all).
+function curseAllowsPlacement(shapeName, orientationIndex, r0, c0) {
+  if (state.mode !== 'curse' || state.curseActive !== 'noborder') return true;
+  return curseNoBorderAllows(shapeName, orientationIndex, r0, c0);
+}
+
+function finishCurseRun(illegal) {
+  state.running = false;
+  state.finished = true;
+  state.failed = false;
+  state.illegalMove = illegal;
+  render();
+  const openSquares = state.board.reduce((n, v) => n + (v === 0 ? 1 : 0), 0);
+  saveCurseScoreIfBest(openSquares);
 }
 
 // ---------- Piece supply ----------
@@ -473,9 +590,16 @@ function startRun() {
   if (state.mode === 'blight') {
     for (let i = 0; i < 5; i++) spawnDeadCell();
   }
+  if (state.mode === 'godbot') {
+    state.gbHand = drawGodbotHand();
+    state.gbTurn = 'player';
+  }
   state.running = true;
   if (state.mode === 'ascension') {
     showPieceChoice();
+  } else if (state.mode === 'godbot') {
+    // No "current piece" to spawn - the player picks one of their own hand
+    // pieces (see selectGodbotHandPiece()) rather than being handed one.
   } else {
     spawnNextPiece();
   }
@@ -510,20 +634,32 @@ function spawnNextPiece() {
   if (state.mode === 'speedrun') state.pieceQueue.push(drawWeightedPiece());
   state.lastDrawnShape = shapeName;
   state.selected = { shapeName, orientationIndex: 0 };
-  recomputeHover();
   if (!hasAnyLegalMove(shapeName, state.board)) {
+    recomputeHover();
     if (state.mode === 'speedrun') failRun();
     else if (state.mode === 'blindeogonim') finishBlindEogonimRun(false);
     else if (state.mode === 'blight') finishBlightRun();
+    else if (state.mode === 'curse') finishCurseRun(false);
     else finishEogonimRun();
     return;
   }
+  // Only rolled once the piece is confirmed placeable at all (see
+  // rollCurse()'s own comment) - curseActive has to be set before
+  // recomputeHover() below, since curseAllowsPlacement() (used inside it)
+  // reads it.
+  if (state.mode === 'curse') state.curseActive = rollCurse(shapeName, state.board);
+  recomputeHover();
   render();
 }
 
 function commitPlacement(r0, c0) {
+  // GodBot's turn-based, hand-of-many flow is different enough from every
+  // other mode's one-piece-at-a-time loop below that it gets its own
+  // dedicated dispatch, same idea as Ascension's separate run-flow section.
+  if (state.mode === 'godbot') { godbotCommitPlacement(r0, c0); return; }
   const { shapeName, orientationIndex } = state.selected;
   if (!isValidPlacement(shapeName, orientationIndex, r0, c0, state.board)) return;
+  if (!curseAllowsPlacement(shapeName, orientationIndex, r0, c0)) return;
 
   const id = state.nextPieceId++;
   const cells = [];
@@ -554,6 +690,13 @@ function commitPlacement(r0, c0) {
     const blightRegions = computeBlightRegions(state.board);
     state.totalCaptured = blightRegions.score;
     spawnDeadCell(blightRegions.capturedCells);
+  } else if (state.mode === 'curse') {
+    // No captured-territory tally needed here - the score is just leftover
+    // empty cells, read fresh off the board wherever it's displayed/saved.
+    // The blight-spot curse's one square is spawned right here, same timing
+    // as Blight mode's own (after this placement, before the board-complete
+    // check below, so it can itself end the run by filling the last gap).
+    if (state.curseActive === 'blightspot') spawnDeadCell();
   } else {
     state.totalCaptured = computeCapturedCount(state.board);
   }
@@ -572,6 +715,8 @@ function commitPlacement(r0, c0) {
       finishBlindEogonimRun(false);
     } else if (state.mode === 'blight') {
       finishBlightRun();
+    } else if (state.mode === 'curse') {
+      finishCurseRun(false);
     } else {
       // A completely full board is just a special case of "nothing fits
       // anywhere" for ascension too - same round-end evaluation either way.
@@ -638,6 +783,383 @@ function finishBlindEogonimRun(illegal) {
   saveBlindEogonimScoreIfBest(state.totalCaptured);
 }
 
+// ---------- GodBot mode ----------
+// A real match against the bot on a real (12x12) board, with a real 10-piece
+// hand for the player - but the bot can place any of the 19 distinct shapes,
+// unlimited supply (ALL_SHAPE_NAMES, never depleted), and gets a bonus
+// action every single turn on top of its own normal placement: either go
+// again (place a second time immediately) or delete one of the player's
+// placed pieces from the board. Final score is the player's real territory
+// minus the bot's (computeGodbotFinalScores()) - higher is better, negative
+// is the common/expected outcome.
+//
+// The bot's move-selection heuristic (godbotScoreCandidate/
+// computeGodbotTrustedScores/godbotOpponentCanReachRegion/
+// godbotBoundedRegionSize) is a trimmed port of game.js's real "vs Bot" AI
+// (territory-delta + seal-progress scoring) - deliberately dropping its
+// mirror-defense logic (isBoardSymmetric/opponentIsMirroring), which only
+// matters when both sides share an identical hand, not true here.
+
+const REGION_SIZE_CAP = 8; // see game.js's own copy of this same constant for the full reasoning
+
+function removeOnePiece(hand, shapeName) {
+  const i = hand.indexOf(shapeName);
+  if (i === -1) return hand;
+  const copy = hand.slice();
+  copy.splice(i, 1);
+  return copy;
+}
+
+function handHasAnyLegalMove(hand, board) {
+  const distinct = new Set(hand);
+  for (const shapeName of distinct) if (hasAnyLegalMove(shapeName, board)) return true;
+  return false;
+}
+
+function enumerateLegalPlacementsFor(shapeNames, board) {
+  const distinct = new Set(shapeNames);
+  const placements = [];
+  for (const shapeName of distinct) {
+    for (let orientationIndex = 0; orientationIndex < ORIENTATIONS[shapeName].length; orientationIndex++) {
+      const orientation = ORIENTATIONS[shapeName][orientationIndex];
+      const maxDr = Math.max(...orientation.map((p) => p[0]));
+      const maxDc = Math.max(...orientation.map((p) => p[1]));
+      for (let r0 = 0; r0 <= BOARD_SIZE - 1 - maxDr; r0++) {
+        for (let c0 = 0; c0 <= BOARD_SIZE - 1 - maxDc; c0++) {
+          let ok = true;
+          for (const [dr, dc] of orientation) {
+            if (board[idx(r0 + dr, c0 + dc)] !== 0) { ok = false; break; }
+          }
+          if (ok) placements.push({ shapeName, orientationIndex, r0, c0 });
+        }
+      }
+    }
+  }
+  return placements;
+}
+
+function sealTierBonus(openSides) {
+  if (openSides === 1) return 5;
+  if (openSides === 2) return 2;
+  if (openSides === 3) return 0.5;
+  return 0;
+}
+
+function godbotBoundedRegionSize(simBoard, startIdx, opponent, cap) {
+  const visited = new Set([startIdx]);
+  const queue = [startIdx];
+  let qi = 0;
+  let touchesOpponent = false;
+  while (qi < queue.length) {
+    if (queue.length > cap) return { size: queue.length, touchesOpponent, capped: true };
+    const cur = queue[qi++];
+    const r = Math.floor(cur / BOARD_SIZE), c = cur % BOARD_SIZE;
+    for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+      if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+      const nidx = idx(nr, nc);
+      const val = simBoard[nidx];
+      if (val === 0) {
+        if (!visited.has(nidx)) { visited.add(nidx); queue.push(nidx); }
+      } else if (val === opponent) {
+        touchesOpponent = true;
+      }
+    }
+  }
+  return { size: queue.length, touchesOpponent, capped: false };
+}
+
+function godbotOpponentCanReachRegion(board, regionCells, opponentHand) {
+  const regionSet = new Set(regionCells);
+  let minR = BOARD_SIZE, maxR = -1, minC = BOARD_SIZE, maxC = -1;
+  for (const cell of regionCells) {
+    const r = Math.floor(cell / BOARD_SIZE), c = cell % BOARD_SIZE;
+    if (r < minR) minR = r;
+    if (r > maxR) maxR = r;
+    if (c < minC) minC = c;
+    if (c > maxC) maxC = c;
+  }
+  const distinctShapes = new Set(opponentHand);
+  for (const shapeName of distinctShapes) {
+    for (const orientation of ORIENTATIONS[shapeName]) {
+      const maxDr = Math.max(...orientation.map((p) => p[0]));
+      const maxDc = Math.max(...orientation.map((p) => p[1]));
+      const r0Start = Math.max(0, minR - maxDr);
+      const r0End = Math.min(BOARD_SIZE - 1 - maxDr, maxR);
+      const c0Start = Math.max(0, minC - maxDc);
+      const c0End = Math.min(BOARD_SIZE - 1 - maxDc, maxC);
+      for (let r0 = r0Start; r0 <= r0End; r0++) {
+        for (let c0 = c0Start; c0 <= c0End; c0++) {
+          let ok = true, touchesRegion = false;
+          for (const [dr, dc] of orientation) {
+            const cell = idx(r0 + dr, c0 + dc);
+            if (board[cell] !== 0) { ok = false; break; }
+            if (regionSet.has(cell)) touchesRegion = true;
+          }
+          if (ok && touchesRegion) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function computeGodbotTrustedScores(board, hand1, hand2) {
+  const visited = new Uint8Array(board.length);
+  let trusted1 = 0, trusted2 = 0;
+  for (let i = 0; i < board.length; i++) {
+    if (board[i] === 0 && !visited[i]) {
+      const regionCells = [i];
+      visited[i] = 1;
+      let qi = 0;
+      const borderOwners = new Set();
+      while (qi < regionCells.length) {
+        const cur = regionCells[qi++];
+        const r = Math.floor(cur / BOARD_SIZE), c = cur % BOARD_SIZE;
+        for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+          if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+          const nidx = idx(nr, nc);
+          const val = board[nidx];
+          if (val === 0) {
+            if (!visited[nidx]) { visited[nidx] = 1; regionCells.push(nidx); }
+          } else {
+            borderOwners.add(val);
+          }
+        }
+      }
+      if (borderOwners.size === 1) {
+        const owner = [...borderOwners][0];
+        const invaderHand = owner === 1 ? hand2 : hand1;
+        if (!godbotOpponentCanReachRegion(board, regionCells, invaderHand)) {
+          if (owner === 1) trusted1 += regionCells.length;
+          else trusted2 += regionCells.length;
+        }
+      }
+    }
+  }
+  return { trusted1, trusted2 };
+}
+
+function godbotScoreCandidate(candidate, board, player) {
+  const opponent = player === 1 ? 2 : 1;
+  const orientation = ORIENTATIONS[candidate.shapeName][candidate.orientationIndex];
+  const simBoard = board.slice();
+  const cells = [];
+  for (const [dr, dc] of orientation) {
+    const cell = idx(candidate.r0 + dr, candidate.c0 + dc);
+    simBoard[cell] = player;
+    cells.push(cell);
+  }
+  // The player's hand really does shrink (removeOnePiece reflects that this
+  // candidate's own piece is no longer available); the bot's "hand" is
+  // ALL_SHAPE_NAMES every single time, modeling unlimited access rather than
+  // depleting anything.
+  const hand1ForTrust = player === 1 ? removeOnePiece(state.gbHand, candidate.shapeName) : state.gbHand;
+  const hand2ForTrust = ALL_SHAPE_NAMES;
+  const { trusted1, trusted2 } = computeGodbotTrustedScores(simBoard, hand1ForTrust, hand2ForTrust);
+  const myScore = player === 1 ? trusted1 : trusted2;
+  const oppScore = player === 1 ? trusted2 : trusted1;
+  const territoryDelta = myScore - oppScore;
+
+  let ownAdj = 0, oppAdj = 0, cornerTouches = 0, edgeTouches = 0, sealProgress = 0;
+  const seenEmpty = new Set();
+  for (const cell of cells) {
+    const r = Math.floor(cell / BOARD_SIZE), c = cell % BOARD_SIZE;
+    const onEdgeR = r === 0 || r === BOARD_SIZE - 1;
+    const onEdgeC = c === 0 || c === BOARD_SIZE - 1;
+    if (onEdgeR && onEdgeC) cornerTouches++;
+    else if (onEdgeR || onEdgeC) edgeTouches++;
+    for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+      if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+      const val = board[idx(nr, nc)];
+      if (val === player) ownAdj++;
+      else if (val === opponent) oppAdj++;
+      const nidx = idx(nr, nc);
+      if (simBoard[nidx] !== 0 || seenEmpty.has(nidx)) continue;
+      seenEmpty.add(nidx);
+      let openSides = 0;
+      for (const [nr2, nc2] of [[nr - 1, nc], [nr + 1, nc], [nr, nc - 1], [nr, nc + 1]]) {
+        if (nr2 < 0 || nr2 >= BOARD_SIZE || nc2 < 0 || nc2 >= BOARD_SIZE) continue;
+        if (simBoard[idx(nr2, nc2)] === 0) openSides++;
+      }
+      const region = godbotBoundedRegionSize(simBoard, nidx, opponent, REGION_SIZE_CAP);
+      if (!region.touchesOpponent && !region.capped) {
+        const sizeFactor = 1 - (region.size - 1) / REGION_SIZE_CAP;
+        sealProgress += sealTierBonus(openSides) * sizeFactor;
+      }
+    }
+  }
+
+  return territoryDelta * 1000 + sealProgress + cornerTouches * 3 + edgeTouches * 0.5 + ownAdj * 2 - oppAdj * 1.5 + Math.random() * 0.5;
+}
+
+function pickGodbotPlacement(hand, board, player) {
+  const placements = enumerateLegalPlacementsFor(hand, board);
+  if (placements.length === 0) return null;
+  let best = null, bestScore = -Infinity;
+  for (const cand of placements) {
+    const s = godbotScoreCandidate(cand, board, player);
+    if (s > bestScore) { bestScore = s; best = cand; }
+  }
+  return best;
+}
+
+// Real end-of-run scoring - same mono-owner flood-fill rule as an actual
+// match's computeFinalScores() (a region counts for whoever's the ONLY
+// owner bordering it; a region touching both, or neither, is undecided).
+// Also reused by pickGodbotRemovalTarget() below to evaluate "how much of
+// the player's currently-secured score would deleting this exact piece
+// destroy" against the real current board - a direct, immediate question,
+// unlike the forward-looking "trusted" heuristic pickGodbotPlacement() uses
+// to decide WHERE to place next.
+function computeGodbotFinalScores(board) {
+  const visited = new Uint8Array(board.length);
+  let score1 = 0, score2 = 0;
+  for (let i = 0; i < board.length; i++) {
+    if (board[i] === 0 && !visited[i]) {
+      const regionCells = [i];
+      visited[i] = 1;
+      let qi = 0;
+      const borderOwners = new Set();
+      while (qi < regionCells.length) {
+        const cur = regionCells[qi++];
+        const r = Math.floor(cur / BOARD_SIZE), c = cur % BOARD_SIZE;
+        for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+          if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+          const nidx = idx(nr, nc);
+          const val = board[nidx];
+          if (val === 0) {
+            if (!visited[nidx]) { visited[nidx] = 1; regionCells.push(nidx); }
+          } else {
+            borderOwners.add(val);
+          }
+        }
+      }
+      if (borderOwners.size === 1) {
+        const owner = [...borderOwners][0];
+        if (owner === 1) score1 += regionCells.length; else score2 += regionCells.length;
+      }
+    }
+  }
+  return { score1, score2 };
+}
+
+// Picks whichever of the player's currently-placed pieces, if deleted,
+// would cost the player the most real secured score right now. Returns null
+// if the player has no pieces on the board yet, or if no removal would
+// actually cost them anything (nothing secured yet to sabotage) - the
+// caller falls back to "go again" in that case. Ties broken randomly.
+function pickGodbotRemovalTarget() {
+  const playerPieceIds = [...state.pieceOwner.entries()].filter(([, owner]) => owner === 1).map(([id]) => id);
+  if (playerPieceIds.length === 0) return null;
+  const currentScore = computeGodbotFinalScores(state.board).score1;
+  let bestDamage = 0;
+  let tied = [];
+  for (const id of playerPieceIds) {
+    const testBoard = state.board.slice();
+    for (const cell of state.pieceCells.get(id)) testBoard[cell] = 0;
+    const damage = currentScore - computeGodbotFinalScores(testBoard).score1;
+    if (damage > bestDamage) { bestDamage = damage; tied = [id]; }
+    else if (damage === bestDamage && damage > 0) { tied.push(id); }
+  }
+  if (bestDamage <= 0) return null;
+  return tied[Math.floor(Math.random() * tied.length)];
+}
+
+function godbotRemovePiece(pieceId) {
+  for (const cell of state.pieceCells.get(pieceId)) {
+    state.board[cell] = 0;
+    state.pieceIdAt[cell] = 0;
+  }
+  state.pieceCells.delete(pieceId);
+  state.pieceOwner.delete(pieceId);
+}
+
+function godbotApplyPlacement(candidate, player) {
+  const id = state.nextPieceId++;
+  const cells = [];
+  for (const [dr, dc] of ORIENTATIONS[candidate.shapeName][candidate.orientationIndex]) {
+    const cell = idx(candidate.r0 + dr, candidate.c0 + dc);
+    state.board[cell] = player;
+    state.pieceIdAt[cell] = id;
+    cells.push(cell);
+  }
+  state.pieceCells.set(id, cells);
+  state.pieceOwner.set(id, player);
+}
+
+// Called by clicking a hand piece (see renderGodbotHand()) - selects it the
+// same way spawnNextPiece() does for every other mode, just sourced from
+// the player's own remaining hand instead of being handed one at random.
+function selectGodbotHandPiece(shapeName) {
+  if (state.mode !== 'godbot' || !state.running || state.gbTurn !== 'player') return;
+  state.selected = { shapeName, orientationIndex: 0 };
+  recomputeHover();
+  render();
+}
+
+function godbotCommitPlacement(r0, c0) {
+  if (state.gbTurn !== 'player' || !state.selected) return;
+  const { shapeName, orientationIndex } = state.selected;
+  if (!isValidPlacement(shapeName, orientationIndex, r0, c0, state.board)) return;
+
+  godbotApplyPlacement({ shapeName, orientationIndex, r0, c0 }, 1);
+  state.gbHand.splice(state.gbHand.indexOf(shapeName), 1);
+  state.selected = null;
+  state.hover = null;
+  state.gbTurn = 'bot';
+  state.gbLastPowerup = null;
+  render();
+
+  setTimeout(godbotRunBotTurn, 500);
+}
+
+// The bot's own turn: its one normal placement, then - after a short pause,
+// so the two sub-actions read as distinct turns rather than an instant
+// double-move - its bonus action. See pickGodbotRemovalTarget()'s own
+// comment for the remove-vs-go-again decision rule.
+function godbotRunBotTurn() {
+  if (!state.running || state.mode !== 'godbot') return;
+  const normalMove = pickGodbotPlacement(ALL_SHAPE_NAMES, state.board, 2);
+  if (normalMove) godbotApplyPlacement(normalMove, 2);
+  render();
+
+  setTimeout(() => {
+    if (!state.running || state.mode !== 'godbot') return;
+    const removalTarget = pickGodbotRemovalTarget();
+    if (removalTarget !== null) {
+      godbotRemovePiece(removalTarget);
+      state.gbLastPowerup = 'remove';
+    } else {
+      const againMove = pickGodbotPlacement(ALL_SHAPE_NAMES, state.board, 2);
+      if (againMove) godbotApplyPlacement(againMove, 2);
+      state.gbLastPowerup = 'again';
+    }
+    godbotEndBotTurn();
+  }, 500);
+}
+
+function godbotEndBotTurn() {
+  state.gbTurn = 'player';
+  state.selected = null;
+  state.hover = null;
+  if (!handHasAnyLegalMove(state.gbHand, state.board)) {
+    godbotFinishRun();
+    return;
+  }
+  render();
+}
+
+function godbotFinishRun() {
+  state.running = false;
+  state.finished = true;
+  state.failed = false;
+  const { score1, score2 } = computeGodbotFinalScores(state.board);
+  state.godbotScore1 = score1;
+  state.godbotScore2 = score2;
+  render();
+  saveGodbotScoreIfBest(score1 - score2);
+}
+
 // ---------- Ascension run flow ----------
 
 // Shown at the very start of a run and again after every round pass -
@@ -685,6 +1207,7 @@ function finishAscensionRun() {
 // ---------- Rotation / hover ----------
 function rotateSelected(reverse = false) {
   if (!state.selected) return;
+  if (state.mode === 'curse' && state.curseActive === 'norotate') return;
   const len = ORIENTATIONS[state.selected.shapeName].length;
   state.selected.orientationIndex = reverse
     ? (state.selected.orientationIndex - 1 + len) % len
@@ -701,6 +1224,7 @@ function rotateSelected(reverse = false) {
 // is itself (fully symmetric shapes, e.g. Q_O/P_X).
 function flipSelected() {
   if (!state.selected) return;
+  if (state.mode === 'curse' && state.curseActive === 'norotate') return;
   const { shapeName, orientationIndex } = state.selected;
   const orientations = ORIENTATIONS[shapeName];
   const mirroredKey = JSON.stringify(mirror(orientations[orientationIndex]));
@@ -719,7 +1243,10 @@ function recomputeHover() {
   const w = Math.max(...orientation.map((p) => p[1])) + 1;
   const r0 = state.mouseRC.row - Math.floor(h / 2);
   const c0 = state.mouseRC.col - Math.floor(w / 2);
-  state.hover = { r0, c0, valid: isValidPlacement(shapeName, orientationIndex, r0, c0, state.board) };
+  state.hover = {
+    r0, c0,
+    valid: isValidPlacement(shapeName, orientationIndex, r0, c0, state.board) && curseAllowsPlacement(shapeName, orientationIndex, r0, c0),
+  };
 }
 
 // ---------- Timer ----------
@@ -765,6 +1292,17 @@ function setMode(mode) {
   refreshLeaderboard();
 }
 
+// Growing past 5 near-identical ternary branches per label - lookup maps
+// read a lot more clearly than an 7-way nested ternary at this point.
+const MODE_TITLES = {
+  speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim',
+  ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse',
+};
+const LEADERBOARD_TITLES = {
+  speedrun: 'Top Times', eogonim: 'Lowest Scores', blindeogonim: 'Lowest Scores',
+  ascension: 'Deepest Runs', blight: 'Highest Scores', godbot: 'Best Differential', curse: 'Fewest Open Squares',
+};
+
 function updateModeUI() {
   const mode = state.mode;
   document.getElementById('spTabSpeedrun').classList.toggle('active', mode === 'speedrun');
@@ -772,8 +1310,9 @@ function updateModeUI() {
   document.getElementById('spTabBlindEogonim').classList.toggle('active', mode === 'blindeogonim');
   document.getElementById('spTabAscension').classList.toggle('active', mode === 'ascension');
   document.getElementById('spTabBlight').classList.toggle('active', mode === 'blight');
-  document.getElementById('spModeTitle').textContent =
-    mode === 'ascension' ? 'Ascension' : mode === 'blindeogonim' ? 'Blind Eogonim' : mode === 'eogonim' ? 'Eogonim' : mode === 'blight' ? 'Blight' : 'Speedrun';
+  document.getElementById('spTabGodbot').classList.toggle('active', mode === 'godbot');
+  document.getElementById('spTabCurse').classList.toggle('active', mode === 'curse');
+  document.getElementById('spModeTitle').textContent = MODE_TITLES[mode];
   document.getElementById('spModeCredit').style.display = mode === 'eogonim' ? '' : 'none';
   document.getElementById('spUpcomingLabel').style.display = mode === 'speedrun' ? '' : 'none';
   document.getElementById('spUpcomingPieces').style.display = mode === 'speedrun' ? '' : 'none';
@@ -782,12 +1321,20 @@ function updateModeUI() {
   document.getElementById('spRulesBlindEogonim').style.display = mode === 'blindeogonim' ? '' : 'none';
   document.getElementById('spRulesAscension').style.display = mode === 'ascension' ? '' : 'none';
   document.getElementById('spRulesBlight').style.display = mode === 'blight' ? '' : 'none';
-  document.getElementById('spLeaderboardTitle').textContent =
-    mode === 'ascension' ? 'Deepest Runs' : mode === 'blight' ? 'Highest Scores' : (mode === 'eogonim' || mode === 'blindeogonim') ? 'Lowest Scores' : 'Top Times';
+  document.getElementById('spRulesGodbot').style.display = mode === 'godbot' ? '' : 'none';
+  document.getElementById('spRulesCurse').style.display = mode === 'curse' ? '' : 'none';
+  document.getElementById('spLeaderboardTitle').textContent = LEADERBOARD_TITLES[mode];
   document.getElementById('spSaveStatus').textContent = '';
   document.getElementById('spPieceChoices').style.display = 'none';
+  document.getElementById('spGodbotHand').style.display = mode === 'godbot' ? '' : 'none';
+  document.getElementById('spGodbotPowerups').style.display = mode === 'godbot' ? '' : 'none';
+  document.getElementById('spCursePanel').style.display = mode === 'curse' ? '' : 'none';
   document.getElementById('spTimer').textContent =
-    (mode === 'eogonim' || mode === 'blindeogonim' || mode === 'blight') ? 'Captured: 0' : mode === 'ascension' ? `Round 1 - 0/${ascensionThreshold(1)}` : formatTime(0);
+    (mode === 'eogonim' || mode === 'blindeogonim' || mode === 'blight') ? 'Captured: 0'
+    : mode === 'ascension' ? `Round 1 - 0/${ascensionThreshold(1)}`
+    : mode === 'godbot' ? 'You: 0 - Bot: 0'
+    : mode === 'curse' ? 'Open squares: 0'
+    : formatTime(0);
 }
 
 // ---------- Rendering ----------
@@ -814,15 +1361,19 @@ function drawBoard() {
   // revealed (same rendering as every other mode) so the player can see
   // exactly what they were working with.
   const hidePieces = state.mode === 'blindeogonim' && !state.finished;
-  // Board value 2 means two different things depending on mode (see the
-  // state.board comment up top) - speedrun's cleared-pocket green vs
-  // blight's dead-square color, a dark blighted red distinct from both the
-  // background and either player color.
+  // Board value 2 means different things depending on mode (see the
+  // state.board comment up top) - speedrun's cleared-pocket green,
+  // blight/curse's dead-square color (a dark blighted red distinct from
+  // both the background and either player color), or GodBot's bot-owned
+  // piece (the same orange already used for "player 2" everywhere else on
+  // the site, so the color association carries over from a real match).
   const deadColor = '#4a2a30';
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
       const val = hidePieces ? 0 : state.board[idx(r, c)];
-      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? (state.mode === 'blight' ? deadColor : '#74ae82') : '#1e1b24';
+      ctx.fillStyle = val === 1 ? '#5b7fd9'
+        : val === 2 ? (state.mode === 'godbot' ? '#d97a52' : (state.mode === 'blight' || state.mode === 'curse') ? deadColor : '#74ae82')
+        : '#1e1b24';
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
     }
   }
@@ -833,7 +1384,10 @@ function drawBoard() {
     ctx.beginPath(); ctx.moveTo(0, i * CELL_PX); ctx.lineTo(canvas.width, i * CELL_PX); ctx.stroke();
   }
 
-  if (state.selected && state.hover) {
+  // Curse's "invisible while placing" curse skips the hover ghost-preview
+  // entirely for that one placement - the whole point is placing blind.
+  const skipPreview = state.mode === 'curse' && state.curseActive === 'invisible';
+  if (state.selected && state.hover && !skipPreview) {
     const orientation = ORIENTATIONS[state.selected.shapeName][state.selected.orientationIndex];
     // Blind Eogonim never color-codes valid vs. invalid - doing so would
     // just tell the player exactly which hidden squares are occupied by
@@ -887,6 +1441,8 @@ function render() {
   document.getElementById('spTabBlindEogonim').disabled = state.running;
   document.getElementById('spTabAscension').disabled = state.running;
   document.getElementById('spTabBlight').disabled = state.running;
+  document.getElementById('spTabGodbot').disabled = state.running;
+  document.getElementById('spTabCurse').disabled = state.running;
 
   if (state.mode === 'eogonim' || state.mode === 'blindeogonim') {
     document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured}`;
@@ -895,6 +1451,13 @@ function render() {
   } else if (state.mode === 'blight') {
     const deadCount = state.running || state.finished ? state.board.reduce((n, v) => n + (v === 2 ? 1 : 0), 0) : 0;
     document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured} (${deadCount} dead)`;
+  } else if (state.mode === 'godbot') {
+    document.getElementById('spTimer').textContent = state.finished
+      ? `You: ${state.godbotScore1} - Bot: ${state.godbotScore2}`
+      : `You: ${computeGodbotFinalScores(state.board).score1} - Bot: ${computeGodbotFinalScores(state.board).score2}`;
+  } else if (state.mode === 'curse') {
+    const openCount = state.running || state.finished ? state.board.reduce((n, v) => n + (v === 0 ? 1 : 0), 0) : BOARD_SIZE * BOARD_SIZE;
+    document.getElementById('spTimer').textContent = `Open squares: ${openCount}`;
   }
 
   if (!state.running && !state.finished) {
@@ -907,7 +1470,31 @@ function render() {
           ? 'Pick a starting shape, then capture enough territory each round to keep unlocking more.'
           : state.mode === 'blight'
             ? 'The board starts with 5 dead squares, and one more spreads after every piece you place - maximize your captured territory before you run out of room.'
-            : "You'll get one random piece at a time - place it anywhere it fits.";
+            : state.mode === 'godbot'
+              ? "You get a real hand. The bot can place any piece, unlimited supply, and gets a bonus move every turn - either it goes again, or it removes one of your pieces. Beat it anyway."
+              : state.mode === 'curse'
+                ? "One random piece at a time, no preview, nothing ever disappears - but every piece comes cursed. Pack the board as tight as you can; an illegal move ends your run instantly."
+                : "You'll get one random piece at a time - place it anywhere it fits.";
+  } else if (state.mode === 'godbot' && state.finished) {
+    const diff = state.godbotScore1 - state.godbotScore2;
+    banner.textContent = `Run over. You ${state.godbotScore1} - Bot ${state.godbotScore2} (${diff > 0 ? '+' : ''}${diff})`;
+    pieceInfo.textContent = 'Click Restart to try again.';
+  } else if (state.mode === 'godbot' && state.gbTurn === 'bot') {
+    banner.textContent = "Bot's turn...";
+    pieceInfo.textContent = 'Watch which bonus action it uses.';
+  } else if (state.mode === 'godbot') {
+    banner.textContent = 'Your turn';
+    pieceInfo.textContent = state.selected
+      ? `Placing ${state.selected.shapeName}. Click the board to place, or press R / scroll to rotate.`
+      : 'Pick a piece from your hand below.';
+  } else if (state.mode === 'curse' && state.finished) {
+    const openCount = state.board.reduce((n, v) => n + (v === 0 ? 1 : 0), 0);
+    banner.textContent = state.illegalMove
+      ? `Illegal move. Run over. ${openCount} open square${openCount === 1 ? '' : 's'} left`
+      : `Run over. ${openCount} open square${openCount === 1 ? '' : 's'} left`;
+    pieceInfo.textContent = state.illegalMove
+      ? 'That square was already occupied. Click Restart to try again.'
+      : 'Click Restart to try for fewer.';
   } else if (state.mode === 'ascension' && state.awaitingPieceChoice) {
     banner.textContent = state.round === 1 ? 'Choose your starting shape!' : `Round ${state.round - 1} cleared! Choose your next shape.`;
     pieceInfo.textContent = 'Pick a shape below to add it to your collection.';
@@ -988,6 +1575,58 @@ function render() {
     unlockedEl.style.display = 'none';
     unlockedEl.innerHTML = '';
   }
+
+  renderGodbotHand();
+  renderGodbotPowerups();
+  renderCursePanel();
+}
+
+// GodBot's hand-of-many picker - the first mode where the player chooses
+// from several pieces at once instead of being handed exactly one. Each
+// hand piece is a clickable icon (drawShapeIcon(), same helper every other
+// piece preview in this file already uses); the currently-selected one (if
+// any) gets a highlight so it's clear what's about to be placed.
+function renderGodbotHand() {
+  const container = document.getElementById('spGodbotHand');
+  if (state.mode !== 'godbot') { container.innerHTML = ''; return; }
+  container.innerHTML = '';
+  if (!state.running) return;
+  state.gbHand.forEach((shapeName, i) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sp-godbot-hand-item';
+    if (state.gbTurn !== 'player') btn.disabled = true;
+    if (state.selected && state.selected.shapeName === shapeName) btn.classList.add('sp-godbot-hand-item-active');
+    const c = document.createElement('canvas');
+    drawShapeIcon(c, BASE_SHAPES[shapeName], 12);
+    btn.appendChild(c);
+    btn.addEventListener('click', () => selectGodbotHandPiece(shapeName));
+    container.appendChild(btn);
+  });
+}
+
+// The required "grayed out, current one highlighted red" powerup readout -
+// state.gbLastPowerup is set the moment the bot's bonus action resolves
+// (godbotRunBotTurn()) and cleared the moment the player's next placement
+// hands the turn back to the bot (godbotCommitPlacement()), so it always
+// reflects "what the bot just did," not a stale action from turns ago.
+function renderGodbotPowerups() {
+  const container = document.getElementById('spGodbotPowerups');
+  if (state.mode !== 'godbot') return;
+  container.querySelector('[data-power="again"]').classList.toggle('sp-power-active', state.gbLastPowerup === 'again');
+  container.querySelector('[data-power="remove"]').classList.toggle('sp-power-active', state.gbLastPowerup === 'remove');
+}
+
+// Same "grayed out, current one highlighted red" treatment as GodBot's
+// powerup panel, one line per curse - state.curseActive is re-rolled by
+// spawnNextPiece() every time a new piece is drawn (see rollCurse()).
+function renderCursePanel() {
+  const container = document.getElementById('spCursePanel');
+  if (state.mode !== 'curse') return;
+  for (const curse of CURSE_TYPES) {
+    const el = container.querySelector(`[data-curse="${curse}"]`);
+    if (el) el.classList.toggle('sp-power-active', state.running && state.curseActive === curse);
+  }
 }
 
 // ---------- Canvas interaction ----------
@@ -1020,12 +1659,15 @@ canvas.addEventListener('click', () => {
     return;
   }
   // Every other mode just silently ignores a click on an invalid square.
-  // Blind Eogonim only ends the run for the 'occupied' case - clicking off
-  // the edge of the board stays a harmless no-op, same as everywhere else,
-  // since the board's edges are always visible regardless of mode.
-  if (state.mode === 'blindeogonim') {
+  // Blind Eogonim and Curse both end the run for the 'occupied' case only -
+  // clicking off the edge of the board (or, for Curse, onto an otherwise-
+  // empty square the active curse just forbids) stays a harmless no-op.
+  if (state.mode === 'blindeogonim' || state.mode === 'curse') {
     const reason = placementConflictReason(state.selected.shapeName, state.selected.orientationIndex, state.hover.r0, state.hover.c0, state.board);
-    if (reason === 'occupied') finishBlindEogonimRun(true);
+    if (reason === 'occupied') {
+      if (state.mode === 'blindeogonim') finishBlindEogonimRun(true);
+      else finishCurseRun(true);
+    }
   }
 });
 
@@ -1043,10 +1685,11 @@ canvas.addEventListener('touchstart', (e) => {
       state.lastTapCell = null;
       return;
     }
-    if (state.mode === 'blindeogonim') {
+    if (state.mode === 'blindeogonim' || state.mode === 'curse') {
       const reason = placementConflictReason(state.selected.shapeName, state.selected.orientationIndex, state.hover.r0, state.hover.c0, state.board);
       if (reason === 'occupied') {
-        finishBlindEogonimRun(true);
+        if (state.mode === 'blindeogonim') finishBlindEogonimRun(true);
+        else finishCurseRun(true);
         state.lastTapCell = null;
         return;
       }
@@ -1077,6 +1720,8 @@ document.getElementById('spTabEogonim').addEventListener('click', () => setMode(
 document.getElementById('spTabBlindEogonim').addEventListener('click', () => setMode('blindeogonim'));
 document.getElementById('spTabAscension').addEventListener('click', () => setMode('ascension'));
 document.getElementById('spTabBlight').addEventListener('click', () => setMode('blight'));
+document.getElementById('spTabGodbot').addEventListener('click', () => setMode('godbot'));
+document.getElementById('spTabCurse').addEventListener('click', () => setMode('curse'));
 
 // Clicking the "How to Play" header collapses/expands the whole rules panel.
 document.querySelector('.rules-panel h3')?.addEventListener('click', () => {
@@ -1184,14 +1829,57 @@ async function saveBlightScoreIfBest(score) {
   refreshLeaderboard();
 }
 
+// Same discipline again, via submit_godbot_score() - higher is better, same
+// direction as submit_ascension_score()/submit_blight_score(), but this is
+// the one mode where the score itself can be negative (you losing to the
+// bot, which is common), so the message doesn't assume a plain positive
+// number the way every other mode's does.
+async function saveGodbotScoreIfBest(score) {
+  const user = Auth.getUser();
+  if (!user) {
+    document.getElementById('spSaveStatus').textContent = 'Sign in to save your score to the leaderboard.';
+    return;
+  }
+  const { data: bestScore, error } = await supabaseClient.rpc('submit_godbot_score', { p_score: score });
+  if (error) {
+    document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
+    return;
+  }
+  document.getElementById('spSaveStatus').textContent = bestScore === score
+    ? 'New personal best - saved!'
+    : `Saved. Your best is still ${bestScore > 0 ? '+' : ''}${bestScore}.`;
+  refreshLeaderboard();
+}
+
+// Same discipline again, via submit_curse_score() - lower is better, same
+// direction as submit_singleplayer_score()/submit_blindeogonim_score(), just
+// counting leftover open squares instead of captured territory.
+async function saveCurseScoreIfBest(score) {
+  const user = Auth.getUser();
+  if (!user) {
+    document.getElementById('spSaveStatus').textContent = 'Sign in to save your score to the leaderboard.';
+    return;
+  }
+  const { data: bestScore, error } = await supabaseClient.rpc('submit_curse_score', { p_score: score });
+  if (error) {
+    document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
+    return;
+  }
+  document.getElementById('spSaveStatus').textContent = bestScore === score
+    ? 'New personal best - saved!'
+    : `Saved. Your best is still ${bestScore}.`;
+  refreshLeaderboard();
+}
+
 async function refreshLeaderboard() {
   const container = document.getElementById('spLeaderboard');
   const mode = state.mode;
   const scoreColumn = mode === 'speedrun' ? 'time_ms' : 'score';
   // Most modes are "lower is better" (fastest time, fewest captured
-  // squares) - ascension (rounds cleared) and blight (captured territory,
-  // maximized instead of minimized) are the two where more is better.
-  const ascending = mode !== 'ascension' && mode !== 'blight';
+  // squares/open squares) - ascension (rounds cleared), blight (captured
+  // territory, maximized), and godbot (score differential, maximized) are
+  // the ones where more is better.
+  const ascending = mode !== 'ascension' && mode !== 'blight' && mode !== 'godbot';
   const { data, error } = await supabaseClient
     .from('singleplayer_runs')
     .select(`${scoreColumn}, profiles(id, username, avatar_id, title_id)`)
@@ -1209,6 +1897,7 @@ async function refreshLeaderboard() {
   const formatScore = (row) => {
     if (mode === 'speedrun') return formatTime(row.time_ms);
     if (mode === 'ascension') return `${row.score} round${row.score === 1 ? '' : 's'}`;
+    if (mode === 'godbot') return `${row.score > 0 ? '+' : ''}${row.score}`;
     return row.score;
   };
   const columnLabel = mode === 'speedrun' ? 'Time' : mode === 'ascension' ? 'Rounds' : 'Score';

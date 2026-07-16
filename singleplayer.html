@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Minogoe - Singleplayer</title>
+<title>Minogoe - Minigames</title>
 <link rel="icon" href="favicon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -33,7 +33,7 @@
       <a href="garden.html">Garden</a>
     </div>
     <div class="site-nav-row">
-      <a href="singleplayer.html">Singleplayer</a>
+      <a href="singleplayer.html">Minigames</a>
       <a href="profile.html">Profile</a>
       <a href="leaderboard.html">Leaderboard</a>
       <a href="recent.html">Recent Games</a>
@@ -70,6 +70,8 @@
           <button type="button" id="spTabBlindEogonim" class="sp-mode-tab">Blind Eogonim</button>
           <button type="button" id="spTabAscension" class="sp-mode-tab">Ascension</button>
           <button type="button" id="spTabBlight" class="sp-mode-tab">Blight</button>
+          <button type="button" id="spTabGodbot" class="sp-mode-tab">GodBot</button>
+          <button type="button" id="spTabCurse" class="sp-mode-tab">Curse</button>
         </div>
         <h3 id="spModeTitle">Speedrun</h3>
         <div class="sp-mode-credit" id="spModeCredit" style="display:none;">Idea by SgtBird08</div>
@@ -83,6 +85,29 @@
         <div class="sp-upcoming-label" id="spUnlockedLabel" style="display:none;">Your shapes:</div>
         <div class="sp-upcoming-pieces" id="spUnlockedShapes" style="display:none;"></div>
         <div id="spPieceChoices" class="sp-piece-choices" style="display:none;"></div>
+
+        <!-- GodBot only - the player's hand-of-many piece picker (every
+             other mode only ever shows one piece at a time), and the
+             required grayed-out powerup readout, current one highlighted
+             red - see selectGodbotHandPiece()/renderGodbotPowerups() in
+             singleplayer.js. -->
+        <div id="spGodbotHand" class="sp-godbot-hand" style="display:none;"></div>
+        <div id="spGodbotPowerups" class="sp-power-panel" style="display:none;">
+          <div class="sp-power-label">Bot's bonus action</div>
+          <div class="sp-power-line" data-power="again">Goes again</div>
+          <div class="sp-power-line" data-power="remove">Removes one of your pieces</div>
+        </div>
+
+        <!-- Curse only - same grayed-out/highlighted treatment, one line per
+             possible curse - see renderCursePanel() in singleplayer.js. -->
+        <div id="spCursePanel" class="sp-power-panel" style="display:none;">
+          <div class="sp-power-label">This piece's curse</div>
+          <div class="sp-power-line" data-curse="norotate">Can't rotate or flip</div>
+          <div class="sp-power-line" data-curse="noborder">Can't touch the border</div>
+          <div class="sp-power-line" data-curse="invisible">Invisible while placing</div>
+          <div class="sp-power-line" data-curse="blightspot">Blight spot after placing</div>
+        </div>
+
         <div class="online-status" id="spSaveStatus"></div>
       </div>
 
@@ -118,6 +143,18 @@
           <li>One more square dies (at random, never inside territory you've already captured) after every piece you place.</li>
           <li>Dead squares can't be placed on, and they poison capturing - a pocket bordering one never counts, even if your own pieces surround the rest of it.</li>
           <li>Run ends when your piece has no legal spot. Highest captured wins.</li>
+        </ul>
+        <ul id="spRulesGodbot" style="display:none;">
+          <li><em>12&times;12</em> board, a real hand (7 pentominoes, 2 tetrominoes, 1 tromino) - place them one at a time like a real match.</li>
+          <li>The bot can place any piece at all, unlimited supply, and territory is scored the same way a real match's is.</li>
+          <li>Every bot turn, after its own move, it gets exactly one bonus action: it either goes again, or deletes one of your placed pieces.</li>
+          <li>Run ends once you have no legal placement left. Score is your territory minus the bot's - negative is common.</li>
+        </ul>
+        <ul id="spRulesCurse" style="display:none;">
+          <li><em>10&times;10</em> board, one random piece at a time, no preview, nothing ever disappears - Eogonim's own engine.</li>
+          <li>Every piece is dealt one random curse: locked orientation, can't touch the border, invisible while placing, or a blight spot spreads after you place it.</li>
+          <li>A curse that would leave the piece completely unplaceable is never dealt.</li>
+          <li>Clicking an occupied square ends your run immediately. Score is however many squares are still empty when you get stuck - lower is better.</li>
         </ul>
       </div>
 

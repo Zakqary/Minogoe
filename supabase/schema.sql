@@ -3191,25 +3191,20 @@ $$;
 
 -- ---------- Phase 41: singleplayer "Exact Match" mode (precision variant of Eogonim) ----------
 
--- Same explicit drop-then-add pattern as every earlier mode addition in
--- this file - this is now the latest phase to touch these two constraints,
--- so it's the one that owns them; nothing earlier in the file should ever
--- re-add a narrower version again (see Phase 33/36's comments for why).
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension', 'exactmatch'));
-
--- Exact Match reuses the existing "score" column exactly like Ascension
--- does (an integer number of rounds cleared in a row, higher is better) -
--- same shape, different rounds - no new column needed.
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
-  check (
-    (mode = 'speedrun' and time_ms is not null and score is null)
-    or (mode = 'eogonim' and score is not null and time_ms is null)
-    or (mode = 'blindeogonim' and score is not null and time_ms is null)
-    or (mode = 'ascension' and score is not null and time_ms is null)
-    or (mode = 'exactmatch' and score is not null and time_ms is null)
-  );
+-- This phase originally also dropped-then-re-added both constraints here,
+-- widened to include 'exactmatch' (on top of the 4 values that existed at
+-- the time). That's the same landmine pattern later found and fixed in
+-- Phase 42's comment: since this whole file re-runs top-to-bottom on every
+-- "safe to re-run in full" execution, and later phases (48, 49) keep
+-- widening this same constraint further as new modes ship, a re-run
+-- against a live database that already has real 'blight'/'godbot'/'curse'
+-- rows would hit THIS 5-value version first (it runs earlier in the file
+-- than any of those) and fail outright - exactly the error this was
+-- rewritten to stop causing. Exact Match itself was removed two phases
+-- later (Phase 42) anyway, so re-adding it to the constraint here only to
+-- have Phase 42 immediately narrow it back out was already pointless work;
+-- the constraint is correctly left owned by whichever phase touches it
+-- LAST (Phase 49 today).
 
 -- Same "server decides if it's actually an improvement" discipline as
 -- submit_ascension_score(), and the same higher-is-better comparison
@@ -3256,23 +3251,22 @@ $$;
 delete from public.singleplayer_runs where mode = 'exactmatch';
 drop function if exists public.submit_exactmatch_score(integer);
 
--- Same explicit drop-then-add pattern as every earlier mode change in this
--- file - this is now the latest phase to touch these two constraints, so
--- it's the one that owns them; nothing earlier in the file (including
--- Phase 41 above) should ever re-add the wider, exactmatch-including
--- version again. The delete above runs BEFORE this narrows the constraint
--- back down, so no existing row can ever violate it on a fresh re-run.
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension'));
-
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
-  check (
-    (mode = 'speedrun' and time_ms is not null and score is null)
-    or (mode = 'eogonim' and score is not null and time_ms is null)
-    or (mode = 'blindeogonim' and score is not null and time_ms is null)
-    or (mode = 'ascension' and score is not null and time_ms is null)
-  );
+-- Originally this phase also dropped-then-re-added both constraints here,
+-- narrowed back down to exclude 'exactmatch'. That was safe on the day it
+-- was written (nothing later in the file had added a mode past
+-- 'ascension' yet), but it silently became a landmine the moment Phase 48
+-- appended 'blight' further down this same file: since the WHOLE script
+-- re-runs top-to-bottom every time (this file's whole "safe to re-run in
+-- full" premise), a second run against a database that already has real
+-- 'blight' rows would hit THIS narrow 4-value constraint first - before
+-- ever reaching Phase 48/49's wider ones further down - and fail outright
+-- ("check constraint ... is violated by some row"), exactly the
+-- get_p1_p2_win_rates()/buy_seed_pack() bug class this file's other
+-- comments warn about, just realized here for real. The delete above
+-- already fully accomplishes this phase's actual goal (no 'exactmatch'
+-- row can ever exist again); the constraint itself is correctly left
+-- owned by whichever phase touches it LAST (Phase 49 today) rather than
+-- being redefined here too.
 
 -- ---------- Phase 43: fold Q_Z/Q_J into Q_S/Q_L on the Stats page's "Win Rate by First Piece" chart ----------
 
@@ -3964,6 +3958,141 @@ as $$
       completed_at,
       case
         when mode in ('ascension', 'blight') then max(raw_value) over (partition by mode order by completed_at rows between unbounded preceding and current row)
+        else min(raw_value) over (partition by mode order by completed_at rows between unbounded preceding and current row)
+      end as running_best
+    from runs
+  ),
+  with_prev as (
+    select mode, completed_at, running_best,
+      lag(running_best) over (partition by mode order by completed_at) as prev_best
+    from running
+  )
+  select mode, completed_at as achieved_at, running_best as value
+  from with_prev
+  where prev_best is distinct from running_best
+  order by mode, achieved_at;
+$$;
+
+-- ---------- Phase 49: singleplayer "GodBot" and "Curse" modes ----------
+
+-- Same explicit drop-then-add pattern as every earlier mode phase (see
+-- Phase 42's comment for why nothing earlier should ever be edited in place
+-- to re-add a narrower version instead of just adding a new phase).
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension', 'blight', 'godbot', 'curse'));
+
+-- Both new modes reuse the existing "score" column exactly like every mode
+-- after Speedrun - godbot's is a real-match territory differential (can be
+-- negative), curse's is a count of leftover empty squares.
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
+  check (
+    (mode = 'speedrun' and time_ms is not null and score is null)
+    or (mode = 'eogonim' and score is not null and time_ms is null)
+    or (mode = 'blindeogonim' and score is not null and time_ms is null)
+    or (mode = 'ascension' and score is not null and time_ms is null)
+    or (mode = 'blight' and score is not null and time_ms is null)
+    or (mode = 'godbot' and score is not null and time_ms is null)
+    or (mode = 'curse' and score is not null and time_ms is null)
+  );
+
+-- Same "server decides if it's actually an improvement" discipline as
+-- submit_blight_score(), and the same higher-is-better comparison
+-- direction - but this is the one mode where the score is expected to be
+-- negative most of the time (the bot cheats), so the usual "p_score < 0 is
+-- invalid" guard every other RPC uses would reject the common case here.
+-- Bounded to a generous +/-200 instead - comfortably outside the real
+-- 12x12=144-cell range in either direction, just enough to catch an
+-- obviously fabricated value.
+create or replace function public.submit_godbot_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < -200 or p_score > 200 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'godbot' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'godbot', p_score);
+    return p_score;
+  elsif p_score > existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'godbot';
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;
+
+-- Same discipline again, via submit_curse_score() - lower is better, same
+-- direction as submit_singleplayer_score()'s Eogonim, bounded 0..100 (a
+-- 10x10 board's cell count).
+create or replace function public.submit_curse_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < 0 or p_score > 100 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'curse' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'curse', p_score);
+    return p_score;
+  elsif p_score < existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'curse';
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;
+
+-- Redefines get_record_progression() (Phase 45, last redefined Phase 48)
+-- one more time - godbot joins ascension/blight in the higher-is-better
+-- branch; curse falls into the existing lower-is-better default, no change
+-- needed there.
+create or replace function public.get_record_progression()
+returns table (
+  mode text,
+  achieved_at timestamptz,
+  value numeric
+)
+language sql
+stable
+as $$
+  with runs as (
+    select
+      mode,
+      completed_at,
+      case when mode = 'speedrun' then time_ms::numeric else score::numeric end as raw_value
+    from public.singleplayer_runs
+  ),
+  running as (
+    select
+      mode,
+      completed_at,
+      case
+        when mode in ('ascension', 'blight', 'godbot') then max(raw_value) over (partition by mode order by completed_at rows between unbounded preceding and current row)
         else min(raw_value) over (partition by mode order by completed_at rows between unbounded preceding and current row)
       end as running_best
     from runs

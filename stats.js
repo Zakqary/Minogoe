@@ -224,12 +224,14 @@ function formatTimeMs(ms) {
   return `${m}:${s.toFixed(2).padStart(5, '0')}`;
 }
 
-const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension', blight: 'Blight' };
-const RECORD_MODE_COLORS = { speedrun: '#5b7fd9', eogonim: 'var(--accent)', blindeogonim: '#8b6fd9', ascension: '#6fbf73', blight: '#c05c5c' };
+const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse' };
+const RECORD_MODE_COLORS = { speedrun: '#5b7fd9', eogonim: 'var(--accent)', blindeogonim: '#8b6fd9', ascension: '#6fbf73', blight: '#c05c5c', godbot: '#d95b8f', curse: '#5bc2d9' };
 
 function formatRecordValue(mode, value) {
   if (mode === 'speedrun') return formatTimeMs(value);
   if (mode === 'ascension') return `${value} round${value === 1 ? '' : 's'}`;
+  if (mode === 'godbot') return `${value > 0 ? '+' : ''}${value}`;
+  if (mode === 'curse') return `${value} open`;
   return `${value} captured`;
 }
 
@@ -345,7 +347,7 @@ async function renderStatsPage() {
     eloChart = '<p class="stats-chart-empty">Not enough ranked players yet.</p>';
   }
 
-  const recordsByMode = { speedrun: [], eogonim: [], blindeogonim: [], ascension: [], blight: [] };
+  const recordsByMode = { speedrun: [], eogonim: [], blindeogonim: [], ascension: [], blight: [], godbot: [], curse: [] };
   for (const row of recordProgression.data || []) {
     if (recordsByMode[row.mode]) recordsByMode[row.mode].push(row);
   }
@@ -409,8 +411,8 @@ async function renderStatsPage() {
     </div>
 
     <div class="stats-chart-card">
-      <h3>Singleplayer Record Progression</h3>
-      <p class="stats-chart-note">World-record line per mode - lower is better except Ascension (higher). Reconstructed from current personal bests, so it may miss a record a player later broke themselves.</p>
+      <h3>Minigame Record Progression</h3>
+      <p class="stats-chart-note">World-record line per mode - lower is better except Ascension, Blight, and GodBot (higher). Reconstructed from current personal bests, so it may miss a record a player later broke themselves.</p>
       <div class="stats-record-grid">${recordChartsHtml}</div>
     </div>
   `;

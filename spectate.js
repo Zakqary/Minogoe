@@ -83,6 +83,73 @@ function applyAllMoves() {
   }
 }
 
+// Same flood-fill scoring as game.js's own computeFinalScores() (duplicated
+// rather than shared, same reasoning as everything else in this file),
+// parameterized by boardSize since that's fixed in game.js but arrives
+// from the server here. Every enclosed empty region bordered by only one
+// player's pieces (or the board edge) scores for that player; a region
+// touching both players' pieces stays undecided.
+const HANDICAP_POINTS = 0.5;
+
+// Whoever moves second gets the handicap (game.js's handicapPlayer()).
+// state.startingPlayer is only ever randomized for vs-bot games - every
+// game a spectator can watch is real online pvp, where the starting
+// player is always 1, so the handicap recipient is always player 2. No
+// need to transmit startingPlayer at all just to re-derive this.
+const HANDICAP_PLAYER = 2;
+
+function computeScores() {
+  const visited = new Uint8Array(boardSize * boardSize);
+  let score1 = 0, score2 = 0, undecided = 0;
+  for (let i = 0; i < board.length; i++) {
+    if (board[i] === 0 && !visited[i]) {
+      const regionCells = [i];
+      visited[i] = 1;
+      let qi = 0;
+      const borderOwners = new Set();
+      while (qi < regionCells.length) {
+        const cur = regionCells[qi++];
+        const r = Math.floor(cur / boardSize), c = cur % boardSize;
+        const neighbors = [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]];
+        for (const [nr, nc] of neighbors) {
+          if (nr < 0 || nr >= boardSize || nc < 0 || nc >= boardSize) continue;
+          const nidx = idxOf(nr, nc);
+          const val = board[nidx];
+          if (val === 0) {
+            if (!visited[nidx]) { visited[nidx] = 1; regionCells.push(nidx); }
+          } else {
+            borderOwners.add(val);
+          }
+        }
+      }
+      if (borderOwners.size === 1) {
+        const owner = [...borderOwners][0];
+        if (owner === 1) score1 += regionCells.length; else score2 += regionCells.length;
+      } else {
+        undecided += regionCells.length;
+      }
+    }
+  }
+  return {
+    score1: score1 + (HANDICAP_PLAYER === 1 ? HANDICAP_POINTS : 0),
+    score2: score2 + (HANDICAP_PLAYER === 2 ? HANDICAP_POINTS : 0),
+    undecided,
+  };
+}
+
+function renderScore() {
+  const el = document.getElementById('spectateScore');
+  if (!board) { el.textContent = ''; return; }
+  const s = computeScores();
+  const label = status === 'ended' ? 'Final' : 'Projected';
+  el.innerHTML = `
+    <span class="projected-label">${label}</span>
+    <span class="projected-value projected-p1">P1 ${s.score1}</span>
+    <span class="projected-value projected-p2">P2 ${s.score2}</span>
+    <span class="projected-undecided">${s.undecided} undecided</span>
+  `;
+}
+
 function handsNow() {
   const hand1 = [...initialHand];
   const hand2 = [...initialHand];
@@ -205,6 +272,7 @@ function renderAll() {
   applyAllMoves();
   drawBoard();
   renderHands();
+  renderScore();
   document.getElementById('stepInfo').textContent = `Move ${moveLog.length}`;
 }
 
@@ -247,6 +315,7 @@ function handleSpectateMessage(msg) {
   if (msg.type === 'spectate-ended') {
     status = 'ended';
     renderMeta();
+    renderScore(); // flips the label from "Projected" to "Final"
     return;
   }
 }

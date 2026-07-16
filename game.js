@@ -1216,18 +1216,25 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   // resync instead of ever calling endGame()/recordGameResult() locally,
   // so the match never got saved).
   const seq = state.plyCount;
-  checkGameEnd();
-  render();
 
+  // Sent here, BEFORE checkGameEnd() below - not after, even though that
+  // reads slightly out of order with "commit locally, then check for game
+  // end, then notify network." If this placement ends the game,
+  // checkGameEnd() calls endGame() -> Net.leaveRoom(), which tells the
+  // signaling server to tear down this room (including the live-game
+  // spectator registry) right away. The P2P move send is unaffected by
+  // that ordering (dc and the signaling ws are separate channels), but
+  // Net.sendToServer() shares the ws connection with leave-room - sent
+  // after it, the server would have already deleted the spectator
+  // registry by the time this arrives and silently drop the final move,
+  // which is exactly what was happening before this reordering.
   if (state.online && !fromRemote) {
     Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq });
-    // Separately relayed to the signaling server for any spectators - only
-    // ever sent for a move THIS client itself just committed (never one
-    // that arrived fromRemote), same as the P2P send above, so a spectator
-    // only ever sees a move once the player who made it has already
-    // applied and sent it onward for real.
     Net.sendToServer({ type: 'live-game-move', player, shapeName, orientationIndex, r0, c0, t });
   }
+
+  checkGameEnd();
+  render();
 
   scheduleBotMove();
 }

@@ -1329,6 +1329,8 @@ function endGame(reason, forcedWinner) {
   clearTimeout(resyncFallbackTimer);
   clearTimeout(timeoutConfirmTimer);
   timeoutConfirmTimer = null;
+  clearInterval(timeoutConfirmRetryTimer);
+  timeoutConfirmRetryTimer = null;
   if (state.online) {
     Net.leaveRoom();
     clearActiveMatch();
@@ -1704,8 +1706,19 @@ function timeoutForfeit() {
 // before ending the game - see the 'resync' handler's use of
 // timeoutConfirmTimer for how a confirmed still-their-turn vs. an actually-
 // already-moved opponent are told apart.
+//
+// The resync-request itself (and its resync reply) are each just one more
+// data-channel message, exactly as droppable as the original 'move' this
+// whole mechanism exists to double-check - sending it only once just moves
+// the same failure mode one level deeper instead of fixing it. Resending it
+// periodically through the grace window (TIMEOUT_CONFIRM_RETRY_MS) means a
+// single bad packet can't waste the entire window waiting on a reply that
+// was never going to arrive; any resend is a no-op once a real reply lands,
+// since the 'resync' handler clears both timers below immediately.
 const TIMEOUT_CONFIRM_GRACE_MS = 5000;
+const TIMEOUT_CONFIRM_RETRY_MS = 1500;
 let timeoutConfirmTimer = null;
+let timeoutConfirmRetryTimer = null;
 
 function timeoutOpponentForfeit() {
   if (state.gameOver) return;
@@ -1714,11 +1727,18 @@ function timeoutOpponentForfeit() {
   Net.send({ type: 'resync-request' });
 
   clearTimeout(timeoutConfirmTimer);
+  clearInterval(timeoutConfirmRetryTimer);
+  timeoutConfirmRetryTimer = setInterval(() => {
+    Net.send({ type: 'resync-request' });
+  }, TIMEOUT_CONFIRM_RETRY_MS);
+
   timeoutConfirmTimer = setTimeout(() => {
     timeoutConfirmTimer = null;
-    // No resync came back at all within the grace window - the connection
-    // is genuinely gone, not just one dropped message. Finalize with what
-    // we already believed.
+    clearInterval(timeoutConfirmRetryTimer);
+    timeoutConfirmRetryTimer = null;
+    // No resync came back at all within the grace window, despite several
+    // attempts to ask for one - the connection is genuinely gone, not just
+    // an unlucky packet. Finalize with what we already believed.
     finalizeOpponentTimeoutForfeit(forfeitingPlayer);
   }, TIMEOUT_CONFIRM_GRACE_MS);
 }
@@ -2676,6 +2696,8 @@ function handleNetDataInner(msg) {
     const wasAwaitingTimeoutConfirm = !!timeoutConfirmTimer;
     clearTimeout(timeoutConfirmTimer);
     timeoutConfirmTimer = null;
+    clearInterval(timeoutConfirmRetryTimer);
+    timeoutConfirmRetryTimer = null;
 
     if (msg.plyCount < state.plyCount) {
       // We're actually the more-advanced side here - the peer is the one

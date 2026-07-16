@@ -1128,8 +1128,11 @@ h2, h3 {
    (padding/font-size scaled up too - proportionally tiny inside the much
    wider play-card). Without this, buttons/inputs fell back to the
    browser's default light-theme chrome, which is what actually looked
-   "hideous" against the rest of the page. */
-.play-panel button {
+   "hideous" against the rest of the page.
+   #cancelConnectBtn is included explicitly (not just via .play-panel
+   ancestry) because it relocates into the in-game drawer along with the
+   rest of #queueControls and needs to keep its theming there too. */
+.play-panel button, #cancelConnectBtn {
   padding: 11px 18px;
   font-size: 14px;
   border-radius: 8px;
@@ -1140,8 +1143,8 @@ h2, h3 {
   font-family: var(--font-body);
 }
 
-.play-panel button:hover { border-color: var(--accent); color: var(--accent-hover); }
-.play-panel button:disabled { opacity: 0.4; cursor: default; border-color: var(--border); color: var(--text); }
+.play-panel button:hover, #cancelConnectBtn:hover { border-color: var(--accent); color: var(--accent-hover); }
+.play-panel button:disabled, #cancelConnectBtn:disabled { opacity: 0.4; cursor: default; border-color: var(--border); color: var(--text); }
 
 .play-panel input {
   background: var(--bg);
@@ -1158,20 +1161,33 @@ h2, h3 {
    wider play-card to lay label+count and the button out side by side
    instead, matching the reviewed mockup. Direct Connect keeps its own
    internal stack (it has more than one row of content), just with the
-   same breathing room. */
-.play-panel .online-option {
+   same breathing room.
+   #queueControls .online-option is included alongside .play-panel
+   .online-option (rather than replacing it) because Casual/Ranked relocate
+   into the in-game drawer - outside .play-panel entirely - while Direct
+   Connect stays put, so both scopes are needed. */
+.play-panel .online-option, #queueControls .online-option {
   padding: 14px 16px;
   gap: 10px;
 }
 
-.play-panel .online-option:not(.online-option-direct) {
+.play-panel .online-option:not(.online-option-direct), #queueControls .online-option {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
 }
 
-.play-panel .online-option:not(.online-option-direct) button {
+.play-panel .online-option:not(.online-option-direct) button, #queueControls .online-option button {
   flex-shrink: 0;
+}
+
+/* #queueControls itself needs to restate the 10px gap it relied on getting
+   for free from .play-panel's flex layout, since it now also has to look
+   right relocated into the in-game drawer (outside .play-panel). */
+#queueControls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .online-option-info {
@@ -1252,19 +1268,6 @@ h2, h3 {
   padding: 0 12px 12px;
 }
 .collapsible-panel.open .collapsible-body { display: flex; padding-top: 2px; }
-
-.in-game-queue-counts {
-  border-top: 1px solid var(--border-soft);
-  padding-top: 10px;
-}
-.mini-queue-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: var(--text-dim);
-  padding: 3px 0;
-}
-.mini-queue-row span:last-child { color: var(--success); font-weight: 600; }
 
 /* The relocated #rankedPeriodPanel/#liveGamesPanel already have their own
    .online-panel card chrome - nested inside this drawer that reads as a

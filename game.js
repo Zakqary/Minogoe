@@ -1821,12 +1821,16 @@ function drawBoard() {
 // unconditionally from render() (already called after both) instead of
 // threading a call into each - cheap and idempotent either way.
 //
-// #rankedPeriodPanel/#liveGamesPanel are a single shared instance, not
-// duplicated - they're physically relocated between the lobby's panel row
-// and the in-game collapsed drawer via appendChild(), which just re-parents
-// the existing DOM nodes (ranked-period.js/live-games.js keep polling the
-// same element IDs regardless of which container currently holds them, so
-// neither file needed any changes for this).
+// #queueControls/#rankedPeriodPanel/#liveGamesPanel are single shared
+// instances, not duplicated - they're physically relocated between the
+// lobby and the in-game collapsed drawer via appendChild(), which just
+// re-parents the existing DOM nodes (their own scripts keep polling/wiring
+// the same element IDs regardless of which container currently holds them,
+// so none of them needed any changes for this). Moving #queueControls in
+// particular is what lets a hotseat/vs-bot game stay queued for a
+// ranked/casual match in the background (state.queueSearching already ran
+// fine independently of any local game - see startQueue()'s comment) without
+// losing the Find Match/Cancel/status controls needed to manage that queue.
 function updateLobbyGameVisibility() {
   const lobbyView = document.getElementById('lobbyView');
   const gameView = document.getElementById('gameView');
@@ -1836,14 +1840,24 @@ function updateLobbyGameVisibility() {
   lobbyView.style.display = showGame ? 'none' : '';
   gameView.style.display = showGame ? '' : 'none';
 
-  const target = showGame
-    ? document.getElementById('inGameQueuesPanel')?.querySelector('.collapsible-body')
-    : document.querySelector('.panel-row');
+  const queueControls = document.getElementById('queueControls');
   const rankedPanel = document.getElementById('rankedPeriodPanel');
   const liveGamesPanel = document.getElementById('liveGamesPanel');
-  if (target && rankedPanel && liveGamesPanel) {
-    target.appendChild(rankedPanel);
-    target.appendChild(liveGamesPanel);
+  const drawerBody = document.getElementById('inGameQueuesPanel')?.querySelector('.collapsible-body');
+  const onlinePanel = document.querySelector('.play-panel[data-panel="online"]');
+  const directConnectOption = document.querySelector('.online-option-direct');
+
+  if (showGame && drawerBody && queueControls && rankedPanel && liveGamesPanel) {
+    drawerBody.appendChild(queueControls);
+    drawerBody.appendChild(rankedPanel);
+    drawerBody.appendChild(liveGamesPanel);
+  } else if (!showGame && onlinePanel && directConnectOption && queueControls && rankedPanel && liveGamesPanel) {
+    const panelRow = document.querySelector('.panel-row');
+    onlinePanel.insertBefore(queueControls, directConnectOption);
+    if (panelRow) {
+      panelRow.appendChild(rankedPanel);
+      panelRow.appendChild(liveGamesPanel);
+    }
   }
 }
 
@@ -2837,11 +2851,6 @@ async function refreshQueueCounts() {
     const { casual, ranked } = await res.json();
     document.getElementById('casualQueueCount').textContent = formatQueueCount(casual);
     document.getElementById('rankedQueueCount').textContent = formatQueueCount(ranked);
-    // Read-only duplicate shown in the in-game "Queues & Live Games" drawer
-    // (see updateLobbyGameVisibility()) - same counts, no Find Match
-    // buttons, since queueing while already in a match makes no sense.
-    document.getElementById('casualQueueCountInGame').textContent = formatQueueCount(casual);
-    document.getElementById('rankedQueueCountInGame').textContent = formatQueueCount(ranked);
   } catch {
     // signaling server unreachable - leave whatever was last shown
   }

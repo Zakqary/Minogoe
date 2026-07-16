@@ -60,20 +60,30 @@
       </div>
 
       <div class="play-panel active" data-panel="online">
-        <div class="online-option">
-          <div class="online-option-info">
-            <div class="online-option-label">Casual Queue</div>
-            <span id="casualQueueCount" class="queue-count"></span>
+        <!-- #queueControls (queue options + cancel/status) is relocated into
+             the in-game "Queues & Live Games" drawer while a game is
+             underway - see game.js's updateLobbyGameVisibility() - so a
+             hotseat/vs-bot game can still be queued for ranked/casual (and
+             cancelled, or checked on) without leaving the board view. -->
+        <div class="queue-controls" id="queueControls">
+          <div class="online-option">
+            <div class="online-option-info">
+              <div class="online-option-label">Casual Queue</div>
+              <span id="casualQueueCount" class="queue-count"></span>
+            </div>
+            <button id="casualQueueBtn">Find Match</button>
           </div>
-          <button id="casualQueueBtn">Find Match</button>
-        </div>
 
-        <div class="online-option">
-          <div class="online-option-info">
-            <div class="online-option-label">Ranked Queue</div>
-            <span id="rankedQueueCount" class="queue-count"></span>
+          <div class="online-option">
+            <div class="online-option-info">
+              <div class="online-option-label">Ranked Queue</div>
+              <span id="rankedQueueCount" class="queue-count"></span>
+            </div>
+            <button id="rankedQueueBtn">Find Match</button>
           </div>
-          <button id="rankedQueueBtn">Find Match</button>
+
+          <button id="cancelConnectBtn" style="display:none;">Cancel</button>
+          <div class="online-status" id="onlineStatus">Not connected.</div>
         </div>
 
         <div class="online-option online-option-direct">
@@ -87,9 +97,6 @@
             <button id="connectBtn">Join Room</button>
           </div>
         </div>
-
-        <button id="cancelConnectBtn" style="display:none;">Cancel</button>
-        <div class="online-status" id="onlineStatus">Not connected.</div>
       </div>
 
       <div class="play-panel" data-panel="local">
@@ -172,13 +179,9 @@
           <span class="chevron">&#9656;</span>
         </button>
         <div class="collapsible-body">
-          <div class="in-game-queue-counts">
-            <div class="mini-queue-row"><span>Casual Queue</span><span id="casualQueueCountInGame"></span></div>
-            <div class="mini-queue-row"><span>Ranked Queue</span><span id="rankedQueueCountInGame"></span></div>
-          </div>
-          <!-- #rankedPeriodPanel and #liveGamesPanel are relocated here (from
-               the lobby view above) while a game is in progress - see
-               game.js's updateLobbyGameVisibility(). -->
+          <!-- #queueControls, #rankedPeriodPanel and #liveGamesPanel are all
+               relocated here (from the lobby view above) while a game is in
+               progress - see game.js's updateLobbyGameVisibility(). -->
         </div>
       </div>
     </div>

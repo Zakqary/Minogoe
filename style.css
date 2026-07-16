@@ -48,12 +48,22 @@ h2, h3 {
   gap: 12px;
 }
 
+/* Two centered rows: the three colored/"themed" links (Play/Shop/Garden)
+   on their own line above everything else (the plainer utility links plus
+   search), rather than all mixed into one row. */
 .site-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px 0;
+}
+
+.site-nav-row {
   display: flex;
   justify-content: center;
   align-items: baseline;
   gap: 22px;
-  padding: 10px 20px 0;
 }
 
 .site-nav a {
@@ -1111,6 +1121,15 @@ h2, h3 {
 .play-panel .mode-buttons { display: flex; gap: 10px; }
 .play-panel .mode-btn { padding: 14px 12px; font-size: 14px; opacity: 1; }
 
+/* The 7px/10px .online-panel button sizing was scaled for the old 320px
+   sidebar - proportionally tiny inside the much wider play-card, so
+   everything here gets a larger touch target/type size to match. */
+.play-panel button {
+  padding: 11px 18px;
+  font-size: 14px;
+  border-radius: 8px;
+}
+
 /* The compact vertically-stacked .online-option (label, then button, then
    count) was designed for the old 320px sidebar - roomy enough in the
    wider play-card to lay label+count and the button out side by side
@@ -1837,8 +1856,11 @@ h2, h3 {
   }
 
   .site-nav {
-    gap: 14px;
     padding: 8px 12px 0;
+  }
+
+  .site-nav-row {
+    gap: 14px;
     flex-wrap: wrap;
   }
 }

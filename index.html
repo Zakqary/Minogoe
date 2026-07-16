@@ -27,18 +27,22 @@
     <button type="button" id="registerBannerBtn" class="register-banner-btn">Sign Up</button>
   </div>
   <nav class="site-nav">
-    <a href="index.html">Play</a>
-    <a href="shop.html">Shop</a>
-    <a href="garden.html">Garden</a>
-    <a href="singleplayer.html">Singleplayer</a>
-    <a href="profile.html">Profile</a>
-    <a href="leaderboard.html">Leaderboard</a>
-    <a href="recent.html">Recent Games</a>
-    <a href="stats.html">Stats</a>
-    <a href="admin.html" id="adminNavLink" style="display:none;">Admin</a>
-    <div class="nav-search">
-      <input id="playerSearchInput" type="text" placeholder="Find a player..." autocomplete="off">
-      <div id="playerSearchResults" class="nav-search-results"></div>
+    <div class="site-nav-row">
+      <a href="index.html">Play</a>
+      <a href="shop.html">Shop</a>
+      <a href="garden.html">Garden</a>
+    </div>
+    <div class="site-nav-row">
+      <a href="singleplayer.html">Singleplayer</a>
+      <a href="profile.html">Profile</a>
+      <a href="leaderboard.html">Leaderboard</a>
+      <a href="recent.html">Recent Games</a>
+      <a href="stats.html">Stats</a>
+      <a href="admin.html" id="adminNavLink" style="display:none;">Admin</a>
+      <div class="nav-search">
+        <input id="playerSearchInput" type="text" placeholder="Find a player..." autocomplete="off">
+        <div id="playerSearchResults" class="nav-search-results"></div>
+      </div>
     </div>
   </nav>
   <div id="lobbyView" class="lobby-view">
@@ -90,7 +94,7 @@
 
       <div class="play-panel" data-panel="local">
         <div class="mode-buttons">
-          <button id="hotseatBtn" class="mode-btn">2-Player Hotseat</button>
+          <button id="hotseatBtn" class="mode-btn">Local Multiplayer</button>
           <button id="vsBotBtn" class="mode-btn">vs Bot</button>
         </div>
       </div>

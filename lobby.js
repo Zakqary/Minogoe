@@ -110,16 +110,25 @@ function initLobbyBackground() {
     if (lobbyReduceMotion) drawStatic();
   }
 
+  // Resizes the canvas buffer to match #lobbyView's current height WITHOUT
+  // touching the sprites array - used for content-driven height changes
+  // (switching the Play Online/Local Mode tabs, or the panel row's async
+  // 48h leaderboard/live games content loading in) where the shapes should
+  // just keep drifting from wherever they already were, not jump to a
+  // freshly randomized layout. Full reinit() (which does randomize) is
+  // reserved for an actual window resize, where a refreshed distribution
+  // genuinely makes sense.
+  function resizeBufferOnly() {
+    sizeCanvas();
+    if (lobbyReduceMotion) drawStatic();
+  }
+
   reinit();
   if (!lobbyReduceMotion) requestAnimationFrame(animate);
 
   window.addEventListener('resize', reinit);
-  // The lobby's own height depends on async content (the 48h leaderboard/
-  // live games panels loading in) - a plain resize listener alone would
-  // miss that, so also watch the hero element itself for content-driven
-  // size changes.
   if (window.ResizeObserver) {
-    new ResizeObserver(reinit).observe(hero);
+    new ResizeObserver(resizeBufferOnly).observe(hero);
   }
 
   // Browser zoom changes devicePixelRatio but doesn't reliably fire a

@@ -2404,7 +2404,14 @@ h2, h3 {
   max-width: 56px;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-align: center;
+  /* text-align:center looks fine for a badge that fits, but text-overflow's
+     ellipsis always clips from the end regardless of text-align - a title
+     too long to fit (e.g. "Greenthumb" -> "Green...") ends up rendered
+     flush left instead of centered, while every shorter badge next to it
+     in the same list stays centered. left-aligning all of them (not just
+     the truncated ones) makes every badge consistent instead of some
+     looking centered and others looking randomly shifted. */
+  text-align: left;
 }
 
 .ranked-period-sub {
@@ -2482,7 +2489,9 @@ h2, h3 {
   max-width: 40px;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-align: center;
+  /* Same text-align:center + ellipsis inconsistency as #spLeaderboard's
+     title-badge - see that rule's comment. */
+  text-align: left;
 }
 
 .ranked-period-coins {

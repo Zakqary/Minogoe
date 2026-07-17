@@ -4260,3 +4260,65 @@ begin
   return new;
 end;
 $$;
+
+-- ---------- Phase 52: fix "DELETE requires a WHERE clause" breaking the 48-hour leaderboard rollover ----------
+
+-- Phase 47's rollover_ranked_period_if_needed() had a bare
+-- `delete from public.ranked_period_counts;` with no WHERE clause -
+-- perfectly valid plain Postgres, but this project's database has the
+-- safeupdate extension (or equivalent) enabled, which rejects ANY
+-- UPDATE/DELETE without a WHERE clause, even from inside a
+-- security definer function. Every single other UPDATE/DELETE in this
+-- entire file already has one (checked programmatically) - this was the
+-- one exception, and it broke the leaderboard panel for everyone the
+-- moment the first 48-hour period actually rolled over, since
+-- get_ranked_period_leaderboard() calls this function opportunistically
+-- on every view. Full body copied forward from Phase 47, only the one
+-- line changed - `where true` is the standard way to tell safeupdate
+-- "yes, I really do mean every row" without changing what actually gets
+-- deleted.
+create or replace function public.rollover_ranked_period_if_needed()
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  period_started_at timestamptz;
+  top_count integer;
+  second_count integer;
+begin
+  select started_at into period_started_at from public.ranked_leaderboard_period where id = 1 for update;
+
+  if period_started_at is null or now() - period_started_at < interval '48 hours' then
+    return;
+  end if;
+
+  select max(games_count) into top_count from public.ranked_period_counts where games_count > 0;
+
+  if top_count is not null then
+    update public.profiles
+    set coins = coins + 2, lifetime_coins_earned = lifetime_coins_earned + 2
+    where id in (select user_id from public.ranked_period_counts where games_count = top_count);
+
+    insert into public.coin_award_notifications (user_id, coins_amount, reason)
+    select user_id, 2, '48-hour ranked leaderboard'
+    from public.ranked_period_counts where games_count = top_count;
+
+    select max(games_count) into second_count
+    from public.ranked_period_counts where games_count > 0 and games_count < top_count;
+
+    if second_count is not null then
+      update public.profiles
+      set coins = coins + 1, lifetime_coins_earned = lifetime_coins_earned + 1
+      where id in (select user_id from public.ranked_period_counts where games_count = second_count);
+
+      insert into public.coin_award_notifications (user_id, coins_amount, reason)
+      select user_id, 1, '48-hour ranked leaderboard'
+      from public.ranked_period_counts where games_count = second_count;
+    end if;
+  end if;
+
+  delete from public.ranked_period_counts where true;
+  update public.ranked_leaderboard_period set started_at = now() where id = 1;
+end;
+$$;

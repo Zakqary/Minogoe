@@ -2460,6 +2460,11 @@ h2, h3 {
   color: var(--accent-hover);
 }
 
+.live-game-mine {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
 /* Same fixed-column-width treatment as #spLeaderboard's narrow table -
    this panel lives in the same 320px side-panel column. */
 #rankedPeriodContent .games-table {

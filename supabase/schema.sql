@@ -4192,3 +4192,71 @@ begin
   return new;
 end;
 $$;
+
+-- ---------- Phase 51: close a real dedup gap that let some games get recorded twice ----------
+
+-- check_game_rate_limit() (Phase 18) exempted an existing row from the
+-- 30-second rate limit whenever its client_match_id was "distinct from"
+-- the new row's - the idea being that the SAME client_match_id means
+-- "both clients independently recording the same real match," which the
+-- unique index on client_match_id (Phase 15, "where client_match_id is
+-- not null") already handles definitively (whichever insert lands first
+-- wins, the other is rejected outright), so the rate limiter didn't need
+-- to duplicate that check.
+--
+-- The gap: recordGameResult() in game.js builds client_match_id as
+-- `Net.matchId ? ... : null` - if Net.matchId is ever unset at the exact
+-- moment either side records (an edge case, not yet root-caused with
+-- certainty, but real and reachable), client_match_id is null instead.
+-- A null client_match_id gets ZERO protection from either layer: the
+-- unique index explicitly excludes null rows, and "is distinct from"
+-- treats two nulls as NOT distinct - so a null-vs-null pair was exempted
+-- from the rate limiter too. Two independent recordings of the same
+-- match, both landing with a null client_match_id, had no dedup
+-- whatsoever - which matches the reported symptom exactly (same match,
+-- recorded twice, only the per-move turn timestamps differing since each
+-- side's own moveLog was submitted independently).
+--
+-- Tightens the exemption so it only ever applies to the one case it's
+-- actually meant to cover: both values genuinely present AND equal. Any
+-- other combination (including null on either side) now falls under the
+-- normal rate limit instead of getting a free pass - closing the gap
+-- regardless of why Net.matchId went missing, without weakening the
+-- legitimate "both sides raced to record the same real game" case at all
+-- (that one still resolves via the unique index exactly as before).
+create or replace function public.check_game_rate_limit()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p1 uuid;
+  p2 uuid;
+  recent_count integer;
+begin
+  if new.mode not in ('casual', 'ranked') or new.player1_id is null or new.player2_id is null then
+    return new;
+  end if;
+
+  p1 := least(new.player1_id, new.player2_id);
+  p2 := greatest(new.player1_id, new.player2_id);
+
+  select count(*) into recent_count
+  from public.games
+  where least(player1_id, player2_id) = p1
+    and greatest(player1_id, player2_id) = p2
+    and mode in ('casual', 'ranked')
+    and ended_at > now() - interval '30 seconds'
+    and not (
+      client_match_id is not null
+      and new.client_match_id is not null
+      and client_match_id = new.client_match_id
+    );
+
+  if recent_count > 0 then
+    raise exception 'Recording games between the same two players too quickly';
+  end if;
+
+  return new;
+end;
+$$;

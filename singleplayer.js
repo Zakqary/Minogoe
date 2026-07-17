@@ -2052,7 +2052,8 @@ async function refreshLeaderboard() {
 // keep an eye on the real queues while playing singleplayer.
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
 const SIGNALING_HTTP_URL = SIGNALING_SERVER_URL.replace(/^ws/, 'http');
-const QUEUE_COUNT_POLL_MS = 7000;
+// Matches game.js's own QUEUE_COUNT_POLL_MS - was 7000, visibly laggy.
+const QUEUE_COUNT_POLL_MS = 3500;
 
 function formatQueueCount(n) {
   if (n === 1) return '1 waiting';

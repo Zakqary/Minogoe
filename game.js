@@ -2868,8 +2868,11 @@ document.getElementById('cancelConnectBtn').addEventListener('click', () => {
 
 // Lets players see whether it's worth queueing before they commit to it -
 // polls the signaling server's HTTP endpoint (same host/port as the WS),
-// separate from the WebRTC connection itself.
-const QUEUE_COUNT_POLL_MS = 7000;
+// separate from the WebRTC connection itself. Was 7000 - visibly laggy for
+// something players watch while actively deciding whether to queue;
+// halved rather than dropped further, since this is a plain HTTP GET
+// hitting the server from every open lobby tab.
+const QUEUE_COUNT_POLL_MS = 3500;
 const SIGNALING_HTTP_URL = SIGNALING_SERVER_URL.replace(/^ws/, 'http');
 
 function formatQueueCount(n) {

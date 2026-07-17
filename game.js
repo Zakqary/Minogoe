@@ -1907,6 +1907,18 @@ function render() {
     banner.textContent = 'Choose a mode to start playing';
   } else if (state.gameOver) {
     banner.textContent = 'Game over';
+  } else if (state.online && state.connecting) {
+    // state.connecting freezes the hand (see renderHand()'s isActive) during
+    // a resync/reconnect - the real explanation (setLobbyStatus()'s message,
+    // e.g. "resyncing...", "Connection lost - reconnecting...") lands in
+    // #onlineStatus, which sits inside the collapsed "Queues & Live Games"
+    // drawer during an active game and is easy to never see. Without this,
+    // the always-visible turn banner kept confidently saying "X's turn
+    // (your turn)" the entire time the board was actually frozen, with
+    // nothing visible explaining why the (correctly) grayed-out hand
+    // wouldn't respond to clicks.
+    const status = document.getElementById('onlineStatus')?.textContent;
+    banner.textContent = status && status.trim() ? status : 'Reconnecting...';
   } else if (state.online) {
     const you = state.myPlayer === state.turn ? ' (your turn)' : " (opponent's turn)";
     banner.textContent = `${playerLabel(state.turn)}'s turn${you}`;

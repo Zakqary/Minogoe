@@ -29,15 +29,19 @@ insert into public.shop_items (id, type, name, price, image_path, title_text, co
   ('title_GOAT', 'title', 'GOAT', 20, null, 'GOAT', '#d4af37', null),
   ('title_GirlInAisle10', 'title', 'Girl in Aisle 10', 15, null, 'Girl in Aisle 10', '#e07bb5', null),
   ('title_OG', 'title', 'OG', 1, null, 'OG', '#ffffff', 'No longer sold after 8/1/26!'),
-  ('title_Strategist', 'title', 'Strategist', 5, null, 'Strategist', '#5b8fd9', null),
-  ('title_Minnow', 'title', 'Minnow', 5, null, 'Minnow', '#5b8fd9', null),
+  ('title_Strategist', 'title', 'Strategist', 5, null, 'Strategist', '#1e172d', null),
+  ('title_Minnow', 'title', 'Minnow', 5, null, 'Minnow', '#28c28a', null),
   ('title_Springtail', 'title', 'Springtail', 5, null, 'Springtail', '#5b8fd9', null),
-  ('title_Leech', 'title', 'Leech', 5, null, 'Leech', '#5b8fd9', null),
+  ('title_Leech', 'title', 'Leech', 5, null, 'Leech', '#3259b1', null),
   ('title_Genius', 'title', 'Genius', 15, null, 'Genius', '#9b7fd9', null),
   ('title_Gamer', 'title', 'Gamer', 5, null, 'Gamer', '#6fbf73', null),
   ('title_Loaded', 'title', 'Loaded', 30, null, 'Loaded', '#e6c14a', null),
-  ('title_Sweaty', 'title', 'Sweaty', 3, null, 'Sweaty', '#4bc4c4', null),
-  ('title_LoverAndAFighter', 'title', 'Lover AND a Fighter', 25, null, 'Lover AND a Fighter', '#d95b6a', null),
+  ('title_God', 'title', 'God', 100, null, 'God', '#92adf9', null),
+  ('title_Defensive', 'title', 'Defensive', 8, null, 'Defensive', '#bde26c', null),
+  ('title_Aggressive', 'title', 'Aggressive', 8, null, 'Aggressive', '#8149d7', null),
+  ('title_Complex', 'title', 'Complex', 3, null, 'Complex', '#0d9bab', null),
+  ('title_Trackstar', 'title', 'Trackstar', 5, null, 'Trackstar', '#83f57b', null),
+  ('title_LoverAndAFighter', 'title', 'Lover AND a Fighter', 20, null, 'Lover AND a Fighter', '#d95b6a', null),
   ('avatar_red', 'avatar', 'Red', 2, 'assets/avatars/red.png', null, null, null),
   ('avatar_blue', 'avatar', 'Blue', 2, 'assets/avatars/blue.png', null, null, null),
   ('avatar_lilac', 'avatar', 'Lilac', 4, 'assets/avatars/lilac.png', null, null, null),
@@ -48,7 +52,12 @@ insert into public.shop_items (id, type, name, price, image_path, title_text, co
   ('avatar_territory', 'avatar', 'Territory', 15, 'assets/avatars/territory.png', null, null, null),
   ('avatar_leech', 'avatar', 'Leech', 15, 'assets/avatars/leech.png', null, null, null),
   ('avatar_minnow', 'avatar', 'Minnow', 15, 'assets/avatars/minnow.png', null, null, null),
-  ('avatar_springtail', 'avatar', 'Springtail', 15, 'assets/avatars/springtail.png', null, null, null)
+  ('avatar_pooldart', 'avatar', 'Pool Dart', 5, 'assets/avatars/pooldart.png', null, null, null),
+  ('avatar_otb', 'avatar', 'OtB', 15, 'assets/avatars/otb.png', null, null, null),
+  ('avatar_god', 'avatar', 'God', 100, 'assets/avatars/god.png', null, null, null),
+  ('avatar_minogoe', 'avatar', 'Minogoe', 20, 'assets/avatars/minogoe.png', null, null, null),
+  ('avatar_burger', 'avatar', 'Burger', 15, 'assets/avatars/burger.png', null, null, null),
+  ('avatar_beatarmy', 'avatar', 'Beat Army', 5, 'assets/avatars/beatarmy.png', null, null, null)
 on conflict (id) do update set
   type = excluded.type,
   name = excluded.name,
@@ -91,7 +100,8 @@ on conflict (user_id, item_id) do nothing;
 -- never purchased.
 insert into public.shop_items (id, type, name, price, image_path, title_text, color, hidden, mino_giftable) values
   ('title_Bloomkeeper', 'title', 'Bloomkeeper', 0, null, 'Bloomkeeper', '#6fbf73', true, true),
-  ('title_Greenthumb', 'title', 'Greenthumb', 0, null, 'Greenthumb', '#4bc4c4', true, true)
+  ('title_Greenthumb', 'title', 'Greenthumb', 0, null, 'Greenthumb', '#4bc4c4', true, true),
+  ('title_Minokeeper', 'title', 'Minokeeper', 0, null, 'Minokeeper', '#c845cc', true, true)
 on conflict (id) do update set
   name = excluded.name,
   image_path = excluded.image_path,

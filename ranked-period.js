@@ -60,7 +60,11 @@ async function refreshRankedPeriodLeaderboard() {
       tierIndex += 1;
     }
     const coinPrize = tierIndex === 1 ? 2 : tierIndex === 2 ? 1 : 0;
-    const coinBadge = coinPrize > 0 ? ` <span class="ranked-period-coins">${'\u{1FA99}'.repeat(coinPrize)}</span>` : '';
+    // Was the 🪙 emoji (U+1FA99) - renders as an unrecognizable gray/moon-
+    // like glyph on devices whose font doesn't have that (relatively new)
+    // codepoint yet. The site's own coin.png image (coinIconHtml(), same
+    // one used in the header/shop) always renders correctly.
+    const coinBadge = coinPrize > 0 ? ` <span class="ranked-period-coins">${coinIconHtml(12).repeat(coinPrize)}</span>` : '';
     return `
       <tr>
         <td>${lastRank}</td>

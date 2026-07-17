@@ -2251,6 +2251,26 @@ h2, h3 {
   min-width: 220px;
 }
 
+/* Shop-yellow divider between categories - a left border (not the flex
+   gap alone) so it reads as a deliberate section break rather than just
+   whitespace. Switches to a top border once flex-wrap actually stacks
+   the categories (same breakpoint the rest of the site uses), where a
+   left border would just be an odd vertical stub on an otherwise
+   full-width block. */
+.shop-category:not(:first-child) {
+  border-left: 2px solid rgba(230, 193, 74, 0.35);
+  padding-left: 20px;
+}
+
+@media (max-width: 900px) {
+  .shop-category:not(:first-child) {
+    border-left: none;
+    border-top: 2px solid rgba(230, 193, 74, 0.35);
+    padding-left: 0;
+    padding-top: 18px;
+  }
+}
+
 .shop-category h3 {
   margin-top: 0;
 }
@@ -2365,7 +2385,10 @@ h2, h3 {
    most of a category fits on screen at once. */
 .shop-grid-compact {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  /* 80px rather than 72px - a handful of one-word titles ("Strategist",
+     "Aggressive") have no space to wrap at, so too narrow a tile forces
+     an awkward mid-word break instead of just wrapping across two lines. */
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
   gap: 8px;
 }
 
@@ -2381,11 +2404,20 @@ h2, h3 {
 }
 
 .shop-grid-compact .shop-item-preview.title-preview {
+  /* Re-overrides the fixed 44x44 box above (same specificity, source order
+     would otherwise let it win over the base .title-preview rule's own
+     width:auto/height:auto) - without this every pill was clamped to
+     44x44 regardless of its text, so anything longer than a couple of
+     characters spilled out past its own background. */
+  width: auto;
+  height: auto;
   min-width: 0;
   min-height: 0;
   max-width: 100%;
   font-size: 11px;
   padding: 5px 7px;
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* Wraps up to 2 lines instead of the base .shop-item-name's single-line

@@ -160,8 +160,9 @@ async function renderShopPage() {
   // purchase - only someone who already owns one (granted directly, not
   // bought) sees it, so they can still equip it from their own shop page.
   const visible = (i) => !i.hidden || ownedIds.has(i.id);
-  const avatars = Catalog.all().filter((i) => i.type === 'avatar' && visible(i));
-  const titles = Catalog.all().filter((i) => i.type === 'title' && visible(i));
+  const byPrice = (a, b) => a.price - b.price;
+  const avatars = Catalog.all().filter((i) => i.type === 'avatar' && visible(i)).sort(byPrice);
+  const titles = Catalog.all().filter((i) => i.type === 'title' && visible(i)).sort(byPrice);
 
   container.innerHTML = `
     <div class="shop-balance">${coinIconHtml(18)} You have <strong>${profile.coins}</strong> coin${profile.coins === 1 ? '' : 's'}.</div>

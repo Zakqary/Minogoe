@@ -48,25 +48,26 @@ function itemCardHtml(item, profile) {
     preview = `<span class="shop-item-preview title-preview" style="${style}">${escapeHtml(item.title_text || item.name)}</span>`;
   }
 
+  // Owned items (equipped or not) have nothing left to buy, so the price
+  // row is dropped entirely rather than showing a now-meaningless number -
+  // only an unowned item shows coinIconHtml() + its price.
   let action;
   if (equipped) {
     action = `<button class="shop-equipped-btn" disabled>Equipped</button>`;
   } else if (owned) {
     action = `<button class="shop-equip-btn" data-id="${escapeHtml(item.id)}" data-type="${item.type}">Equip</button>`;
   } else {
-    action = `<button class="shop-buy-btn" data-id="${escapeHtml(item.id)}">Buy for ${item.price} coin${item.price === 1 ? '' : 's'}</button>`;
+    action = `<button class="shop-buy-btn" data-id="${escapeHtml(item.id)}">Buy</button>`;
   }
+  const price = owned ? '' : `<div class="shop-item-price">${coinIconHtml(12)} ${item.price}</div>`;
 
   return `
     <div class="shop-item-card${equipped ? ' equipped' : ''}">
       ${item.notice ? `<div class="shop-item-notice">${escapeHtml(item.notice)}</div>` : ''}
-      <div class="shop-item-row">
-        ${preview}
-        <div class="shop-item-info">
-          <div class="shop-item-name">${escapeHtml(item.name)}</div>
-        </div>
-        ${action}
-      </div>
+      ${preview}
+      <div class="shop-item-name">${escapeHtml(item.name)}</div>
+      ${price}
+      ${action}
     </div>
   `;
 }
@@ -180,12 +181,12 @@ async function renderShopPage() {
     <div class="shop-categories">
       <div class="shop-category">
         <h3>Profile Pictures</h3>
-        <div class="shop-grid">${avatars.map((i) => itemCardHtml(i, profile)).join('') || '<p>No avatars in the shop yet.</p>'}</div>
+        <div class="shop-grid shop-grid-compact">${avatars.map((i) => itemCardHtml(i, profile)).join('') || '<p>No avatars in the shop yet.</p>'}</div>
       </div>
 
       <div class="shop-category">
         <h3>Titles</h3>
-        <div class="shop-grid">${titles.map((i) => itemCardHtml(i, profile)).join('') || '<p>No titles in the shop yet.</p>'}</div>
+        <div class="shop-grid shop-grid-compact">${titles.map((i) => itemCardHtml(i, profile)).join('') || '<p>No titles in the shop yet.</p>'}</div>
       </div>
 
       <div class="shop-category">

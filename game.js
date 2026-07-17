@@ -1208,7 +1208,7 @@ function requestPass() {
   manualPass(false);
 }
 
-function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false, t = Date.now()) {
+function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false, t = Date.now(), autoTimeout = false) {
   if (state.online && !fromRemote && state.myPlayer !== state.turn) return;
 
   expireStaleUndoRequest();
@@ -1221,10 +1221,19 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   }
   const hand = player === 1 ? state.hand1 : state.hand2;
   hand.splice(hand.indexOf(shapeName), 1);
-  state.moveLog.push({ player, shapeName, orientationIndex, r0, c0, t });
+  // autoTimeout travels with the move itself (moveLog + the network
+  // message below) rather than as a separate synced counter - it's what
+  // countMyAutoPlacementsThisGame() derives "have I already used this
+  // game's one auto-place leniency" from, so a reconnect/resync (which
+  // already restores the full moveLog) can't accidentally forget it.
+  state.moveLog.push({ player, shapeName, orientationIndex, r0, c0, t, autoTimeout });
   state.lastMove = { shapeName, orientationIndex, r0, c0, player };
   state.passStreak = 0;
-  log(`${playerLabel(player)} placed ${shapeName}-pentomino. ${hand.length} piece(s) left.`);
+  if (autoTimeout) {
+    log(`${playerLabel(player)} ran out of time - a piece was placed for them automatically. ${hand.length} piece(s) left.`);
+  } else {
+    log(`${playerLabel(player)} placed ${shapeName}-pentomino. ${hand.length} piece(s) left.`);
+  }
 
   state.selected = null;
   state.hover = null;
@@ -1259,7 +1268,7 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   // provably correct rather than "correct because the grace period is
   // long enough."
   if (state.online && !fromRemote) {
-    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq });
+    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq, autoTimeout });
     Net.sendToServer({ type: 'live-game-move', player, shapeName, orientationIndex, r0, c0, t });
   }
 
@@ -1706,7 +1715,7 @@ function tickTurnTimer() {
     el.textContent = "Time's up!";
     stopTurnTimer();
     if (state.turn === state.myPlayer) {
-      timeoutForfeit();
+      handleSelfTimeout();
     } else {
       // Don't rely solely on the timed-out player's own client to self-report -
       // their tab may be backgrounded/throttled and never fire this at all,
@@ -1795,6 +1804,56 @@ function syncTurnTimerWithConnecting() {
     state.turnDeadline = Date.now() + turnTimerRemainingMsWhenPaused;
     resumeTurnTimerTicking();
   }
+}
+
+// Derived from the moveLog itself (each auto-placed move carries its own
+// autoTimeout flag - see commitPlacement()) rather than a separate synced
+// counter, so a reconnect/resync - which already restores the full
+// moveLog - can't lose track of whether this game's one-time leniency has
+// already been used. Only ever checked against MY OWN player number: each
+// client decides its own auto-place-vs-forfeit call unilaterally, the same
+// way it already decides what to place on a normal turn - the opponent
+// never needs to compute this for me, since they can never be the one to
+// commit a move on my behalf (see handleSelfTimeout()'s own comment).
+function countMyAutoPlacementsThisGame() {
+  return state.moveLog.filter((m) => m.player === state.myPlayer && m.autoTimeout).length;
+}
+
+// Called only when MY OWN turn timer hits 0 (tickTurnTimer()'s
+// state.turn === state.myPlayer branch) - gives one leniency auto-
+// placement per game before an actual timeout forfeit, so a single slow
+// reconnect doesn't immediately cost the match. Deliberately never
+// triggered from the opponent's side (timeoutOpponentForfeit() below is
+// unchanged) - only the timed-out player's own client can pick from their
+// own hand and commit a move as themselves; having the OPPONENT'S client
+// instead guess/commit a placement on their behalf would mean both sides
+// could independently compute different "random" choices, a desync risk
+// this avoids entirely by keeping the decision (and the random pick)
+// strictly local to whoever's clock actually ran out. If their client is
+// genuinely gone rather than just slow (backgrounded tab, dropped
+// connection), this never runs at all and timeoutOpponentForfeit()'s
+// existing confirm-then-forfeit safety net on the OTHER player's side is
+// still what ends the game - unchanged, since there's nothing here for it
+// to interfere with.
+function handleSelfTimeout() {
+  if (state.gameOver) return;
+  if (countMyAutoPlacementsThisGame() >= 1) {
+    timeoutForfeit();
+    return;
+  }
+  const hand = state.myPlayer === 1 ? state.hand1 : state.hand2;
+  const placements = enumerateLegalPlacements(hand, state.board);
+  // Shouldn't actually be reachable - checkGameEnd() already auto-passes
+  // a hand with zero legal moves before it can ever become "my turn" in
+  // the first place - but falling back to a real forfeit rather than
+  // silently doing nothing is the only safe option if this invariant is
+  // ever wrong.
+  if (placements.length === 0) {
+    timeoutForfeit();
+    return;
+  }
+  const choice = placements[Math.floor(Math.random() * placements.length)];
+  commitPlacement(choice.shapeName, choice.orientationIndex, choice.r0, choice.c0, false, Date.now(), true);
 }
 
 function timeoutForfeit() {
@@ -2786,7 +2845,7 @@ function handleNetDataInner(msg) {
     newGame(msg.hand, msg.gameSequence, msg.hostIsPlayerOneBase);
   } else if (msg.type === 'move') {
     if (!isExpectedNextAction(msg.seq)) { requestResync(); return; }
-    commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true, msg.t);
+    commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true, msg.t, !!msg.autoTimeout);
   } else if (msg.type === 'pass') {
     if (!isExpectedNextAction(msg.seq)) { requestResync(); return; }
     manualPass(true);
@@ -2856,7 +2915,12 @@ function handleNetDataInner(msg) {
           finalizeOpponentTimeoutForfeit(state.turn);
           return;
         }
-        log("Your opponent's move had actually gone through - resuming.");
+        const latestMove = state.moveLog[state.moveLog.length - 1];
+        if (latestMove && latestMove.autoTimeout) {
+          log("Your opponent's turn timed out, but the game auto-placed a piece for them - resuming.");
+        } else {
+          log("Your opponent's move had actually gone through - resuming.");
+        }
       } else {
         log('Reconnected. Game state restored.');
       }

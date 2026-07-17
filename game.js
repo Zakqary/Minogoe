@@ -60,6 +60,12 @@ function normalize(coords) {
     .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
 }
 
+// Clockwise on screen: (r, c) here means (row, col) with row increasing
+// DOWNWARD (screen space, not math space), so a cell directly below the
+// anchor (r=1, c=0) maps to (c=0, -r=-1) - directly to its LEFT - and
+// down-to-left is the clockwise direction. rotateSelected()'s default
+// (no reverse) applies this as-is; reverse=true applies it 3 more times
+// instead (a 270 clockwise = 90 counter-clockwise), for the other direction.
 function rotate90(coords) {
   return normalize(coords.map(([r, c]) => [c, -r]));
 }
@@ -1984,7 +1990,7 @@ function updateSelectionInfo() {
     el.textContent = `${playerLabel(state.turn)}: click a piece in your hand below to select it.`;
   } else {
     const len = ORIENTATIONS[state.selected.shapeName].length;
-    el.textContent = `Placing ${state.selected.shapeName}-pentomino (orientation ${state.selected.orientationIndex + 1}/${len}). Click the board to place, or press R / scroll to rotate.`;
+    el.textContent = `Placing ${state.selected.shapeName}-pentomino (orientation ${state.selected.orientationIndex + 1}/${len}). Click the board to place, or press Q/E / scroll to rotate.`;
   }
 }
 
@@ -2030,7 +2036,7 @@ function updateDragGhost(ghostEl, clientX, clientY) {
   ghostEl.style.top = `${clientY - 60}px`;
 }
 
-// Lets the mobile rotate button (or the 'r' key/scroll-wheel, on the off
+// Lets the mobile rotate button (or the Q/E keys/scroll-wheel, on the off
 // chance a touch device also has one) actually rotate the piece being
 // dragged - without this the ghost silently kept showing the pre-rotation
 // orientation even though the board's hover preview underneath had already
@@ -2228,10 +2234,13 @@ canvas.addEventListener('touchstart', (e) => {
   drawBoard();
 }, { passive: false });
 
+// Scroll up rotates clockwise/"right" (the default no-arg rotateSelected()),
+// scroll down rotates counter-clockwise/"left" (rotateSelected(true)) - see
+// rotate90()'s own comment for why the default direction is clockwise.
 canvas.addEventListener('wheel', (e) => {
   if (!state.selected) return;
   e.preventDefault();
-  rotateSelected();
+  rotateSelected(e.deltaY > 0);
 }, { passive: false });
 
 // ---------- Controls ----------
@@ -2258,8 +2267,10 @@ document.querySelector('.rules-panel h3')?.addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'r' || e.key === 'R') {
-    rotateSelected();
+  if (e.key === 'q' || e.key === 'Q') {
+    rotateSelected(true); // counter-clockwise/"left"
+  } else if (e.key === 'e' || e.key === 'E') {
+    rotateSelected(); // clockwise/"right"
   } else if (e.key === 'f' || e.key === 'F') {
     flipSelected();
   }

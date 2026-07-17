@@ -39,10 +39,6 @@
       <a href="recent.html">Recent Games</a>
       <a href="stats.html">Stats</a>
       <a href="admin.html" id="adminNavLink" style="display:none;">Admin</a>
-      <div class="nav-search">
-        <input id="playerSearchInput" type="text" placeholder="Find a player..." autocomplete="off">
-        <div id="playerSearchResults" class="nav-search-results"></div>
-      </div>
     </div>
   </nav>
   <div id="lobbyView" class="lobby-view">
@@ -135,7 +131,7 @@
         <div class="turn-timer" id="turnTimer"></div>
       </div>
       <div class="selection-info" id="selectionInfo">No piece selected. Click a piece in your hand below.</div>
-      <div class="rotate-hint">Press <strong>R</strong> or scroll to rotate, <strong>F</strong> to flip, or use the rotate buttons. Tap the board once to preview, tap again to place.</div>
+      <div class="rotate-hint">Press <strong>Q</strong>/<strong>E</strong> or scroll to rotate, <strong>F</strong> to flip, or use the rotate buttons. Tap the board once to preview, tap again to place.</div>
 
       <div id="undoRequestBanner" class="undo-request-banner" style="display:none;">
         <span>Your opponent wants to undo the last move.</span>
@@ -236,9 +232,7 @@
 <script src="auth.js"></script>
 <script src="catalog.js"></script>
 <script src="auth-ui.js"></script>
-<script src="presence.js"></script>
-<script src="search.js"></script>
-<script src="checkin.js"></script>
+<script src="presence.js"></script><script src="checkin.js"></script>
 <script src="mino-notify.js"></script>
 <script src="lobby.js"></script>
 <script src="ranked-period.js"></script>

@@ -5,7 +5,7 @@
 // knows/finds the code (and, since the live spectate feature, is now
 // publicly listed like any other match), so the old name overpromised.
 function modeLabel(mode) {
-  return mode === 'private' ? 'Direct Connect' : mode;
+  return mode === 'private' ? 'direct connect' : mode;
 }
 
 function timeAgo(isoString) {

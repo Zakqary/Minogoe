@@ -13,7 +13,7 @@ function formatSpTime(ms) {
 // everywhere a user actually sees it - see recent.js's own copy of this
 // function for the full reasoning.
 function modeLabel(mode) {
-  return mode === 'private' ? 'Direct Connect' : mode;
+  return mode === 'private' ? 'direct connect' : mode;
 }
 
 // Achievement badges - purely derived from stats already present on the

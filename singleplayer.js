@@ -1583,7 +1583,7 @@ function render() {
   } else if (state.mode === 'godbot') {
     banner.textContent = 'Your turn';
     pieceInfo.textContent = state.selected
-      ? `Placing ${state.selected.shapeName}. Click the board to place, or press R / scroll to rotate.`
+      ? `Placing ${state.selected.shapeName}. Click the board to place, or press Q/E / scroll to rotate.`
       : 'Pick a piece from your hand below.';
   } else if (state.mode === 'curse' && state.finished) {
     const openCount = countCurseOpenSquares(state.board);
@@ -1620,7 +1620,7 @@ function render() {
     pieceInfo.textContent = 'Click Restart to run it back.';
   } else if (state.selected) {
     const len = ORIENTATIONS[state.selected.shapeName].length;
-    pieceInfo.textContent = `Placing ${state.selected.shapeName} (orientation ${state.selected.orientationIndex + 1}/${len}). Click the board to place, or press R / scroll to rotate.`;
+    pieceInfo.textContent = `Placing ${state.selected.shapeName} (orientation ${state.selected.orientationIndex + 1}/${len}). Click the board to place, or press Q/E / scroll to rotate.`;
     banner.textContent = 'Go!';
   }
 
@@ -1808,14 +1808,19 @@ canvas.addEventListener('touchstart', (e) => {
   drawBoard();
 }, { passive: false });
 
+// Scroll up rotates clockwise/"right" (the default no-arg rotateSelected()),
+// scroll down rotates counter-clockwise/"left" (rotateSelected(true)) - see
+// game.js's rotate90() comment for why the default direction is clockwise
+// (this file's own rotate90() is an identical, self-contained copy).
 canvas.addEventListener('wheel', (e) => {
   if (!state.running || !state.selected) return;
   e.preventDefault();
-  rotateSelected();
+  rotateSelected(e.deltaY > 0);
 }, { passive: false });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'r' || e.key === 'R') rotateSelected();
+  if (e.key === 'q' || e.key === 'Q') rotateSelected(true); // counter-clockwise/"left"
+  else if (e.key === 'e' || e.key === 'E') rotateSelected(); // clockwise/"right"
   else if (e.key === 'f' || e.key === 'F') flipSelected();
 });
 

@@ -60,7 +60,7 @@ for (const name of Object.keys(BASE_SHAPES)) ORIENTATIONS[name] = generateOrient
 // everywhere a user actually sees it - see recent.js's own copy of this
 // function for the full reasoning.
 function modeLabel(mode) {
-  return mode === 'private' ? 'Direct Connect' : mode;
+  return mode === 'private' ? 'direct connect' : mode;
 }
 
 // ---------- Replay state ----------

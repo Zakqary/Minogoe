@@ -265,6 +265,19 @@ function applyFullState(msg) {
   // the countdown ticking against the restored deadline instead.
   state.turnDeadline = msg.turnDeadline ?? null;
   lastObservedTurnKey = `${state.turn}-${state.plyCount}-${state.gameOver}`;
+  // Also suppresses syncTurnTimerWithConnecting()'s own resume logic (see
+  // its comment) - state.connecting is about to be cleared by the 'resync'
+  // handler right after this returns, and without this it would try to
+  // "resume" on top of the deadline just restored above using a locally-
+  // estimated remaining time from whenever the freeze started, clobbering
+  // the sender's actually-authoritative one.
+  turnTimerPaused = false;
+  // Same reasoning - this may be a turn we haven't actually observed a
+  // fresh restartTurnTimerIfNeeded() call for yet (handleTurnTransition()
+  // would otherwise treat it as already-seen, since lastObservedTurnKey
+  // was just set above), so a stale "already warned" from a previous turn
+  // shouldn't suppress a real low-time warning on this one.
+  lowTimeWarningPlayed = false;
   resumeTurnTimerTicking();
 }
 
@@ -1644,8 +1657,39 @@ function playChatPing() {
   }
 }
 
+// A sharper double-beep (square wave, not sine/triangle like the calmer
+// sounds above) so it reads as urgent - fires once when your own turn
+// timer first drops to 10s or under, see tickTurnTimer()'s
+// lowTimeWarningPlayed guard below.
+function playLowTimeWarning() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const now = audioCtx.currentTime;
+    for (const start of [0, 0.15]) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = 740;
+      gain.gain.setValueAtTime(0.0001, now + start);
+      gain.gain.exponentialRampToValueAtTime(0.09, now + start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + start + 0.12);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now + start);
+      osc.stop(now + start + 0.14);
+    }
+  } catch {
+    // audio unavailable/blocked - not critical, ignore
+  }
+}
+
 // ---------- Per-turn timer (online casual/ranked only) ----------
 let turnTimerInterval = null;
+// Reset only on a genuinely new turn (restartTurnTimerIfNeeded) - NOT on a
+// syncTurnTimerWithConnecting() pause/resume, so a resync/reconnect that
+// happens to land after 10s doesn't cost you (or grant you) an extra warning
+// for the same turn.
+let lowTimeWarningPlayed = false;
 
 function stopTurnTimer() {
   if (turnTimerInterval) { clearInterval(turnTimerInterval); turnTimerInterval = null; }
@@ -1675,6 +1719,13 @@ function tickTurnTimer() {
   const secs = Math.ceil(remainingMs / 1000);
   el.textContent = `⏱ ${secs}s`;
   el.classList.toggle('turn-timer-warning', secs <= 10);
+  // Only for the player who actually needs to act - an opponent's low-time
+  // warning firing on your own screen would just be noise (matches
+  // maybeDingForTurn()'s own "only for my turn" scoping).
+  if (secs <= 10 && !lowTimeWarningPlayed && state.turn === state.myPlayer) {
+    lowTimeWarningPlayed = true;
+    playLowTimeWarning();
+  }
 }
 
 // Starts (or restarts) the ticking interval against whatever deadline is
@@ -1690,13 +1741,60 @@ function resumeTurnTimerTicking() {
   tickTurnTimer();
 }
 
+// Tracks a timer paused mid-turn by syncTurnTimerWithConnecting() below -
+// turnTimerPaused is a separate flag (not just "is turnTimerRemainingMsWhenPaused
+// truthy") since 0ms remaining is a real, valid amount to resume with.
+let turnTimerPaused = false;
+let turnTimerRemainingMsWhenPaused = 0;
+
 function restartTurnTimerIfNeeded() {
+  turnTimerPaused = false;
+  lowTimeWarningPlayed = false;
   stopTurnTimer();
   if (state.gameOver || !state.online) return;
   const limitSec = TURN_TIME_LIMITS[state.gameMode];
   if (!limitSec) return;
+  if (state.connecting) {
+    // The freeze (resync/reconnect) is already in effect right as this new
+    // turn starts - don't count down time the player has no way to act on
+    // (see syncTurnTimerWithConnecting()'s comment for why this matters).
+    // "Remaining" is the full duration, so this turn starts fresh - not
+    // from 0 - once the freeze actually clears.
+    turnTimerPaused = true;
+    turnTimerRemainingMsWhenPaused = limitSec * 1000;
+    return;
+  }
   state.turnDeadline = Date.now() + limitSec * 1000;
   resumeTurnTimerTicking();
+}
+
+// A resync/reconnect (state.connecting) already correctly freezes the
+// hand (renderHand()'s isActive) and, since the earlier fix, the turn
+// banner - but the turn timer kept ticking down completely independently
+// of it. A player whose hand froze for the entire length of their turn
+// still got auto-forfeited by their own timeout the moment it hit 0, even
+// though they never had a real chance to act - this is what actually
+// happened in a reported ranked match, on the very first move. Called
+// from render() every time (idempotent either way - see the two branches
+// below), this pauses the deadline the moment a freeze starts and resumes
+// it with the same remaining time (not a fresh full duration, and not
+// however long the freeze itself lasted) once it clears.
+function syncTurnTimerWithConnecting() {
+  if (state.gameOver || !state.online) return;
+  const limitSec = TURN_TIME_LIMITS[state.gameMode];
+  if (!limitSec) return;
+
+  if (state.connecting) {
+    if (!turnTimerPaused && state.turnDeadline) {
+      turnTimerPaused = true;
+      turnTimerRemainingMsWhenPaused = Math.max(0, state.turnDeadline - Date.now());
+      stopTurnTimer();
+    }
+  } else if (turnTimerPaused) {
+    turnTimerPaused = false;
+    state.turnDeadline = Date.now() + turnTimerRemainingMsWhenPaused;
+    resumeTurnTimerTicking();
+  }
 }
 
 function timeoutForfeit() {
@@ -1876,6 +1974,10 @@ function updateLobbyGameVisibility() {
   const showGame = !!state.gameStarted;
   lobbyView.style.display = showGame ? 'none' : '';
   gameView.style.display = showGame ? '' : 'none';
+  // Lets mobile CSS reclaim the header/announcement/nav's vertical space
+  // while a game is actually in progress - see style.css's mobile board
+  // layout. No effect on desktop, which doesn't key off this class.
+  document.body.classList.toggle('in-game', showGame);
 
   const queueControls = document.getElementById('queueControls');
   const rankedPanel = document.getElementById('rankedPeriodPanel');
@@ -2001,6 +2103,7 @@ function render() {
   document.getElementById('chatSendBtn').disabled = !state.online;
 
   handleTurnTransition();
+  syncTurnTimerWithConnecting();
 }
 
 function updateSelectionInfo() {

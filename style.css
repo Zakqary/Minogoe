@@ -611,8 +611,19 @@ h2, h3 {
      auto track just grew to fit it on one line instead, pushing the
      side/right columns outward. Fixing the track to the real board's max
      width forces that text (and anything else in .board-panel) to wrap
-     within it instead. */
-  grid-template-columns: 320px 624px 240px;
+     within it instead.
+
+     The side/right columns are equal width (320px each) on purpose - with
+     justify-content:center centering the whole 3-column row rather than
+     the board specifically, unequal flanking columns made the board itself
+     sit visibly off-center from the header/logo/nav above it (shifted
+     toward whichever side had the wider column). .right-panel's own width
+     was widened to match (see .right-panel) rather than left narrower,
+     since .hands (no explicit width of its own, see .hands) always
+     stretches to fill whichever column it's placed in - a narrower
+     .right-panel would leave it visibly mismatched against .hands sitting
+     directly above it in the same column. */
+  grid-template-columns: 320px 624px 320px;
   grid-template-areas:
     "side board hands"
     "side board right";
@@ -1560,7 +1571,9 @@ h2, h3 {
 }
 
 .right-panel {
-  width: 240px;
+  /* Matches .side-panel's width and the .app grid's now-equal side/right
+     columns - see the width comment on .app. */
+  width: 320px;
   display: flex;
   flex-direction: column;
   gap: 20px;

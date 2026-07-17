@@ -2201,6 +2201,10 @@ h2, h3 {
   margin-bottom: 14px;
 }
 
+#adminContent + h2 {
+  margin-top: 32px;
+}
+
 .admin-table-wrap {
   overflow-x: auto;
 }

@@ -4322,3 +4322,294 @@ begin
   update public.ranked_leaderboard_period set started_at = now() where id = 1;
 end;
 $$;
+
+-- ---------- Phase 53: admin feed of recent minigame personal bests ----------
+
+-- singleplayer_runs only ever stores each (user, mode)'s CURRENT best - a
+-- single row, continuously overwritten in place (see every submit_*_score/
+-- submit_singleplayer_time() function). There was never a record of WHEN
+-- each individual player's own past PBs happened, only what today's best
+-- currently is - get_record_progression() (Phase 45/48) LOOKS similar but
+-- computes something different (the GLOBAL best across every player
+-- combined, for the Stats page's record-over-time chart), not "this one
+-- player just improved their own score." This table is a plain append-only
+-- log of exactly that, for the admin page's own "who's actively grinding
+-- minigames right now" feed - never trimmed/updated, only ever inserted
+-- into by the submit_* functions below.
+create table if not exists public.personal_best_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  mode text not null,
+  value numeric not null,
+  achieved_at timestamptz not null default now()
+);
+
+-- RLS enabled with NO policies at all - same "not publicly readable"
+-- treatment as coin_purchases/mino_gifts (see admin_get_monitor_data()'s
+-- own comment). Every insert below runs from inside a security definer
+-- function (bypasses RLS for its own writes), and the only read path is
+-- admin_get_recent_personal_bests() further down, also security definer
+-- and gated on the caller's own username.
+alter table public.personal_best_events enable row level security;
+
+-- Full bodies copied forward from wherever each was last defined
+-- (Phase 33/34/36/40/48/49 respectively) - only the one new insert (right
+-- alongside the existing "this is actually an improvement" branches, never
+-- the "no improvement" else branch) is new in each.
+
+create or replace function public.submit_singleplayer_time(p_time_ms integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_time integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_time_ms is null or p_time_ms <= 0 then
+    raise exception 'Invalid time';
+  end if;
+
+  select time_ms into existing_time from public.singleplayer_runs where user_id = uid and mode = 'speedrun' for update;
+
+  if existing_time is null then
+    insert into public.singleplayer_runs (user_id, mode, time_ms) values (uid, 'speedrun', p_time_ms);
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'speedrun', p_time_ms);
+    return p_time_ms;
+  elsif p_time_ms < existing_time then
+    update public.singleplayer_runs set time_ms = p_time_ms, completed_at = now() where user_id = uid and mode = 'speedrun';
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'speedrun', p_time_ms);
+    return p_time_ms;
+  else
+    return existing_time;
+  end if;
+end;
+$$;
+
+create or replace function public.submit_singleplayer_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < 0 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'eogonim' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'eogonim', p_score);
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'eogonim', p_score);
+    return p_score;
+  elsif p_score < existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'eogonim';
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'eogonim', p_score);
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;
+
+create or replace function public.submit_blindeogonim_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < 0 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'blindeogonim' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'blindeogonim', p_score);
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'blindeogonim', p_score);
+    return p_score;
+  elsif p_score < existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'blindeogonim';
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'blindeogonim', p_score);
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;
+
+create or replace function public.submit_ascension_score(p_round integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_round integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_round is null or p_round < 0 then
+    raise exception 'Invalid round';
+  end if;
+
+  select score into existing_round from public.singleplayer_runs where user_id = uid and mode = 'ascension' for update;
+
+  if existing_round is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'ascension', p_round);
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'ascension', p_round);
+    return p_round;
+  elsif p_round > existing_round then
+    update public.singleplayer_runs set score = p_round, completed_at = now() where user_id = uid and mode = 'ascension';
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'ascension', p_round);
+    return p_round;
+  else
+    return existing_round;
+  end if;
+end;
+$$;
+
+create or replace function public.submit_blight_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < 0 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'blight' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'blight', p_score);
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'blight', p_score);
+    return p_score;
+  elsif p_score > existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'blight';
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'blight', p_score);
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;
+
+create or replace function public.submit_godbot_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < -200 or p_score > 200 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'godbot' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'godbot', p_score);
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'godbot', p_score);
+    return p_score;
+  elsif p_score > existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'godbot';
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'godbot', p_score);
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;
+
+create or replace function public.submit_curse_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < 0 or p_score > 100 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'curse' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'curse', p_score);
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'curse', p_score);
+    return p_score;
+  elsif p_score < existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'curse';
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'curse', p_score);
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;
+
+-- Same "gated on the caller's own username, checked server-side inside
+-- the function" pattern as admin_get_monitor_data() - see its own comment
+-- for why this is never trusted to a hidden nav link alone.
+create or replace function public.admin_get_recent_personal_bests()
+returns table (
+  user_id uuid,
+  username text,
+  avatar_id text,
+  title_id text,
+  mode text,
+  value numeric,
+  achieved_at timestamptz
+)
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  caller_username text;
+begin
+  select p.username into caller_username from public.profiles p where p.id = auth.uid();
+  if caller_username is distinct from 'AVNJ' then
+    raise exception 'Not authorized';
+  end if;
+
+  return query
+  select p.id, p.username, p.avatar_id, p.title_id, e.mode, e.value, e.achieved_at
+  from public.personal_best_events e
+  join public.profiles p on p.id = e.user_id
+  order by e.achieved_at desc
+  limit 20;
+end;
+$$;

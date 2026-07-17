@@ -496,6 +496,15 @@ function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase) {
     return;
   }
 
+  // A rematch of THIS room/match - cancel the previous game's endGame()'s
+  // deferred Net.leaveRoom() (see its comment in net.js) so the room and
+  // live-game spectator feed survive instead of getting torn down right
+  // as this new game starts. Runs on both the host (calling this
+  // directly) and the joiner (receiving it via the 'newgame' message) -
+  // this is the single choke point both paths funnel through. Harmless
+  // no-op for the very first game of a match, where nothing is pending yet.
+  if (state.online) Net.cancelPendingLeaveRoom();
+
   // The host assigns the next sequence number itself; the joiner just
   // adopts whatever the host sent, so both sides always agree.
   state.gameSequence = isRemote ? remoteSequence : state.gameSequence + 1;
@@ -1228,12 +1237,14 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   // end, then notify network." If this placement ends the game,
   // checkGameEnd() calls endGame() -> Net.leaveRoom(), which tells the
   // signaling server to tear down this room (including the live-game
-  // spectator registry) right away. The P2P move send is unaffected by
-  // that ordering (dc and the signaling ws are separate channels), but
-  // Net.sendToServer() shares the ws connection with leave-room - sent
-  // after it, the server would have already deleted the spectator
-  // registry by the time this arrives and silently drop the final move,
-  // which is exactly what was happening before this reordering.
+  // spectator registry) - though only after a grace period now (see
+  // leaveRoom()'s comment in net.js), so this ordering isn't the load-
+  // bearing fix it used to be. Kept anyway: the P2P move send is
+  // unaffected by the ordering either way (dc and the signaling ws are
+  // separate channels), and sending live-game-move for the final move
+  // before anything that could ever tear the room down keeps this
+  // provably correct rather than "correct because the grace period is
+  // long enough."
   if (state.online && !fromRemote) {
     Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq });
     Net.sendToServer({ type: 'live-game-move', player, shapeName, orientationIndex, r0, c0, t });

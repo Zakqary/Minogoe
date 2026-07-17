@@ -403,7 +403,14 @@ wss.on('connection', (socket) => {
         const isHost = room.slots.length === 0;
         room.slots.push({ socket, userId, isHost, disconnectTimer: null });
         socketRoom.set(socket, roomCode);
-        socket.send(JSON.stringify({ type: 'joined', isHost }));
+        // matchId was missing here (unlike pairSockets()'s 'joined' for
+        // queue matches, which always included it) - net.js's matchId
+        // getter stayed null for every Direct Connect game as a result,
+        // which is also very likely why game.js's client_match_id
+        // (Net.matchId ? `${Net.matchId}-${gameSequence}` : null) fell
+        // back to null for every Direct Connect game specifically, losing
+        // the dedup protection Phase 51 tightened up.
+        socket.send(JSON.stringify({ type: 'joined', isHost, matchId: roomCode }));
 
         if (room.slots.length === 2) {
           for (const s of room.slots) {

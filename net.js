@@ -291,6 +291,17 @@ const Net = (() => {
   }
 
   function openSocket(serverUrl, onOpen, cbs) {
+    // Starting a genuinely new connection (a fresh queue/room, not a
+    // rematch of the one we're mid-grace-period on) - leave that old room
+    // right away instead of leaking it for the rest of the grace window,
+    // since ws is about to be reassigned out from under it below.
+    if (pendingLeaveRoomTimer) {
+      clearTimeout(pendingLeaveRoomTimer);
+      pendingLeaveRoomTimer = null;
+      sendLeaveRoomNow(pendingLeaveRoomSocket);
+      pendingLeaveRoomSocket = null;
+    }
+
     callbacks = cbs;
 
     try {
@@ -354,11 +365,51 @@ const Net = (() => {
   }
 
   // Tells the signaling server this match is over, so it doesn't hold a
-  // casual/ranked room (and its reconnect bookkeeping) open indefinitely.
-  function leaveRoom() {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'leave-room' }));
+  // casual/ranked room (and its reconnect bookkeeping), or the live-game
+  // spectator feed, open indefinitely - see endGame()'s call site in
+  // game.js. NOT sent immediately: a rematch reuses this exact room/
+  // WebRTC connection rather than reconnecting, so leaving right when one
+  // game ends (before either player has decided whether there's a
+  // rematch) tore the room down before a rematch could ever reuse it -
+  // most visibly, it silently and permanently broke the live-game
+  // spectator feed the moment the FIRST game of a match ended, since
+  // spectators are tracked per-room and a torn-down room can never be
+  // found or re-registered again. Deferred by REMATCH_GRACE_MS instead,
+  // giving both players a real window to start a rematch - see
+  // cancelPendingLeaveRoom(), called from game.js's newGame() (the single
+  // choke point for both the host starting one and the joiner receiving
+  // it) - and openSocket() below, which flushes any still-pending deferred
+  // leave immediately rather than leaking it if the player starts a
+  // genuinely different connection (a new queue/room) before the grace
+  // window elapses on its own.
+  const REMATCH_GRACE_MS = 45000;
+  let pendingLeaveRoomTimer = null;
+  let pendingLeaveRoomSocket = null;
+
+  function sendLeaveRoomNow(socket) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'leave-room' }));
     }
+  }
+
+  function leaveRoom() {
+    clearTimeout(pendingLeaveRoomTimer);
+    pendingLeaveRoomSocket = ws;
+    pendingLeaveRoomTimer = setTimeout(() => {
+      pendingLeaveRoomTimer = null;
+      sendLeaveRoomNow(pendingLeaveRoomSocket);
+      pendingLeaveRoomSocket = null;
+    }, REMATCH_GRACE_MS);
+  }
+
+  // A rematch is happening (or this game's opponent never actually left) -
+  // cancels the deferred leaveRoom() above so the room/live-game feed
+  // survives into the new game instead of getting torn down out from
+  // under it.
+  function cancelPendingLeaveRoom() {
+    clearTimeout(pendingLeaveRoomTimer);
+    pendingLeaveRoomTimer = null;
+    pendingLeaveRoomSocket = null;
   }
 
   function send(obj) {
@@ -392,6 +443,7 @@ const Net = (() => {
     sendToServer,
     cancelQueue,
     leaveRoom,
+    cancelPendingLeaveRoom,
     checkConnectionNow,
     clearSelfInitiatedRejoin,
     get isHost() { return isHost; },

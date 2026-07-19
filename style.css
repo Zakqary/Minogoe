@@ -2362,6 +2362,15 @@ h2, h3 {
   display: flex;
   align-items: center;
   gap: 10px;
+  /* If the icon (fixed width) and button (fixed width, its text never
+     shrinks) together don't leave enough room for .shop-item-info's text
+     to render normally, the button - last in source order - wraps to its
+     own line below instead of squeezing .shop-item-info down to an
+     ellipsis-truncated sliver (its only other flexible sibling). Never
+     triggers at any width/device this was actually tested at, but is a
+     free safety net against ones that weren't (larger system font sizes,
+     browser zoom, accessibility text scaling). */
+  flex-wrap: wrap;
 }
 
 .shop-item-info {

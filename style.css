@@ -196,6 +196,42 @@ h2, h3 {
   width: 100%;
 }
 
+/* Stats page's head-to-head player pickers - two independent .nav-search
+   instances side by side (see stats.js's createPlayerPicker()), rather
+   than the single nav-wide/profile-wide one search.js drives. */
+.h2h-pickers {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.h2h-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.h2h-search input {
+  width: 100%;
+}
+
+.h2h-search input.picked {
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
+.h2h-vs {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+
+.h2h-summary {
+  margin-bottom: 12px;
+}
+
 .site-header .logo {
   grid-column: 2;
   justify-self: center;

@@ -46,6 +46,23 @@
     <h2>Stats</h2>
     <p class="stats-intro">Live numbers collected from every game of Minogoe played so far.</p>
     <div id="statsContent">Loading...</div>
+
+    <div class="stats-chart-card" id="h2hCard">
+      <h3>Head to Head</h3>
+      <p class="stats-chart-note">Pick two players to see their record against each other.</p>
+      <div class="h2h-pickers">
+        <div class="nav-search h2h-search">
+          <input id="h2hInputA" type="text" placeholder="Find a player..." autocomplete="off">
+          <div id="h2hResultsA" class="nav-search-results"></div>
+        </div>
+        <div class="h2h-vs">vs</div>
+        <div class="nav-search h2h-search">
+          <input id="h2hInputB" type="text" placeholder="Find a player..." autocomplete="off">
+          <div id="h2hResultsB" class="nav-search-results"></div>
+        </div>
+      </div>
+      <div id="h2hOutput"></div>
+    </div>
   </div>
 
   <footer class="site-footer">

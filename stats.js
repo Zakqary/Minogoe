@@ -224,6 +224,27 @@ function formatTimeMs(ms) {
   return `${m}:${s.toFixed(2).padStart(5, '0')}`;
 }
 
+// Both duplicated from recent.js rather than shared - same standalone-page
+// convention as BASE_SHAPES/formatTimeMs above.
+function modeLabel(mode) {
+  return mode === 'private' ? 'direct connect' : mode;
+}
+
+function timeAgo(isoString) {
+  const seconds = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.floor(months / 12);
+  return `${years}y ago`;
+}
+
 const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse' };
 const RECORD_MODE_COLORS = { speedrun: '#5b7fd9', eogonim: 'var(--accent)', blindeogonim: '#8b6fd9', ascension: '#6fbf73', blight: '#c05c5c', godbot: '#d95b8f', curse: '#5bc2d9' };
 
@@ -423,4 +444,205 @@ async function renderStatsPage() {
   }
 }
 
+// ---------- Head to head ----------
+// Two independent typeahead pickers (structurally the same lookup as
+// search.js's nav search box, just not tied to its hardcoded single-input
+// IDs and navigating on pick instead of jumping to a profile) - reports
+// the full W/L/T record and game list between whichever two players are
+// picked. games is publicly readable (see schema.sql), so this is a plain
+// client-side query, no RPC needed.
+const H2H_SEARCH_DEBOUNCE_MS = 250;
+const H2H_SEARCH_RESULT_LIMIT = 6;
+
+function createPlayerPicker(input, resultsEl, onChange) {
+  let picked = null;
+  let debounceId = null;
+  let activeIndex = -1;
+  let currentMatches = [];
+
+  function hideResults() {
+    resultsEl.classList.remove('visible');
+    resultsEl.innerHTML = '';
+    activeIndex = -1;
+    currentMatches = [];
+  }
+
+  function updateActive(items) {
+    items.forEach((el, i) => el.classList.toggle('active', i === activeIndex));
+  }
+
+  function renderResults(matches) {
+    currentMatches = matches;
+    activeIndex = -1;
+    if (matches.length === 0) {
+      resultsEl.innerHTML = '<div class="nav-search-empty">No players found</div>';
+      resultsEl.classList.add('visible');
+      return;
+    }
+    resultsEl.innerHTML = matches.map((m, i) =>
+      `<div class="nav-search-result" data-index="${i}">${escapeHtml(m.username)}</div>`
+    ).join('');
+    resultsEl.classList.add('visible');
+    for (const el of resultsEl.querySelectorAll('.nav-search-result')) {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        selectPlayer(matches[Number(el.dataset.index)]);
+      });
+    }
+  }
+
+  async function runSearch(query) {
+    const { data, error } = await supabaseClient
+      .from('profiles')
+      .select('id, username')
+      .ilike('username', `%${query}%`)
+      .order('username', { ascending: true })
+      .limit(H2H_SEARCH_RESULT_LIMIT);
+    if (error || !data) { hideResults(); return; }
+    renderResults(data);
+  }
+
+  function selectPlayer(match) {
+    picked = match;
+    input.value = match.username;
+    input.classList.add('picked');
+    hideResults();
+    input.blur();
+    onChange(picked);
+  }
+
+  input.addEventListener('input', () => {
+    if (picked && input.value !== picked.username) {
+      picked = null;
+      input.classList.remove('picked');
+      onChange(null);
+    }
+    const query = input.value.trim();
+    clearTimeout(debounceId);
+    if (!query) { hideResults(); return; }
+    debounceId = setTimeout(() => runSearch(query), H2H_SEARCH_DEBOUNCE_MS);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      hideResults();
+      input.blur();
+      return;
+    }
+    if (!resultsEl.classList.contains('visible') || currentMatches.length === 0) return;
+
+    const items = resultsEl.querySelectorAll('.nav-search-result');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      activeIndex = Math.min(activeIndex + 1, items.length - 1);
+      updateActive(items);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIndex = Math.max(activeIndex - 1, 0);
+      updateActive(items);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeIndex >= 0 && currentMatches[activeIndex]) {
+        selectPlayer(currentMatches[activeIndex]);
+      } else if (currentMatches.length === 1) {
+        selectPlayer(currentMatches[0]);
+      }
+    }
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(hideResults, 150);
+  });
+}
+
+async function loadHeadToHead(a, b, output) {
+  output.innerHTML = '<p class="stats-chart-empty">Loading...</p>';
+
+  const { data, error } = await supabaseClient
+    .from('games')
+    .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
+    .or(`and(player1_id.eq.${a.id},player2_id.eq.${b.id}),and(player1_id.eq.${b.id},player2_id.eq.${a.id})`)
+    .order('ended_at', { ascending: false });
+
+  if (error) {
+    output.innerHTML = `<p class="stats-chart-empty">Could not load head-to-head record: ${escapeHtml(error.message)}</p>`;
+    return;
+  }
+
+  const games = data || [];
+  if (games.length === 0) {
+    output.innerHTML = `<p class="stats-chart-empty">${escapeHtml(a.username)} and ${escapeHtml(b.username)} haven't played each other yet.</p>`;
+    return;
+  }
+
+  let aWins = 0, bWins = 0, ties = 0;
+  const rows = games.map((g) => {
+    // Which of player1/player2 this specific game recorded A/B as varies
+    // per row (whoever happened to be player1 that game) - normalize every
+    // row to an A-then-B order so the score/result columns read
+    // consistently regardless of who was actually player1 in the DB.
+    const aIsP1 = g.player1_id === a.id;
+    const aScore = aIsP1 ? g.score1 : g.score2;
+    const bScore = aIsP1 ? g.score2 : g.score1;
+    const aNum = aIsP1 ? 1 : 2;
+    const bNum = aIsP1 ? 2 : 1;
+
+    let outcome;
+    if (g.winner === aNum) { outcome = 'win'; aWins++; }
+    else if (g.winner === bNum) { outcome = 'loss'; bWins++; }
+    else { outcome = 'tie'; ties++; }
+
+    const scoreText = g.forfeit
+      ? (outcome === 'win' ? 'W - FF' : outcome === 'loss' ? 'FF - W' : `${aScore} - ${bScore}`)
+      : `${aScore} - ${bScore}`;
+    const resultText = outcome === 'win' ? 'Win' : outcome === 'loss' ? 'Loss' : 'Tie';
+
+    return `<tr>
+      <td class="result-${outcome}">${resultText}</td>
+      <td>${scoreText}</td>
+      <td>${escapeHtml(modeLabel(g.mode))}</td>
+      <td>${timeAgo(g.ended_at)}</td>
+      <td><a href="replay.html?game=${encodeURIComponent(g.id)}">Replay</a></td>
+    </tr>`;
+  }).join('');
+
+  const total = games.length;
+  const aPct = (100 * aWins) / total;
+  const bPct = (100 * bWins) / total;
+  const tieNote = ties > 0 ? `<p class="stats-chart-note">${ties} tie${ties === 1 ? '' : 's'}.</p>` : '';
+
+  output.innerHTML = `
+    <div class="h2h-summary">
+      ${barRowHtml(a.username, aPct, `${aWins}`, '#5b7fd9')}
+      ${barRowHtml(b.username, bPct, `${bWins}`, '#d97a52')}
+      ${tieNote}
+    </div>
+    <table class="games-table">
+      <thead><tr><th>Result</th><th>Score</th><th>Mode</th><th>When</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function initHeadToHead() {
+  const output = document.getElementById('h2hOutput');
+  if (!output) return;
+
+  let playerA = null;
+  let playerB = null;
+
+  function update() {
+    if (!playerA || !playerB) { output.innerHTML = ''; return; }
+    if (playerA.id === playerB.id) {
+      output.innerHTML = '<p class="stats-chart-empty">Pick two different players.</p>';
+      return;
+    }
+    loadHeadToHead(playerA, playerB, output);
+  }
+
+  createPlayerPicker(document.getElementById('h2hInputA'), document.getElementById('h2hResultsA'), (m) => { playerA = m; update(); });
+  createPlayerPicker(document.getElementById('h2hInputB'), document.getElementById('h2hResultsB'), (m) => { playerB = m; update(); });
+}
+
 renderStatsPage();
+initHeadToHead();

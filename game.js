@@ -613,7 +613,7 @@ function requestNewGame() {
   if (state.connecting || !state.gameStarted || !state.gameOver) return;
 
   if (!state.online) {
-    newGame();
+    beginGameSetup();
     return;
   }
 
@@ -626,7 +626,7 @@ function requestNewGame() {
       log('Only the host can start a new game - ask them to click New Game.');
       return;
     }
-    beginPrivateRoomSetup();
+    beginGameSetup();
     return;
   }
 
@@ -2538,13 +2538,13 @@ document.getElementById('newGameBtn').addEventListener('click', () => {
 document.getElementById('hotseatBtn').addEventListener('click', () => {
   if (state.online) return;
   state.vsBot = false;
-  newGame();
+  beginGameSetup();
 });
 
 document.getElementById('vsBotBtn').addEventListener('click', () => {
   if (state.online) return;
   state.vsBot = true;
-  newGame();
+  beginGameSetup();
 });
 
 document.getElementById('chatSendBtn').addEventListener('click', sendChat);
@@ -2876,7 +2876,7 @@ function handleNetReady() {
   });
 
   if (state.gameMode === 'private' && Net.isHost) {
-    beginPrivateRoomSetup();
+    beginGameSetup();
   } else if (Net.isHost) {
     newGame();
   } else {
@@ -2916,7 +2916,7 @@ function handleNetDataInner(msg) {
   if (msg.type === 'newgame') {
     newGame(msg.hand, msg.gameSequence, msg.hostIsPlayerOneBase);
   } else if (msg.type === 'room-settings') {
-    // Host-authoritative mirror - see beginPrivateRoomSetup()'s comment.
+    // Host-authoritative mirror - see beginGameSetup()'s comment.
     // Sent both to kick off the settings step and on every change the host
     // makes while it's open, so this is just "adopt whatever they sent."
     state.awaitingRoomStart = true;
@@ -3091,20 +3091,27 @@ document.getElementById('createRoomBtn').addEventListener('click', () => {
   connectToPrivateRoom(code);
 });
 
-// ---------- Private room pre-game settings ----------
-// Entered whenever a private room's game is about to (re)start - both the
-// very first game (from handleNetReady()) and every rematch (from
-// requestNewGame(), since private rooms let the host restart instantly
-// with no opponent confirmation, unlike casual/ranked's request/response
-// flow). Only the host calls this; the joiner never triggers it locally,
+// ---------- Pre-game settings (private rooms, hotseat, vs Bot) ----------
+// Entered whenever a game not gated behind casual/ranked matchmaking is
+// about to (re)start: a private room's first game or rematch (both host-
+// only - see below), and now hotseat/vs Bot's first game or rematch too
+// (nothing to gate there, it's all one local browser). Casual/ranked never
+// call this - those stay fully random, no customization, by design.
+//
+// Online, only the host calls this; the joiner never triggers it locally,
 // it just reacts to the host's broadcast below, which keeps the "who's
-// allowed to configure/start" rule in exactly one place.
-function beginPrivateRoomSetup() {
+// allowed to configure/start" rule in exactly one place. Offline there's
+// only one player, so isGameSetupController() is always true.
+function isGameSetupController() {
+  return !state.online || Net.isHost;
+}
+
+function beginGameSetup() {
   state.awaitingRoomStart = true;
   state.roomSettings = { handMode: 'random' };
   state.roomHandCounts = {};
   render();
-  broadcastRoomSettings();
+  broadcastRoomSettings(); // harmless no-op offline - Net.send() is a no-op with no data channel
 }
 
 // Full-snapshot broadcast (settings + counts) rather than incremental
@@ -3131,7 +3138,7 @@ function buildHandFromCounts(counts) {
 }
 
 function adjustHandCount(name, delta) {
-  if (!Net.isHost) return;
+  if (!isGameSetupController()) return;
   const next = (state.roomHandCounts[name] || 0) + delta;
   if (next < 0) return;
   state.roomHandCounts[name] = next;
@@ -3140,7 +3147,7 @@ function adjustHandCount(name, delta) {
 }
 
 function renderHandPickerCategory(gridId, countLabelId, names, required) {
-  const isHost = Net.isHost;
+  const isHost = isGameSetupController();
   const total = names.reduce((sum, n) => sum + (state.roomHandCounts[n] || 0), 0);
   const countLabel = document.getElementById(countLabelId);
   countLabel.textContent = `${total}/${required}`;
@@ -3185,11 +3192,15 @@ function renderRoomSettingsPanel() {
   const overlay = document.getElementById('roomSettingsOverlay');
   if (!overlay) return;
 
-  const show = state.online && state.gameMode === 'private' && state.awaitingRoomStart;
+  const show = state.awaitingRoomStart;
   overlay.style.display = show ? 'flex' : 'none';
   if (!show) return;
 
-  const isHost = Net.isHost;
+  document.getElementById('roomSettingsTitle').textContent = state.online
+    ? 'Room Settings'
+    : (state.vsBot ? 'vs Bot Settings' : 'Local Game Settings');
+
+  const isHost = isGameSetupController();
   const settings = state.roomSettings;
   const randomBtn = document.getElementById('handModeRandomBtn');
   const selectBtn = document.getElementById('handModeSelectBtn');
@@ -3221,21 +3232,21 @@ function renderRoomSettingsPanel() {
 }
 
 document.getElementById('handModeRandomBtn').addEventListener('click', () => {
-  if (!Net.isHost) return;
+  if (!isGameSetupController()) return;
   state.roomSettings.handMode = 'random';
   broadcastRoomSettings();
   render();
 });
 
 document.getElementById('handModeSelectBtn').addEventListener('click', () => {
-  if (!Net.isHost) return;
+  if (!isGameSetupController()) return;
   state.roomSettings.handMode = 'select';
   broadcastRoomSettings();
   render();
 });
 
 document.getElementById('startPrivateGameBtn').addEventListener('click', () => {
-  if (!Net.isHost) return;
+  if (!isGameSetupController()) return;
   if (state.roomSettings.handMode === 'select' && !isHandSelectionValid()) return;
   const handOverride = state.roomSettings.handMode === 'select' ? buildHandFromCounts(state.roomHandCounts) : undefined;
   newGame(undefined, undefined, undefined, handOverride);

@@ -223,18 +223,20 @@
     </div>
   </div>
 
-  <!-- Shown as an overlay (over the lobby for a private room's first game,
-       or over the finished board for a private-room rematch) once both
-       players are in the room and a game is about to (re)start - see
-       game.js's renderRoomSettingsPanel(). Only the host's controls are
-       interactive; the joiner sees a read-only mirror of whatever the host
-       picks. Hand selection is the first private-room toggle - built as a
+  <!-- Shown as an overlay any time a game not gated behind casual/ranked
+       matchmaking is about to (re)start: a private room's first game or
+       rematch (over the lobby, or over the finished board for a rematch),
+       or hotseat/vs Bot's first game or rematch - see game.js's
+       renderRoomSettingsPanel(). In a private room only the host's controls
+       are interactive, and the joiner sees a read-only mirror of whatever
+       the host picks; hotseat/vs Bot are always fully interactive (one
+       local player). Hand selection is the first toggle - built as a
        labeled row inside this panel rather than a one-off control so future
        toggles/modes can be added here the same way without restructuring
        anything. -->
   <div class="room-settings-overlay" id="roomSettingsOverlay" style="display:none;">
     <div class="room-settings-panel" id="roomSettingsPanel">
-      <div class="room-settings-title">Room Settings</div>
+      <div class="room-settings-title" id="roomSettingsTitle">Room Settings</div>
 
       <div class="room-setting-row">
         <span class="room-setting-name">Hand</span>

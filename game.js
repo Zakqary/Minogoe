@@ -1122,13 +1122,20 @@ function switchTurn() {
   state.plyCount += 1;
 }
 
-// Voluntary passing is only allowed once your opponent's hand is empty (they
-// can never place again) - otherwise you could hoard passes on your early
-// turns to play with more board information than they had. Once their hand
-// is empty there's no more information asymmetry to protect against.
-function opponentHandEmpty() {
+// Voluntary passing is only allowed once your opponent's hand is empty
+// (they can never place again) OR it's your own last piece (you can never
+// place again either, after this) - otherwise you could hoard passes on
+// your early turns to play with more board information than your
+// opponent had. Both players deal the same number of pieces, so "my hand
+// has exactly 1 left" is the precise, symmetric equivalent of "opponent's
+// hand is already empty" - previously only whichever player happened to
+// place their own final piece SECOND ever got this option, since the
+// first player's last piece always found the opponent's hand still
+// non-empty.
+function canVoluntarilyPass() {
+  const myHand = state.turn === 1 ? state.hand1 : state.hand2;
   const oppHand = state.turn === 1 ? state.hand2 : state.hand1;
-  return oppHand.length === 0;
+  return oppHand.length === 0 || myHand.length === 1;
 }
 
 // Auto-passes the current turn holder for as long as they have no legal
@@ -1204,7 +1211,7 @@ function requestPass() {
   if (state.gameOver || state.connecting || !state.gameStarted) return;
   if (state.online && state.myPlayer !== state.turn) return;
   if (state.vsBot && state.turn === 2) return; // it's the bot's turn, not yours
-  if (!opponentHandEmpty()) return;
+  if (!canVoluntarilyPass()) return;
   manualPass(false);
 }
 
@@ -1893,26 +1900,58 @@ const TIMEOUT_CONFIRM_GRACE_MS = 5000;
 const TIMEOUT_CONFIRM_RETRY_MS = 1500;
 let timeoutConfirmTimer = null;
 let timeoutConfirmRetryTimer = null;
+// Snapshotted once, right when suspicion starts - NOT re-derived later
+// from state.turn at whatever moment a resync reply happens to arrive.
+// The 'resync' handler used to compare state.turn against itself
+// (before/after applying that one resync), which quietly broke once the
+// auto-timeout-placement feature made it possible for an ordinary 'move'
+// message to ALSO legitimately land and advance state.turn while a
+// confirm sequence was still in flight: by the time the resync reply
+// showed up, state.turn already reflected the far side of that move, so
+// "before" and "after" matched trivially and looked exactly like no
+// progress had been made at all - forfeiting the player who was actually
+// waiting on THEIR OWN turn, not the one who'd timed out. plyCount only
+// ever moves forward by exactly one per move/pass, from whichever message
+// gets there first, so comparing against this fixed snapshot is immune to
+// that ordering.
+let timeoutConfirmForfeitingPlayer = null;
+let timeoutConfirmPlyCountAtStart = null;
+
+function clearTimeoutConfirm() {
+  clearTimeout(timeoutConfirmTimer);
+  timeoutConfirmTimer = null;
+  clearInterval(timeoutConfirmRetryTimer);
+  timeoutConfirmRetryTimer = null;
+}
+
+// True if nothing has actually advanced the game since suspicion started -
+// checked after possibly applying a resync, so this reflects the fully
+// up-to-date plyCount either way.
+function timeoutConfirmStillStuck() {
+  return state.plyCount === timeoutConfirmPlyCountAtStart;
+}
 
 function timeoutOpponentForfeit() {
   if (state.gameOver) return;
   const forfeitingPlayer = state.turn;
+  timeoutConfirmForfeitingPlayer = forfeitingPlayer;
+  timeoutConfirmPlyCountAtStart = state.plyCount;
   setLobbyStatus("Confirming your opponent's turn timed out...");
   Net.send({ type: 'resync-request' });
 
-  clearTimeout(timeoutConfirmTimer);
-  clearInterval(timeoutConfirmRetryTimer);
+  clearTimeoutConfirm();
   timeoutConfirmRetryTimer = setInterval(() => {
     Net.send({ type: 'resync-request' });
   }, TIMEOUT_CONFIRM_RETRY_MS);
 
   timeoutConfirmTimer = setTimeout(() => {
-    timeoutConfirmTimer = null;
-    clearInterval(timeoutConfirmRetryTimer);
-    timeoutConfirmRetryTimer = null;
-    // No resync came back at all within the grace window, despite several
-    // attempts to ask for one - the connection is genuinely gone, not just
-    // an unlucky packet. Finalize with what we already believed.
+    clearTimeoutConfirm();
+    // No resync ever came back within the grace window, despite several
+    // attempts to ask for one - but an ordinary 'move' message (e.g. an
+    // auto-placed piece) could still have landed independently in the
+    // meantime and require no reply of its own. Only actually a timeout
+    // if nothing has moved since we started worrying.
+    if (!timeoutConfirmStillStuck()) return;
     finalizeOpponentTimeoutForfeit(forfeitingPlayer);
   }, TIMEOUT_CONFIRM_GRACE_MS);
 }
@@ -2130,13 +2169,13 @@ function render() {
   document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted || !state.gameOver || state.pendingNewGameRequest;
   document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
     || state.history.length === 0 || state.pendingUndoRequest;
-  const tooEarlyToPass = state.gameStarted && !state.gameOver && !opponentHandEmpty();
+  const tooEarlyToPass = state.gameStarted && !state.gameOver && !canVoluntarilyPass();
   document.getElementById('passBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
     || (state.online && state.myPlayer !== state.turn)
     || (state.vsBot && state.turn === 2)
     || tooEarlyToPass;
   document.getElementById('passBtn').title = tooEarlyToPass
-    ? 'Pass unlocks once your opponent has no pieces left'
+    ? 'Pass unlocks on your last piece, or once your opponent has none left'
     : '';
   document.getElementById('forfeitBtn').disabled = state.connecting || !state.gameStarted || state.gameOver;
 
@@ -2890,10 +2929,7 @@ function handleNetDataInner(msg) {
     state.connecting = false;
 
     const wasAwaitingTimeoutConfirm = !!timeoutConfirmTimer;
-    clearTimeout(timeoutConfirmTimer);
-    timeoutConfirmTimer = null;
-    clearInterval(timeoutConfirmRetryTimer);
-    timeoutConfirmRetryTimer = null;
+    clearTimeoutConfirm();
 
     if (msg.plyCount < state.plyCount) {
       // We're actually the more-advanced side here - the peer is the one
@@ -2905,14 +2941,13 @@ function handleNetDataInner(msg) {
       // ending the game now would be exactly the wrong call.
       Net.send({ type: 'resync', ...serializeFullState() });
     } else {
-      const turnBefore = state.turn;
       applyFullState(msg);
       if (wasAwaitingTimeoutConfirm) {
-        if (state.turn === turnBefore) {
+        if (timeoutConfirmStillStuck()) {
           // Confirmed directly with the opponent's own client, moments
           // ago, that they genuinely still haven't moved - not just a
           // dropped message. Safe to declare the timeout now.
-          finalizeOpponentTimeoutForfeit(state.turn);
+          finalizeOpponentTimeoutForfeit(timeoutConfirmForfeitingPlayer);
           return;
         }
         const latestMove = state.moveLog[state.moveLog.length - 1];

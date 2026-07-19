@@ -243,6 +243,20 @@
         </div>
       </div>
 
+      <!-- Online private rooms only (see renderRoomSettingsPanel()) - a
+           turn timer isn't meaningful for hotseat (one shared screen) or
+           vs Bot in the same way it is for two people over a real
+           connection, so this row is hidden entirely for those modes
+           rather than shown disabled. -->
+      <div class="room-setting-row" id="timerSettingRow">
+        <span class="room-setting-name">Timer</span>
+        <div class="mode-buttons room-setting-toggle timer-toggle">
+          <button type="button" class="mode-btn active" id="timerNoneBtn">No Timer</button>
+          <button type="button" class="mode-btn" id="timer60Btn">60s</button>
+          <button type="button" class="mode-btn" id="timer120Btn">120s</button>
+        </div>
+      </div>
+
       <div class="hand-picker-panel" id="handPickerPanel" style="display:none;">
         <div class="hand-picker-category">
           <div class="hand-picker-category-label"><span>Pentominoes</span><span id="pentominoCount">0/7</span></div>

@@ -4,7 +4,7 @@ const CELL_PX = 52; // 12 * 52 = 624px board
 const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
 const HANDICAP_POINTS = 0.5; // whoever moves second gets a half-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
-const TURN_TIME_LIMITS = { casual: 120, ranked: 60 }; // seconds; private/bot/hotseat are untimed
+const TURN_TIME_LIMITS = { casual: 120, ranked: 60 }; // seconds; bot/hotseat are always untimed. Private rooms are host-configurable (see state.privateTimerSeconds) - untimed by default.
 const ACTIVE_MATCH_KEY = 'minogoe_activeMatch'; // localStorage key for reconnect-after-reload
 const MATCH_INTRO_DURATION_MS = 4500; // how long the pre-match "vs" intro card stays up before auto-dismissing
 
@@ -163,7 +163,7 @@ const state = {
   incomingUndoRequest: false, // true when my opponent has asked to undo and I need to respond
   pendingNewGameRequest: false,  // true once I've asked for a rematch and am waiting on my opponent (casual/ranked)
   incomingNewGameRequest: false, // true when my opponent has asked for a rematch and I need to respond
-  turnDeadline: null, // epoch ms when the current online turn times out (casual/ranked only)
+  turnDeadline: null, // epoch ms when the current online turn times out (casual/ranked, or a timed private room)
   lastTapCell: null,  // touch only: last cell tapped on the board, for tap-to-preview/tap-again-to-confirm
   scoringCells: null, // [{index, owner}] - set once the game ends, for the scoring-square dots
 
@@ -177,8 +177,17 @@ const state = {
   // flag, so future private-room toggles/modes have an obvious place to
   // add their own fields alongside handMode without a rework.
   awaitingRoomStart: false,
-  roomSettings: { handMode: 'random' }, // handMode: 'random' | 'select'
+  roomSettings: { handMode: 'random', timerSeconds: null }, // handMode: 'random' | 'select'; timerSeconds: null (untimed) | 60 | 120
   roomHandCounts: {}, // shapeName -> count, only used while handMode === 'select'
+
+  // The timer choice actually in effect for the CURRENT private-room game
+  // (as opposed to state.roomSettings.timerSeconds, which is only the
+  // pending choice while the settings overlay is open) - set from
+  // roomSettings.timerSeconds the moment Start Game is clicked (host) or
+  // from the 'newgame' message (joiner), and restored via a resync like
+  // every other piece of real game state. null means untimed, matching
+  // hotseat/vsBot/an unconfigured private room's existing behavior.
+  privateTimerSeconds: null,
 };
 
 function snapshotState() {
@@ -234,6 +243,7 @@ function serializeFullState() {
     hostIsPlayerOneBase: state.hostIsPlayerOneBase,
     scoringCells: state.scoringCells,
     turnDeadline: state.turnDeadline,
+    privateTimerSeconds: state.privateTimerSeconds,
   };
 }
 
@@ -259,6 +269,7 @@ function applyFullState(msg) {
   // peers) - recomputed locally instead, now that gameSequence and
   // hostIsPlayerOneBase have just been caught up to the sender's.
   if (state.online) state.myPlayer = computeMyPlayerForCurrentGame();
+  state.privateTimerSeconds = msg.privateTimerSeconds ?? null;
   state.scoringCells = msg.scoringCells;
   state.selected = null;
   state.hover = null;
@@ -591,7 +602,7 @@ function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase, localHan
   render();
 
   if (state.online && Net.isHost && !isRemote) {
-    Net.send({ type: 'newgame', hand, gameSequence: state.gameSequence, hostIsPlayerOneBase: state.hostIsPlayerOneBase });
+    Net.send({ type: 'newgame', hand, gameSequence: state.gameSequence, hostIsPlayerOneBase: state.hostIsPlayerOneBase, privateTimerSeconds: state.privateTimerSeconds });
     // Registers/resets this match's spectator feed - host-only (mirroring
     // the 'newgame' send above), and re-sent on every rematch since the
     // board and hostPlayerNum (who's coloring is who this game) both reset
@@ -1793,12 +1804,20 @@ function resumeTurnTimerTicking() {
 let turnTimerPaused = false;
 let turnTimerRemainingMsWhenPaused = 0;
 
+// Casual/ranked have a fixed per-mode limit; a private room's limit is
+// whatever the host picked in the settings overlay for this specific game
+// (state.privateTimerSeconds - null/untimed by default, same as hotseat/vsBot).
+function currentTurnTimeLimitSec() {
+  if (state.gameMode === 'private') return state.privateTimerSeconds || null;
+  return TURN_TIME_LIMITS[state.gameMode] || null;
+}
+
 function restartTurnTimerIfNeeded() {
   turnTimerPaused = false;
   lowTimeWarningPlayed = false;
   stopTurnTimer();
   if (state.gameOver || !state.online) return;
-  const limitSec = TURN_TIME_LIMITS[state.gameMode];
+  const limitSec = currentTurnTimeLimitSec();
   if (!limitSec) return;
   if (state.connecting) {
     // The freeze (resync/reconnect) is already in effect right as this new
@@ -1827,7 +1846,7 @@ function restartTurnTimerIfNeeded() {
 // however long the freeze itself lasted) once it clears.
 function syncTurnTimerWithConnecting() {
   if (state.gameOver || !state.online) return;
-  const limitSec = TURN_TIME_LIMITS[state.gameMode];
+  const limitSec = currentTurnTimeLimitSec();
   if (!limitSec) return;
 
   if (state.connecting) {
@@ -2914,6 +2933,7 @@ function isExpectedNextAction(seq) {
 
 function handleNetDataInner(msg) {
   if (msg.type === 'newgame') {
+    state.privateTimerSeconds = msg.privateTimerSeconds ?? null;
     newGame(msg.hand, msg.gameSequence, msg.hostIsPlayerOneBase);
   } else if (msg.type === 'room-settings') {
     // Host-authoritative mirror - see beginGameSetup()'s comment.
@@ -3108,7 +3128,7 @@ function isGameSetupController() {
 
 function beginGameSetup() {
   state.awaitingRoomStart = true;
-  state.roomSettings = { handMode: 'random' };
+  state.roomSettings = { handMode: 'random', timerSeconds: null };
   state.roomHandCounts = {};
   render();
   broadcastRoomSettings(); // harmless no-op offline - Net.send() is a no-op with no data channel
@@ -3209,6 +3229,24 @@ function renderRoomSettingsPanel() {
   randomBtn.disabled = !isHost;
   selectBtn.disabled = !isHost;
 
+  // Timer only makes sense for an actual online private room - hotseat/vsBot
+  // share this same settings overlay but have no concept of a synced
+  // opponent clock, so the row is hidden rather than shown disabled.
+  const timerRow = document.getElementById('timerSettingRow');
+  timerRow.style.display = state.online ? '' : 'none';
+  if (state.online) {
+    const timerSeconds = settings.timerSeconds ?? null;
+    const timerButtons = [
+      [document.getElementById('timerNoneBtn'), null],
+      [document.getElementById('timer60Btn'), 60],
+      [document.getElementById('timer120Btn'), 120],
+    ];
+    for (const [btn, val] of timerButtons) {
+      btn.classList.toggle('active', timerSeconds === val);
+      btn.disabled = !isHost;
+    }
+  }
+
   const pickerPanel = document.getElementById('handPickerPanel');
   const selecting = settings.handMode === 'select';
   pickerPanel.style.display = selecting ? 'flex' : 'none';
@@ -3245,10 +3283,25 @@ document.getElementById('handModeSelectBtn').addEventListener('click', () => {
   render();
 });
 
+function setRoomTimerChoice(seconds) {
+  if (!isGameSetupController()) return;
+  state.roomSettings.timerSeconds = seconds;
+  broadcastRoomSettings();
+  render();
+}
+
+document.getElementById('timerNoneBtn').addEventListener('click', () => setRoomTimerChoice(null));
+document.getElementById('timer60Btn').addEventListener('click', () => setRoomTimerChoice(60));
+document.getElementById('timer120Btn').addEventListener('click', () => setRoomTimerChoice(120));
+
 document.getElementById('startPrivateGameBtn').addEventListener('click', () => {
   if (!isGameSetupController()) return;
   if (state.roomSettings.handMode === 'select' && !isHandSelectionValid()) return;
   const handOverride = state.roomSettings.handMode === 'select' ? buildHandFromCounts(state.roomHandCounts) : undefined;
+  // Only ever a real choice for an online private room - hotseat/vsBot never
+  // show the timer row (see renderRoomSettingsPanel()), so this stays null
+  // (untimed) for them, same as before this feature existed.
+  state.privateTimerSeconds = state.roomSettings.timerSeconds ?? null;
   newGame(undefined, undefined, undefined, handOverride);
 });
 

@@ -166,6 +166,19 @@ const state = {
   turnDeadline: null, // epoch ms when the current online turn times out (casual/ranked only)
   lastTapCell: null,  // touch only: last cell tapped on the board, for tap-to-preview/tap-again-to-confirm
   scoringCells: null, // [{index, owner}] - set once the game ends, for the scoring-square dots
+
+  // Private-room pre-game setup (see renderRoomSettingsPanel() below). Only
+  // meaningful while state.gameMode === 'private' and no game is running yet
+  // (the moment between both peers connecting - or the host clicking New
+  // Game for a rematch - and the game actually starting). Only the host's
+  // choices matter; the joiner's copies are just a synced read-only mirror
+  // (see the 'room-settings' message). Structured as a settings object plus
+  // a room for future per-piece-type state, rather than one hand-specific
+  // flag, so future private-room toggles/modes have an obvious place to
+  // add their own fields alongside handMode without a rework.
+  awaitingRoomStart: false,
+  roomSettings: { handMode: 'random' }, // handMode: 'random' | 'select'
+  roomHandCounts: {}, // shapeName -> count, only used while handMode === 'select'
 };
 
 function snapshotState() {
@@ -499,7 +512,7 @@ function drawHand() {
   ];
 }
 
-function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase) {
+function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase, localHandOverride) {
   const isRemote = remoteHand !== undefined;
 
   if (state.connecting && !isRemote) return;
@@ -508,6 +521,10 @@ function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase) {
     log('Only the host can start a new game - ask them to click New Game.');
     return;
   }
+
+  // A game actually starting (locally or via the incoming 'newgame')
+  // always supersedes any pending private-room settings step.
+  state.awaitingRoomStart = false;
 
   // A rematch of THIS room/match - cancel the previous game's endGame()'s
   // deferred Net.leaveRoom() (see its comment in net.js) so the room and
@@ -535,7 +552,7 @@ function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase) {
 
   state.gameStarted = true;
   state.board = new Int8Array(BOARD_SIZE * BOARD_SIZE);
-  const hand = remoteHand || drawHand();
+  const hand = remoteHand || localHandOverride || drawHand();
   state.hand1 = [...hand];
   state.hand2 = [...hand];
   state.initialHand = [...hand];
@@ -595,8 +612,21 @@ function requestNewGame() {
   // conclusion and can never be recorded (no winner was ever decided).
   if (state.connecting || !state.gameStarted || !state.gameOver) return;
 
-  if (!state.online || (state.gameMode !== 'casual' && state.gameMode !== 'ranked')) {
+  if (!state.online) {
     newGame();
+    return;
+  }
+
+  if (state.gameMode === 'private') {
+    // newGame() already logs and bails for a non-host, but that would skip
+    // straight past the settings panel entirely - check here too so a
+    // joiner clicking New Game gets the same explanation instead of nothing
+    // visibly happening.
+    if (!Net.isHost) {
+      log('Only the host can start a new game - ask them to click New Game.');
+      return;
+    }
+    beginPrivateRoomSetup();
     return;
   }
 
@@ -2100,6 +2130,7 @@ function updateLobbyGameVisibility() {
 
 function render() {
   updateLobbyGameVisibility();
+  renderRoomSettingsPanel();
   drawBoard();
 
   const banner = document.getElementById('turnBanner');
@@ -2166,7 +2197,7 @@ function render() {
   canvas.classList.toggle('placing', !!state.selected && !state.gameOver);
 
   document.getElementById('rotateBtn').disabled = state.connecting || !state.gameStarted;
-  document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted || !state.gameOver || state.pendingNewGameRequest;
+  document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted || !state.gameOver || state.pendingNewGameRequest || state.awaitingRoomStart;
   document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
     || state.history.length === 0 || state.pendingUndoRequest;
   const tooEarlyToPass = state.gameStarted && !state.gameOver && !canVoluntarilyPass();
@@ -2844,7 +2875,9 @@ function handleNetReady() {
     titleId: myProfile ? myProfile.title_id : null,
   });
 
-  if (Net.isHost) {
+  if (state.gameMode === 'private' && Net.isHost) {
+    beginPrivateRoomSetup();
+  } else if (Net.isHost) {
     newGame();
   } else {
     render();
@@ -2882,6 +2915,14 @@ function isExpectedNextAction(seq) {
 function handleNetDataInner(msg) {
   if (msg.type === 'newgame') {
     newGame(msg.hand, msg.gameSequence, msg.hostIsPlayerOneBase);
+  } else if (msg.type === 'room-settings') {
+    // Host-authoritative mirror - see beginPrivateRoomSetup()'s comment.
+    // Sent both to kick off the settings step and on every change the host
+    // makes while it's open, so this is just "adopt whatever they sent."
+    state.awaitingRoomStart = true;
+    state.roomSettings = msg.settings;
+    state.roomHandCounts = msg.handCounts;
+    render();
   } else if (msg.type === 'move') {
     if (!isExpectedNextAction(msg.seq)) { requestResync(); return; }
     commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true, msg.t, !!msg.autoTimeout);
@@ -3048,6 +3089,156 @@ document.getElementById('createRoomBtn').addEventListener('click', () => {
   const code = generatePrivateRoomCode();
   document.getElementById('roomInput').value = code;
   connectToPrivateRoom(code);
+});
+
+// ---------- Private room pre-game settings ----------
+// Entered whenever a private room's game is about to (re)start - both the
+// very first game (from handleNetReady()) and every rematch (from
+// requestNewGame(), since private rooms let the host restart instantly
+// with no opponent confirmation, unlike casual/ranked's request/response
+// flow). Only the host calls this; the joiner never triggers it locally,
+// it just reacts to the host's broadcast below, which keeps the "who's
+// allowed to configure/start" rule in exactly one place.
+function beginPrivateRoomSetup() {
+  state.awaitingRoomStart = true;
+  state.roomSettings = { handMode: 'random' };
+  state.roomHandCounts = {};
+  render();
+  broadcastRoomSettings();
+}
+
+// Full-snapshot broadcast (settings + counts) rather than incremental
+// diffs - the payload is tiny and this way the joiner's mirrored view can
+// never drift out of sync with the host's, no matter which message
+// happens to arrive first or get missed.
+function broadcastRoomSettings() {
+  Net.send({ type: 'room-settings', settings: state.roomSettings, handCounts: state.roomHandCounts });
+}
+
+function isHandSelectionValid() {
+  const total = (names) => names.reduce((sum, n) => sum + (state.roomHandCounts[n] || 0), 0);
+  return total(PENTOMINO_NAMES) === HAND_COMPOSITION.pentomino
+    && total(TETROMINO_NAMES) === HAND_COMPOSITION.tetromino
+    && total(TROMINO_NAMES) === HAND_COMPOSITION.tromino;
+}
+
+function buildHandFromCounts(counts) {
+  const hand = [];
+  for (const name of Object.keys(counts)) {
+    for (let i = 0; i < counts[name]; i++) hand.push(name);
+  }
+  return hand;
+}
+
+function adjustHandCount(name, delta) {
+  if (!Net.isHost) return;
+  const next = (state.roomHandCounts[name] || 0) + delta;
+  if (next < 0) return;
+  state.roomHandCounts[name] = next;
+  broadcastRoomSettings();
+  render();
+}
+
+function renderHandPickerCategory(gridId, countLabelId, names, required) {
+  const isHost = Net.isHost;
+  const total = names.reduce((sum, n) => sum + (state.roomHandCounts[n] || 0), 0);
+  const countLabel = document.getElementById(countLabelId);
+  countLabel.textContent = `${total}/${required}`;
+  countLabel.classList.toggle('complete', total === required);
+
+  const grid = document.getElementById(gridId);
+  grid.innerHTML = '';
+  for (const name of names) {
+    const count = state.roomHandCounts[name] || 0;
+    const tile = document.createElement('div');
+    tile.className = 'hand-picker-tile';
+
+    const iconCanvas = document.createElement('canvas');
+    drawShapeIcon(iconCanvas, BASE_SHAPES[name]);
+    tile.appendChild(iconCanvas);
+
+    const stepper = document.createElement('div');
+    stepper.className = 'hand-picker-stepper';
+    const minusBtn = document.createElement('button');
+    minusBtn.type = 'button';
+    minusBtn.textContent = '−';
+    minusBtn.disabled = !isHost || count === 0;
+    minusBtn.addEventListener('click', () => adjustHandCount(name, -1));
+    const countSpan = document.createElement('span');
+    countSpan.textContent = count;
+    const plusBtn = document.createElement('button');
+    plusBtn.type = 'button';
+    plusBtn.textContent = '+';
+    plusBtn.disabled = !isHost || total >= required;
+    plusBtn.addEventListener('click', () => adjustHandCount(name, 1));
+    stepper.append(minusBtn, countSpan, plusBtn);
+    tile.appendChild(stepper);
+
+    grid.appendChild(tile);
+  }
+}
+
+// Called every render() - cheap and idempotent, same reasoning as
+// updateLobbyGameVisibility() - rather than threading a call into every
+// spot that can change state.awaitingRoomStart/roomSettings/roomHandCounts.
+function renderRoomSettingsPanel() {
+  const overlay = document.getElementById('roomSettingsOverlay');
+  if (!overlay) return;
+
+  const show = state.online && state.gameMode === 'private' && state.awaitingRoomStart;
+  overlay.style.display = show ? 'flex' : 'none';
+  if (!show) return;
+
+  const isHost = Net.isHost;
+  const settings = state.roomSettings;
+  const randomBtn = document.getElementById('handModeRandomBtn');
+  const selectBtn = document.getElementById('handModeSelectBtn');
+  randomBtn.classList.toggle('active', settings.handMode !== 'select');
+  selectBtn.classList.toggle('active', settings.handMode === 'select');
+  randomBtn.disabled = !isHost;
+  selectBtn.disabled = !isHost;
+
+  const pickerPanel = document.getElementById('handPickerPanel');
+  const selecting = settings.handMode === 'select';
+  pickerPanel.style.display = selecting ? 'flex' : 'none';
+  if (selecting) {
+    renderHandPickerCategory('pentominoPicker', 'pentominoCount', PENTOMINO_NAMES, HAND_COMPOSITION.pentomino);
+    renderHandPickerCategory('tetrominoPicker', 'tetrominoCount', TETROMINO_NAMES, HAND_COMPOSITION.tetromino);
+    renderHandPickerCategory('trominoPicker', 'trominoCount', TROMINO_NAMES, HAND_COMPOSITION.tromino);
+  }
+
+  const startBtn = document.getElementById('startPrivateGameBtn');
+  const statusEl = document.getElementById('roomSettingsStatus');
+  if (isHost) {
+    const valid = !selecting || isHandSelectionValid();
+    startBtn.style.display = '';
+    startBtn.disabled = !valid;
+    statusEl.textContent = valid ? '' : 'Pick the exact number of pieces in each category to continue.';
+  } else {
+    startBtn.style.display = 'none';
+    statusEl.textContent = 'Waiting for the host to configure and start the game…';
+  }
+}
+
+document.getElementById('handModeRandomBtn').addEventListener('click', () => {
+  if (!Net.isHost) return;
+  state.roomSettings.handMode = 'random';
+  broadcastRoomSettings();
+  render();
+});
+
+document.getElementById('handModeSelectBtn').addEventListener('click', () => {
+  if (!Net.isHost) return;
+  state.roomSettings.handMode = 'select';
+  broadcastRoomSettings();
+  render();
+});
+
+document.getElementById('startPrivateGameBtn').addEventListener('click', () => {
+  if (!Net.isHost) return;
+  if (state.roomSettings.handMode === 'select' && !isHandSelectionValid()) return;
+  const handOverride = state.roomSettings.handMode === 'select' ? buildHandFromCounts(state.roomHandCounts) : undefined;
+  newGame(undefined, undefined, undefined, handOverride);
 });
 
 function startQueue(queueType) {

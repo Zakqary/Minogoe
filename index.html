@@ -82,7 +82,7 @@
           <div class="online-status" id="onlineStatus">Not connected.</div>
         </div>
 
-        <div class="online-option online-option-direct">
+        <div class="online-option online-option-direct" id="directConnectCard">
           <div class="online-option-header">
             <div class="online-option-label">Direct Connect</div>
             <button id="createRoomBtn">Create Room</button>
@@ -219,6 +219,49 @@
           <input id="chatInput" type="text" placeholder="Say something..." maxlength="200">
           <button id="chatSendBtn">Send</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shown as an overlay (over the lobby for a private room's first game,
+       or over the finished board for a private-room rematch) once both
+       players are in the room and a game is about to (re)start - see
+       game.js's renderRoomSettingsPanel(). Only the host's controls are
+       interactive; the joiner sees a read-only mirror of whatever the host
+       picks. Hand selection is the first private-room toggle - built as a
+       labeled row inside this panel rather than a one-off control so future
+       toggles/modes can be added here the same way without restructuring
+       anything. -->
+  <div class="room-settings-overlay" id="roomSettingsOverlay" style="display:none;">
+    <div class="room-settings-panel" id="roomSettingsPanel">
+      <div class="room-settings-title">Room Settings</div>
+
+      <div class="room-setting-row">
+        <span class="room-setting-name">Hand</span>
+        <div class="mode-buttons room-setting-toggle">
+          <button type="button" class="mode-btn active" id="handModeRandomBtn">Random</button>
+          <button type="button" class="mode-btn" id="handModeSelectBtn">Select</button>
+        </div>
+      </div>
+
+      <div class="hand-picker-panel" id="handPickerPanel" style="display:none;">
+        <div class="hand-picker-category">
+          <div class="hand-picker-category-label"><span>Pentominoes</span><span id="pentominoCount">0/7</span></div>
+          <div class="hand-picker-grid" id="pentominoPicker"></div>
+        </div>
+        <div class="hand-picker-category">
+          <div class="hand-picker-category-label"><span>Tetrominoes</span><span id="tetrominoCount">0/2</span></div>
+          <div class="hand-picker-grid" id="tetrominoPicker"></div>
+        </div>
+        <div class="hand-picker-category">
+          <div class="hand-picker-category-label"><span>Tromino</span><span id="trominoCount">0/1</span></div>
+          <div class="hand-picker-grid" id="trominoPicker"></div>
+        </div>
+      </div>
+
+      <div class="room-settings-footer">
+        <div class="room-settings-status" id="roomSettingsStatus"></div>
+        <button type="button" id="startPrivateGameBtn">Start Game</button>
       </div>
     </div>
   </div>

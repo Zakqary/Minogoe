@@ -1325,6 +1325,144 @@ h2, h3 {
 }
 .join-line input { flex: 1; min-width: 0; }
 
+/* ---------- Private room settings (pre-game, host-configured) ----------
+   An overlay (same fixed/inset/z-index approach as .match-intro-overlay)
+   rather than a panel embedded in the lobby, since it needs to show for
+   BOTH the room's first game (lobby still visible, no game yet) and every
+   rematch (the finished board still visible in #gameView, which stays
+   the active view - state.gameStarted only flips false once a new game
+   actually begins). An overlay works identically over either backdrop. */
+.room-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 8, 14, 0.72);
+}
+
+.room-settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 380px;
+  max-height: 85vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 22px 24px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.room-settings-title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.room-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.room-setting-name {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.room-setting-toggle { flex: 0 0 auto; width: 160px; }
+
+.hand-picker-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.hand-picker-category-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.hand-picker-category-label span:last-child {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.hand-picker-category-label span:last-child.complete {
+  color: var(--accent-hover);
+}
+
+.hand-picker-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hand-picker-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface-2);
+  border-radius: 7px;
+  padding: 5px;
+}
+
+.hand-picker-stepper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hand-picker-stepper button {
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.hand-picker-stepper button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-hover); }
+.hand-picker-stepper button:disabled { opacity: 0.35; cursor: default; }
+
+.hand-picker-stepper span {
+  min-width: 14px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.room-settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.room-settings-status {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
 .panel-row {
   position: relative;
   z-index: 1;

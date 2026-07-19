@@ -1463,6 +1463,32 @@ h2, h3 {
   color: var(--text-faint);
 }
 
+#startPrivateGameBtn {
+  flex-shrink: 0;
+  padding: 9px 18px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #211505;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font-body);
+}
+
+#startPrivateGameBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+#startPrivateGameBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
 .panel-row {
   position: relative;
   z-index: 1;

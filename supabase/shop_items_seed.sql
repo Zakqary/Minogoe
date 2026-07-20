@@ -70,8 +70,7 @@ on conflict (id) do update set
 -- Retired items - ids listed here (and removed from the insert above) are
 -- actually removed from the shop. Add ids as you retire things.
 delete from public.shop_items where id in (
-  'avatar_example',
-  'title_champion'
+  'avatar_example'
 );
 
 -- Restricted items - hidden = true keeps an item out of everyone's shop
@@ -81,7 +80,11 @@ delete from public.shop_items where id in (
 -- normally from their own shop page - it just won't show up for anyone
 -- else, and no one else can buy it.
 insert into public.shop_items (id, type, name, price, title_text, color, hidden) values
-  ('title_admin', 'title', 'Admin', 0, 'Admin', '#e04545', true)
+  ('title_admin', 'title', 'Admin', 0, 'Admin', '#e04545', true),
+  -- July 2026 tournament champion. title_champion was only ever a
+  -- retired placeholder before this (see git history) - reused here for
+  -- the real prize instead of minting a new id.
+  ('title_champion', 'title', 'Champion', 0, 'Champion', '#ffcc33', true)
 on conflict (id) do update set
   name = excluded.name,
   title_text = excluded.title_text,
@@ -90,6 +93,10 @@ on conflict (id) do update set
 
 insert into public.user_inventory (user_id, item_id)
 select id, 'title_admin' from public.profiles where username = 'AVNJ'
+on conflict (user_id, item_id) do nothing;
+
+insert into public.user_inventory (user_id, item_id)
+select id, 'title_champion' from public.profiles where username = 'pico'
 on conflict (user_id, item_id) do nothing;
 
 -- Mino gift pool - hidden = true keeps these out of the shop just like the

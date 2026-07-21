@@ -4637,6 +4637,8 @@ alter table public.games add column if not exists board_shape text;
 create table if not exists public.ffa_games (
   id uuid primary key default gen_random_uuid(),
   board_size integer not null,
+  initial_hand jsonb,
+  move_log jsonb,
   started_at timestamptz not null default now(),
   ended_at timestamptz not null default now(),
   -- True when the host disconnected and never reconnected within its grace
@@ -4726,7 +4728,9 @@ create or replace function public.submit_ffa_result(
   p_board_size integer,
   p_started_at timestamptz,
   p_abandoned boolean,
-  p_seats jsonb -- array of {seat, player_id, score, rank} - rank null for an abandoned match
+  p_seats jsonb, -- array of {seat, player_id, score, rank} - rank null for an abandoned match
+  p_initial_hand jsonb default null,
+  p_move_log jsonb default null
 )
 returns uuid
 language plpgsql
@@ -4750,8 +4754,8 @@ begin
     raise exception 'Not authorized: caller was not a participant in this match';
   end if;
 
-  insert into public.ffa_games (board_size, started_at, abandoned, client_match_id)
-  values (p_board_size, p_started_at, coalesce(p_abandoned, false), p_client_match_id)
+  insert into public.ffa_games (board_size, initial_hand, move_log, started_at, abandoned, client_match_id)
+  values (p_board_size, p_initial_hand, p_move_log, p_started_at, coalesce(p_abandoned, false), p_client_match_id)
   on conflict (client_match_id) do nothing
   returning id into v_game_id;
 

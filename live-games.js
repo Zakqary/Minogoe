@@ -19,6 +19,7 @@ function liveGamesModeLabel(mode) {
   if (mode === 'ranked') return 'Ranked';
   if (mode === 'casual') return 'Casual';
   if (mode === 'private') return 'Direct Connect';
+  if (mode === 'ffa') return 'Free-For-All';
   return mode || '';
 }
 
@@ -45,22 +46,32 @@ async function refreshLiveGames() {
     return;
   }
 
-  // Net.matchId is this tab's own currently-connected match (if any) - a
-  // player is never a WebRTC peer AND a spectator of the same match at
-  // once, so their own live row gets no Spectate link. Compared by
-  // matchId (not username) so it only ever affects the one match this tab
-  // is actually in, never a coincidence of two other players sharing a
+  // Net.matchId/NetFfa.matchId is this tab's own currently-connected match
+  // (if any) - a player is never a WebRTC peer AND a spectator of the same
+  // match at once, so their own live row gets no Spectate link. Compared
+  // by matchId (not username) so it only ever affects the one match this
+  // tab is actually in, never a coincidence of two other players sharing a
   // display name.
   const myMatchId = (typeof Net !== 'undefined' && Net.matchId) || null;
+  const myFfaMatchId = (typeof NetFfa !== 'undefined' && NetFfa.matchId) || null;
 
   const rows = games.map((g) => {
-    const isMine = myMatchId && g.matchId === myMatchId;
+    const isFfaRow = g.mode === 'ffa';
+    const isMine = isFfaRow
+      ? (myFfaMatchId && g.matchId === myFfaMatchId)
+      : (myMatchId && g.matchId === myMatchId);
+    const spectateUrl = isFfaRow
+      ? `spectate.html?ffa=${encodeURIComponent(g.matchId)}`
+      : `spectate.html?match=${encodeURIComponent(g.matchId)}`;
     const action = isMine
       ? '<span class="live-game-mine">Your game</span>'
-      : `<a href="spectate.html?match=${encodeURIComponent(g.matchId)}">Spectate</a>`;
+      : `<a href="${spectateUrl}">Spectate</a>`;
+    const playersText = isFfaRow
+      ? (g.players || []).map((p) => escapeHtml(liveGamesPlayerName(p))).join(', ')
+      : `${escapeHtml(liveGamesPlayerName(g.player1))} <span class="live-game-vs">vs</span> ${escapeHtml(liveGamesPlayerName(g.player2))}`;
     return `
     <div class="live-game-row">
-      <div class="live-game-players">${escapeHtml(liveGamesPlayerName(g.player1))} <span class="live-game-vs">vs</span> ${escapeHtml(liveGamesPlayerName(g.player2))}</div>
+      <div class="live-game-players">${playersText}</div>
       <div class="live-game-meta">
         <span>${escapeHtml(liveGamesModeLabel(g.mode))} &middot; move ${Number(g.moveCount) || 0}</span>
         ${action}

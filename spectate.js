@@ -117,6 +117,14 @@ let player1 = null;
 let player2 = null;
 let status = 'connecting'; // connecting | not-found | full | live | ended
 let ws = null;
+// Set once, at connect time, from which URL param was present (?match= vs
+// ?ffa=) - never both. playerCount/players[] mirror game.js's own ffa
+// shape; player1/player2 above stay exactly as before and are simply
+// unused whenever isFfa is true.
+let isFfa = false;
+let playerCount = 2;
+let players = [null, null, null, null]; // ffa only, seat-indexed
+const PLAYER_COLORS = ['#5b7fd9', '#d97a52', '#7ec982', '#c96bd6'];
 
 function idxOf(r, c) { return r * boardSize + c; }
 
@@ -145,9 +153,13 @@ const HANDICAP_POINTS = 0.5;
 // need to transmit startingPlayer at all just to re-derive this.
 const HANDICAP_PLAYER = 2;
 
+// score3/score4 are always computed (the flood-fill/borderOwners core is
+// owner-count-agnostic) but only ever non-zero when isFfa - the 2-player
+// caller just ignores them, same generalization game.js's own
+// computeFinalScores() uses.
 function computeScores() {
   const visited = new Uint8Array(boardSize * boardSize);
-  let score1 = 0, score2 = 0, undecided = 0;
+  let score1 = 0, score2 = 0, score3 = 0, score4 = 0, undecided = 0;
   for (let i = 0; i < board.length; i++) {
     if (board[i] === 0 && !visited[i] && !voidMask[i]) {
       const regionCells = [i];
@@ -172,15 +184,20 @@ function computeScores() {
       }
       if (borderOwners.size === 1) {
         const owner = [...borderOwners][0];
-        if (owner === 1) score1 += regionCells.length; else score2 += regionCells.length;
+        if (owner === 1) score1 += regionCells.length;
+        else if (owner === 2) score2 += regionCells.length;
+        else if (owner === 3) score3 += regionCells.length;
+        else score4 += regionCells.length;
       } else {
         undecided += regionCells.length;
       }
     }
   }
   return {
-    score1: score1 + (HANDICAP_PLAYER === 1 ? HANDICAP_POINTS : 0),
-    score2: score2 + (HANDICAP_PLAYER === 2 ? HANDICAP_POINTS : 0),
+    score1: score1 + (!isFfa && HANDICAP_PLAYER === 1 ? HANDICAP_POINTS : 0),
+    score2: score2 + (!isFfa && HANDICAP_PLAYER === 2 ? HANDICAP_POINTS : 0),
+    score3,
+    score4,
     undecided,
   };
 }
@@ -190,6 +207,13 @@ function renderScore() {
   if (!board) { el.textContent = ''; return; }
   const s = computeScores();
   const label = status === 'ended' ? 'Final' : 'Projected';
+  if (isFfa) {
+    const chips = [1, 2, 3, 4]
+      .map((p) => `<span class="projected-value projected-p${p}">P${p} ${s[`score${p}`]}</span>`)
+      .join('');
+    el.innerHTML = `<span class="projected-label">${label}</span>${chips}<span class="projected-undecided">${s.undecided} undecided</span>`;
+    return;
+  }
   el.innerHTML = `
     <span class="projected-label">${label}</span>
     <span class="projected-value projected-p1">P1 ${s.score1}</span>
@@ -199,14 +223,13 @@ function renderScore() {
 }
 
 function handsNow() {
-  const hand1 = [...initialHand];
-  const hand2 = [...initialHand];
+  const hands = Array.from({ length: playerCount }, () => [...initialHand]);
   for (const mv of moveLog) {
-    const hand = mv.player === 1 ? hand1 : hand2;
+    const hand = hands[mv.player - 1];
     const pos = hand.indexOf(mv.shapeName);
     if (pos !== -1) hand.splice(pos, 1);
   }
-  return { hand1, hand2 };
+  return hands;
 }
 
 function drawShapeIcon(canvasEl, coords) {
@@ -248,9 +271,8 @@ function renderHand(elId, hand) {
 }
 
 function renderHands() {
-  const { hand1, hand2 } = handsNow();
-  renderHand('hand1', hand1);
-  renderHand('hand2', hand2);
+  const hands = handsNow();
+  for (let p = 1; p <= playerCount; p++) renderHand(`hand${p}`, hands[p - 1]);
 }
 
 function drawBoard() {
@@ -271,7 +293,7 @@ function drawBoard() {
         continue;
       }
       const val = board[cellIdx];
-      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
+      ctx.fillStyle = val === 0 ? '#1e1b24' : PLAYER_COLORS[val - 1];
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
       ctx.strokeRect(c * CELL_PX + 0.5, r * CELL_PX + 0.5, CELL_PX - 1, CELL_PX - 1);
     }
@@ -297,6 +319,22 @@ function renderMeta() {
     return;
   }
 
+  const statusText = status === 'ended' ? 'Game over' : 'Live';
+
+  if (isFfa) {
+    const names = players.map((p, i) => playerDisplayName(p, i + 1));
+    const html = players
+      .map((p, i) => (p
+        ? `${avatarHtml(p.avatarId, 20)} <strong style="color:${PLAYER_COLORS[i]}">${escapeHtml(names[i])}</strong> ${titleBadgeHtml(p.titleId)}`
+        : `<strong style="color:${PLAYER_COLORS[i]}">${escapeHtml(names[i])}</strong>`))
+      .join(' vs ');
+    el.innerHTML = `
+      <div>${html}</div>
+      <div>Mode: free-for-all &middot; <strong>${statusText}</strong></div>
+    `;
+    return;
+  }
+
   const p1Name = playerDisplayName(player1, 1);
   const p2Name = playerDisplayName(player2, 2);
   const p1Html = player1
@@ -305,7 +343,6 @@ function renderMeta() {
   const p2Html = player2
     ? `${avatarHtml(player2.avatarId, 20)} <strong>${escapeHtml(p2Name)}</strong> ${titleBadgeHtml(player2.titleId)}`
     : `<strong>${escapeHtml(p2Name)}</strong>`;
-  const statusText = status === 'ended' ? 'Game over' : 'Live';
 
   el.innerHTML = `
     <div>${p1Html} (Player 1, blue) vs ${p2Html} (Player 2, red)</div>
@@ -324,44 +361,60 @@ function renderAll() {
 
 function resetGameState(msg) {
   boardSize = msg.boardSize || 12;
-  boardShape = msg.boardShape || null;
-  const shapeMaskFn = boardShape && BOARD_SHAPES[boardShape];
-  voidMask = shapeMaskFn ? shapeMaskFn(boardSize) : new Uint8Array(boardSize * boardSize);
+  if (isFfa) {
+    playerCount = 4;
+    boardShape = null;
+    voidMask = new Uint8Array(boardSize * boardSize); // ffa never uses a custom board shape
+    players = msg.players || [null, null, null, null];
+    document.getElementById('handBlock3').classList.remove('ffa-only');
+    document.getElementById('handBlock4').classList.remove('ffa-only');
+  } else {
+    boardShape = msg.boardShape || null;
+    const shapeMaskFn = boardShape && BOARD_SHAPES[boardShape];
+    voidMask = shapeMaskFn ? shapeMaskFn(boardSize) : new Uint8Array(boardSize * boardSize);
+    player1 = msg.player1 || null;
+    player2 = msg.player2 || null;
+    mode = msg.mode || null;
+  }
   initialHand = msg.initialHand || [];
   moveLog = msg.moveLog || [];
-  player1 = msg.player1 || null;
-  player2 = msg.player2 || null;
-  mode = msg.mode || null;
   status = 'live';
 }
 
 function handleSpectateMessage(msg) {
-  if (msg.type === 'spectate-not-found') {
+  // ffa- prefixed message types carry the exact same payload shape as
+  // their 2-player equivalents (just a `players` array instead of
+  // player1/player2, handled inside resetGameState()) - normalizing the
+  // type here means the rest of this function doesn't need to know which
+  // protocol it came from.
+  const type = msg.type.startsWith('ffa-spectate') ? msg.type.slice(4) : msg.type;
+
+  if (type === 'spectate-not-found') {
     status = 'not-found';
     renderMeta();
     return;
   }
-  if (msg.type === 'spectate-full') {
+  if (type === 'spectate-full') {
     status = 'full';
     renderMeta();
     return;
   }
-  if (msg.type === 'spectate-snapshot') {
+  if (type === 'spectate-snapshot') {
     resetGameState(msg);
     renderAll();
     return;
   }
-  if (msg.type === 'spectate-reset') {
+  if (type === 'spectate-reset') {
     resetGameState({ ...msg, moveLog: [] });
     renderAll();
     return;
   }
-  if (msg.type === 'spectate-move') {
+  if (type === 'spectate-move') {
     moveLog.push({ player: msg.player, shapeName: msg.shapeName, orientationIndex: msg.orientationIndex, r0: msg.r0, c0: msg.c0, t: msg.t });
     renderAll();
     return;
   }
-  if (msg.type === 'spectate-ended') {
+  if (type === 'spectate-ended') {
     status = 'ended';
     renderMeta();
     renderScore(); // flips the label from "Projected" to "Final"
@@ -371,7 +424,8 @@ function handleSpectateMessage(msg) {
 
 function connectSpectator() {
   const params = new URLSearchParams(location.search);
-  const matchId = params.get('match');
+  const matchId = params.get('match') || params.get('ffa');
+  isFfa = !params.get('match') && !!params.get('ffa');
   const metaEl = document.getElementById('spectateMeta');
 
   if (!matchId) {
@@ -387,7 +441,7 @@ function connectSpectator() {
   }
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'spectate-join', matchId }));
+    ws.send(JSON.stringify({ type: isFfa ? 'ffa-spectate-join' : 'spectate-join', matchId }));
   };
   ws.onmessage = (e) => {
     let msg;

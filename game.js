@@ -1958,6 +1958,8 @@ async function recordFfaGameResult(abandoned) {
     p_started_at: state.gameStartedAt,
     p_abandoned: abandoned,
     p_seats: seatsPayload,
+    p_initial_hand: state.initialHand,
+    p_move_log: state.moveLog,
   });
   if (error) {
     if (error.code !== '23505') log('Could not save FFA game result: ' + error.message);

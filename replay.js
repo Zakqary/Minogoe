@@ -116,6 +116,11 @@ let board = null;
 let stepIndex = 0;
 let playTimer = null;
 let gameStartedAtMs = null;
+// 2 for every normal game; 4 for an FFA game (see loadReplay()'s ?ffa=
+// branch) - board fill color per player number, matching game.js's own
+// PLAYER_COLORS/--p1..--p4 exactly.
+let playerCount = 2;
+const PLAYER_COLORS = ['#5b7fd9', '#d97a52', '#7ec982', '#c96bd6'];
 
 function idxOf(r, c) { return r * boardSize + c; }
 
@@ -130,18 +135,18 @@ function applyMovesUpTo(n) {
   }
 }
 
-// Both players start with an identical copy of initialHand - a player's
-// remaining hand at step n is that copy minus whatever they've placed so far.
+// Every player starts with an identical copy of initialHand - a player's
+// remaining hand at step n is that copy minus whatever they've placed so
+// far. Returns an array indexed [player - 1], length playerCount.
 function handsUpTo(n) {
-  const hand1 = [...initialHand];
-  const hand2 = [...initialHand];
+  const hands = Array.from({ length: playerCount }, () => [...initialHand]);
   for (let i = 0; i < n; i++) {
     const mv = moveLog[i];
-    const hand = mv.player === 1 ? hand1 : hand2;
+    const hand = hands[mv.player - 1];
     const pos = hand.indexOf(mv.shapeName);
     if (pos !== -1) hand.splice(pos, 1);
   }
-  return { hand1, hand2 };
+  return hands;
 }
 
 function drawShapeIcon(canvasEl, coords) {
@@ -183,9 +188,8 @@ function renderHand(elId, hand) {
 }
 
 function renderHands() {
-  const { hand1, hand2 } = handsUpTo(stepIndex);
-  renderHand('hand1', hand1);
-  renderHand('hand2', hand2);
+  const hands = handsUpTo(stepIndex);
+  for (let p = 1; p <= playerCount; p++) renderHand(`hand${p}`, hands[p - 1]);
 }
 
 function drawBoard() {
@@ -206,7 +210,7 @@ function drawBoard() {
         continue;
       }
       const val = board[cellIdx];
-      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
+      ctx.fillStyle = val === 0 ? '#1e1b24' : PLAYER_COLORS[val - 1];
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
       ctx.strokeRect(c * CELL_PX + 0.5, r * CELL_PX + 0.5, CELL_PX - 1, CELL_PX - 1);
     }
@@ -275,7 +279,7 @@ function drawTimingChart() {
     const isCurrent = i === stepIndex - 1;
 
     ctx.globalAlpha = isCurrent ? 1 : 0.7;
-    ctx.fillStyle = d.player === 1 ? '#5b7fd9' : '#d97a52';
+    ctx.fillStyle = PLAYER_COLORS[d.player - 1];
     ctx.fillRect(0, y, barW, barH);
     ctx.globalAlpha = 1;
 
@@ -340,15 +344,87 @@ function togglePlay() {
   }, 400);
 }
 
+function setFfaHandBlocksVisible(visible) {
+  document.getElementById('handBlock3').classList.toggle('ffa-only', !visible);
+  document.getElementById('handBlock4').classList.toggle('ffa-only', !visible);
+}
+
+async function loadFfaReplay(gameId, metaEl) {
+  const { data, error } = await supabaseClient
+    .from('ffa_games')
+    .select('*, ffa_game_players(seat, score, rank, profiles:player_id(username))')
+    .eq('id', gameId)
+    .single();
+
+  if (error || !data) {
+    metaEl.textContent = 'Could not load this game.';
+    return;
+  }
+  if (!data.move_log || !data.initial_hand || data.move_log.length === 0) {
+    metaEl.textContent = data.abandoned
+      ? 'This match was abandoned (the host disconnected) before any moves were recorded.'
+      : 'This game has no replay data available.';
+    return;
+  }
+
+  playerCount = 4;
+  boardSize = data.board_size;
+  voidMask = new Uint8Array(boardSize * boardSize); // ffa never uses a custom board shape
+  moveLog = data.move_log;
+  initialHand = data.initial_hand;
+  gameStartedAtMs = new Date(data.started_at).getTime();
+  stepIndex = 0;
+  board = new Int8Array(boardSize * boardSize);
+  setFfaHandBlocksVisible(true);
+
+  // ffa_game_players isn't guaranteed to come back seat-ordered.
+  const bySeat = [0, 1, 2, 3].map((seat) => (data.ffa_game_players || []).find((p) => p.seat === seat));
+  const names = bySeat.map((p, i) => (p && p.profiles ? p.profiles.username : `Guest ${i + 1}`));
+
+  let resultText;
+  if (data.abandoned) {
+    resultText = 'Match abandoned (the host disconnected) - not scored.';
+  } else {
+    // Standard competition ranking, already computed and stored per seat -
+    // just group and sort by it for display (ties share a line).
+    const ranked = [...bySeat].filter(Boolean).sort((a, b) => a.rank - b.rank);
+    resultText = ranked.map((p, i) => `#${p.rank} ${names[bySeat.indexOf(p)]} (${p.score})`).join(', ');
+  }
+
+  metaEl.innerHTML = `
+    <div>${names.map((n, i) => `<strong style="color:${PLAYER_COLORS[i]}">${escapeHtml(n)}</strong>`).join(' vs ')}</div>
+    <div>Mode: free-for-all &middot; ${escapeHtml(resultText)}</div>
+    <div>${new Date(data.ended_at).toLocaleString()}</div>
+  `;
+
+  for (let p = 1; p <= 4; p++) {
+    document.getElementById(`handLabel${p}`).textContent = `${names[p - 1]}'s hand`;
+  }
+
+  drawBoard();
+  drawTimingChart();
+  updateStepInfo();
+  renderHands();
+}
+
 async function loadReplay() {
   const params = new URLSearchParams(location.search);
   const gameId = params.get('game');
+  const ffaGameId = params.get('ffa');
   const metaEl = document.getElementById('replayMeta');
 
-  if (!gameId) {
+  if (!gameId && !ffaGameId) {
     metaEl.textContent = 'No game specified. Open a replay link from a profile page.';
     return;
   }
+
+  if (ffaGameId) {
+    await loadFfaReplay(ffaGameId, metaEl);
+    return;
+  }
+
+  playerCount = 2;
+  setFfaHandBlocksVisible(false);
 
   const { data, error } = await supabaseClient
     .from('games')

@@ -68,7 +68,7 @@ async function renderProfilePage() {
   if (viewUserId) {
     const { data, error } = await supabaseClient
       .from('profiles')
-      .select('*, companion:companion_mino_id(id, color, rarity, modifier, stage, name)')
+      .select('*, companion:companion_mino_id(id, color, rarity, modifier, gradient, stage, name)')
       .eq('id', viewUserId)
       .single();
     if (error || !data) {

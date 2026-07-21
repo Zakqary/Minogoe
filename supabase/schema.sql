@@ -4777,3 +4777,42 @@ begin
   return v_game_id;
 end;
 $$;
+
+-- ---------- Phase 56: rare "gradient" Mino color variation ----------
+-- A 1-in-50 seed, rolled once at grant time alongside color/rarity/modifier
+-- (same chokepoint, grant_random_seed()) and never reachable afterward -
+-- dig_up_mino() resets stage/growth_progress only, same as coin_drop_rate
+-- and modifier before it. Purely cosmetic (a gradient fill instead of a
+-- flat color, see auth-ui.js's minoVisualHtml()) plus a flat +2 percentage
+-- points on coin_drop_rate, baked into the stored rate at roll time rather
+-- than re-derived on every read.
+alter table public.minos add column if not exists gradient boolean not null default false;
+
+create or replace function public.random_mino_gradient()
+returns boolean
+language sql
+as $$
+  select random() < 0.02;
+$$;
+
+create or replace function public.grant_random_seed(p_user_id uuid, p_seen boolean)
+returns uuid
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  new_id uuid;
+  rolled_rarity text := public.random_mino_rarity();
+  rolled_gradient boolean := public.random_mino_gradient();
+  rolled_coin_rate numeric := public.random_mino_coin_rate(rolled_rarity);
+begin
+  if rolled_gradient then
+    rolled_coin_rate := rolled_coin_rate + 2;
+  end if;
+
+  insert into public.minos (user_id, color, rarity, modifier, seen, coin_drop_rate, gradient)
+  values (p_user_id, public.random_mino_color(), rolled_rarity, public.random_mino_modifier(), p_seen, rolled_coin_rate, rolled_gradient)
+  returning id into new_id;
+  return new_id;
+end;
+$$;

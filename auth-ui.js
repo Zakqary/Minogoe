@@ -95,11 +95,20 @@ function minoRarityColor(rarity) {
   return MINO_RARITY_COLOR[rarity] || MINO_RARITY_COLOR.common;
 }
 
+// Unique per call (rather than keyed off mino.id, which isn't always present
+// on every shape a Mino gets passed around in - e.g. the FFA roster/replay
+// payloads) so two gradient Minos rendered on the same page (own + a
+// companion, or several players' scoreboard badges) never collide on the
+// same <linearGradient> id.
+let minoGradientIdCounter = 0;
+
 // A small procedural SVG "creature" rather than illustrated art - there's
 // no art pipeline for 10 colors x 5 rarities x 4 stages x 10 modifiers the
 // way avatars have one (those are hand-supplied image files). Stage
 // changes the silhouette (seed -> sprouting leaves -> eyes -> limbs);
 // rarity is a CSS glow applied around the shape via mino-rarity-<rarity>.
+// A 1-in-50 "gradient" Mino (mino.gradient) swaps the flat body/limb fill
+// for a shimmering gradient instead - see style.css's .mino-gradient.
 function minoVisualHtml(mino, size = 48) {
   const hex = MINO_COLOR_HEX[mino.color] || '#999';
   const hasEyes = mino.stage === 'adolescent' || mino.stage === 'adult';
@@ -107,6 +116,16 @@ function minoVisualHtml(mino, size = 48) {
   const hasLeaves = mino.stage === 'sapling';
   const bodyRy = mino.stage === 'seed' ? 22 : 35;
   const bodyRx = mino.stage === 'seed' ? 26 : 40;
+
+  const gradientId = `mino-gradient-${minoGradientIdCounter++}`;
+  const fill = mino.gradient ? `url(#${gradientId})` : hex;
+  const gradientDef = mino.gradient
+    ? `<defs><linearGradient id="${gradientId}" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="${hex}"/>
+        <stop offset="50%" stop-color="#ffffff"/>
+        <stop offset="100%" stop-color="${hex}"/>
+      </linearGradient></defs>`
+    : '';
 
   const leaves = hasLeaves
     ? `<path d="M50 22 Q34 8 26 22 Q40 24 50 22 Z" fill="#4a9b4a"/><path d="M50 22 Q66 8 74 22 Q60 24 50 22 Z" fill="#4a9b4a"/>`
@@ -118,14 +137,15 @@ function minoVisualHtml(mino, size = 48) {
   // so they read as distinct limb nubs rather than disappearing inside the
   // larger same-colored body shape.
   const limbs = hasLimbs
-    ? `<ellipse cx="${50 - bodyRx + 2}" cy="86" rx="10" ry="8" fill="${hex}"/><ellipse cx="${50 + bodyRx - 2}" cy="86" rx="10" ry="8" fill="${hex}"/>`
+    ? `<ellipse cx="${50 - bodyRx + 2}" cy="86" rx="10" ry="8" fill="${fill}"/><ellipse cx="${50 + bodyRx - 2}" cy="86" rx="10" ry="8" fill="${fill}"/>`
     : '';
 
   return `
-    <div class="mino-visual mino-rarity-${mino.rarity}" style="width:${size}px;height:${size}px;">
+    <div class="mino-visual mino-rarity-${mino.rarity}${mino.gradient ? ' mino-gradient' : ''}" style="width:${size}px;height:${size}px;">
       <svg viewBox="0 0 100 100" width="100%" height="100%">
+        ${gradientDef}
         ${leaves}
-        <ellipse cx="50" cy="60" rx="${bodyRx}" ry="${bodyRy}" fill="${hex}" />
+        <ellipse cx="50" cy="60" rx="${bodyRx}" ry="${bodyRy}" fill="${fill}" />
         ${eyes}
         ${limbs}
       </svg>
@@ -134,7 +154,7 @@ function minoVisualHtml(mino, size = 48) {
 }
 
 function minoLabel(mino) {
-  return `${capitalize(mino.rarity)}${mino.modifier ? ' ' + mino.modifier : ''} ${mino.color}`;
+  return `${mino.gradient ? 'Gradient ' : ''}${capitalize(mino.rarity)}${mino.modifier ? ' ' + mino.modifier : ''} ${mino.color}`;
 }
 
 // Nudges signed-out visitors toward creating an account (a lot of people

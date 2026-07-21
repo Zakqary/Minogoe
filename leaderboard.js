@@ -12,8 +12,14 @@ const COLUMNS = [
   { key: 'losses', label: 'L' },
 ];
 
+// "all" reads the pvp_* columns (any real human opponent - casual, ranked,
+// or private - never bot mode), not the plain games_played/wins/losses
+// columns, which do include bot games. Matches profile.js's own headline
+// Games/Wins/Losses stat, which already only ever showed pvp_* here - bot
+// games still save their replay and still count toward the site-wide
+// "games played" stat (stats.js), just never toward a player's own W/L.
 const FIELD_MAP = {
-  all: { games: 'games_played', wins: 'wins', losses: 'losses' },
+  all: { games: 'pvp_games_played', wins: 'pvp_wins', losses: 'pvp_losses' },
   ranked: { games: 'ranked_games_played', wins: 'ranked_wins', losses: 'ranked_losses' },
 };
 
@@ -29,7 +35,7 @@ function fieldFor(key) {
 async function loadLeaderboard() {
   const { data, error } = await supabaseClient
     .from('profiles')
-    .select('id, username, elo_rating, games_played, wins, losses, ranked_games_played, ranked_wins, ranked_losses, avatar_id, title_id');
+    .select('id, username, elo_rating, pvp_games_played, pvp_wins, pvp_losses, ranked_games_played, ranked_wins, ranked_losses, avatar_id, title_id');
 
   if (error) {
     document.getElementById('leaderboardContent').innerHTML = `<p>Could not load leaderboard: ${escapeHtml(error.message)}</p>`;

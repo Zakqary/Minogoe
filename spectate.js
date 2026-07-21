@@ -125,6 +125,10 @@ let isFfa = false;
 let playerCount = 2;
 let players = [null, null, null, null]; // ffa only, seat-indexed
 const PLAYER_COLORS = ['#5b7fd9', '#d97a52', '#7ec982', '#c96bd6'];
+// Per-player resolved colors for this live game - recomputed once in
+// resetGameState() (game start), same fallback logic as game.js's
+// playerPieceColorHex()/replay.js's resolvedColors.
+let resolvedColors = PLAYER_COLORS.slice();
 
 function idxOf(r, c) { return r * boardSize + c; }
 
@@ -293,7 +297,7 @@ function drawBoard() {
         continue;
       }
       const val = board[cellIdx];
-      ctx.fillStyle = val === 0 ? '#1e1b24' : PLAYER_COLORS[val - 1];
+      ctx.fillStyle = val === 0 ? '#1e1b24' : resolvedColors[val - 1];
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
       ctx.strokeRect(c * CELL_PX + 0.5, r * CELL_PX + 0.5, CELL_PX - 1, CELL_PX - 1);
     }
@@ -325,8 +329,8 @@ function renderMeta() {
     const names = players.map((p, i) => playerDisplayName(p, i + 1));
     const html = players
       .map((p, i) => (p
-        ? `${avatarHtml(p.avatarId, 20)} <strong style="color:${PLAYER_COLORS[i]}">${escapeHtml(names[i])}</strong> ${titleBadgeHtml(p.titleId)}`
-        : `<strong style="color:${PLAYER_COLORS[i]}">${escapeHtml(names[i])}</strong>`))
+        ? `${avatarHtml(p.avatarId, 20)} <strong style="color:${resolvedColors[i]}">${escapeHtml(names[i])}</strong> ${titleBadgeHtml(p.titleId)}`
+        : `<strong style="color:${resolvedColors[i]}">${escapeHtml(names[i])}</strong>`))
       .join(' vs ');
     el.innerHTML = `
       <div>${html}</div>
@@ -338,14 +342,14 @@ function renderMeta() {
   const p1Name = playerDisplayName(player1, 1);
   const p2Name = playerDisplayName(player2, 2);
   const p1Html = player1
-    ? `${avatarHtml(player1.avatarId, 20)} <strong>${escapeHtml(p1Name)}</strong> ${titleBadgeHtml(player1.titleId)}`
-    : `<strong>${escapeHtml(p1Name)}</strong>`;
+    ? `${avatarHtml(player1.avatarId, 20)} <strong style="color:${resolvedColors[0]}">${escapeHtml(p1Name)}</strong> ${titleBadgeHtml(player1.titleId)}`
+    : `<strong style="color:${resolvedColors[0]}">${escapeHtml(p1Name)}</strong>`;
   const p2Html = player2
-    ? `${avatarHtml(player2.avatarId, 20)} <strong>${escapeHtml(p2Name)}</strong> ${titleBadgeHtml(player2.titleId)}`
-    : `<strong>${escapeHtml(p2Name)}</strong>`;
+    ? `${avatarHtml(player2.avatarId, 20)} <strong style="color:${resolvedColors[1]}">${escapeHtml(p2Name)}</strong> ${titleBadgeHtml(player2.titleId)}`
+    : `<strong style="color:${resolvedColors[1]}">${escapeHtml(p2Name)}</strong>`;
 
   el.innerHTML = `
-    <div>${p1Html} (Player 1, blue) vs ${p2Html} (Player 2, red)</div>
+    <div>${p1Html} vs ${p2Html}</div>
     <div>Mode: ${escapeHtml(mode || '')} &middot; <strong>${statusText}</strong></div>
   `;
 }
@@ -366,6 +370,7 @@ function resetGameState(msg) {
     boardShape = null;
     voidMask = new Uint8Array(boardSize * boardSize); // ffa never uses a custom board shape
     players = msg.players || [null, null, null, null];
+    resolvedColors = players.map((p, i) => pieceColorHex(p ? p.pieceColorId : null) || PLAYER_COLORS[i]);
     document.getElementById('handBlock3').classList.remove('ffa-only');
     document.getElementById('handBlock4').classList.remove('ffa-only');
   } else {
@@ -374,6 +379,10 @@ function resetGameState(msg) {
     voidMask = shapeMaskFn ? shapeMaskFn(boardSize) : new Uint8Array(boardSize * boardSize);
     player1 = msg.player1 || null;
     player2 = msg.player2 || null;
+    resolvedColors = [
+      pieceColorHex(player1 ? player1.pieceColorId : null) || PLAYER_COLORS[0],
+      pieceColorHex(player2 ? player2.pieceColorId : null) || PLAYER_COLORS[1],
+    ];
     mode = msg.mode || null;
   }
   initialHand = msg.initialHand || [];
@@ -422,7 +431,7 @@ function handleSpectateMessage(msg) {
   }
 }
 
-function connectSpectator() {
+async function connectSpectator() {
   const params = new URLSearchParams(location.search);
   const matchId = params.get('match') || params.get('ffa');
   isFfa = !params.get('match') && !!params.get('ffa');
@@ -432,6 +441,12 @@ function connectSpectator() {
     metaEl.textContent = 'No game specified. Open a spectate link from the Play page.';
     return;
   }
+
+  // Ensures Catalog.get() can resolve a piece-color id the moment the first
+  // 'live-game-start'/'ffa-live-game-start' message arrives - resetGameState()
+  // only computes resolvedColors once, at game start, so if Catalog weren't
+  // ready yet a custom color would otherwise never show for that connection.
+  await Catalog.ready();
 
   try {
     ws = new WebSocket(SIGNALING_SERVER_URL);

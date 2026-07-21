@@ -2625,6 +2625,16 @@ h2, h3 {
   padding: 5px 8px;
 }
 
+/* Real colors get their hex as an inline background (see shop.js's
+   itemCardHtml) - the free "Default" item has no color of its own (it
+   means "whatever the board would show anyway"), so it gets a dashed
+   outline instead of a filled swatch to read as "no override" rather than
+   as a 7th solid color choice. */
+.shop-item-preview.piece-color-preview-default {
+  background: transparent;
+  border: 2px dashed var(--border);
+}
+
 .shop-item-notice {
   width: 100%;
   background: var(--danger);

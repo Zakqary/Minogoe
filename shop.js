@@ -24,6 +24,7 @@ let checkoutStatusText = '';
 // separate revert-to-default special case.
 const DEFAULT_AVATAR_ID = 'avatar_default';
 const DEFAULT_TITLE_ID = 'title_freshy';
+const DEFAULT_PIECE_COLOR_ID = 'piece_color_default';
 
 async function loadOwnedIds(userId) {
   const { data } = await supabaseClient.from('user_inventory').select('item_id').eq('user_id', userId);
@@ -34,7 +35,9 @@ function itemCardHtml(item, profile) {
   const owned = ownedIds.has(item.id);
   const equippedId = item.type === 'avatar'
     ? (profile.avatar_id || DEFAULT_AVATAR_ID)
-    : (profile.title_id || DEFAULT_TITLE_ID);
+    : item.type === 'title'
+    ? (profile.title_id || DEFAULT_TITLE_ID)
+    : (profile.piece_color_id || DEFAULT_PIECE_COLOR_ID);
   const equipped = equippedId === item.id;
 
   let preview;
@@ -42,6 +45,13 @@ function itemCardHtml(item, profile) {
     preview = item.image_path
       ? `<img src="${escapeHtml(item.image_path)}" alt="" class="shop-item-preview">`
       : `<span class="shop-item-preview avatar-default">?</span>`;
+  } else if (item.type === 'piece_color') {
+    // The free Default item has no color of its own (it means "use
+    // whichever color the board would show anyway") - a dashed outline
+    // instead of a filled swatch communicates "no override" at a glance.
+    preview = item.color
+      ? `<span class="shop-item-preview piece-color-preview" style="background:${escapeHtml(item.color)};"></span>`
+      : `<span class="shop-item-preview piece-color-preview piece-color-preview-default"></span>`;
   } else {
     const color = escapeHtml(item.color || '#e0a75c');
     const style = `color:${color}; background:color-mix(in srgb, ${color} 22%, transparent); border-color:color-mix(in srgb, ${color} 55%, transparent);`;
@@ -164,6 +174,7 @@ async function renderShopPage() {
   const byPrice = (a, b) => a.price - b.price;
   const avatars = Catalog.all().filter((i) => i.type === 'avatar' && visible(i)).sort(byPrice);
   const titles = Catalog.all().filter((i) => i.type === 'title' && visible(i)).sort(byPrice);
+  const pieceColors = Catalog.all().filter((i) => i.type === 'piece_color' && visible(i)).sort(byPrice);
 
   container.innerHTML = `
     <div class="shop-balance">${coinIconHtml(18)} You have <strong>${profile.coins}</strong> coin${profile.coins === 1 ? '' : 's'}.</div>
@@ -187,6 +198,11 @@ async function renderShopPage() {
       <div class="shop-category">
         <h3>Titles</h3>
         <div class="shop-grid shop-grid-compact">${titles.map((i) => itemCardHtml(i, profile)).join('') || '<p>No titles in the shop yet.</p>'}</div>
+      </div>
+
+      <div class="shop-category">
+        <h3>Piece Colors</h3>
+        <div class="shop-grid shop-grid-compact">${pieceColors.map((i) => itemCardHtml(i, profile)).join('') || '<p>No piece colors in the shop yet.</p>'}</div>
       </div>
 
       <div class="shop-category">
@@ -272,7 +288,9 @@ function wireShopButtons() {
     btn.addEventListener('click', async () => {
       showShopError('');
       btn.disabled = true;
-      const fn = btn.dataset.type === 'avatar' ? 'equip_avatar' : 'equip_title';
+      const fn = btn.dataset.type === 'avatar' ? 'equip_avatar'
+        : btn.dataset.type === 'title' ? 'equip_title'
+        : 'equip_piece_color';
       const { error } = await supabaseClient.rpc(fn, { p_item_id: btn.dataset.id });
       if (error) {
         showShopError(error.message);

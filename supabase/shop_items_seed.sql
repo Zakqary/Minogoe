@@ -57,7 +57,13 @@ insert into public.shop_items (id, type, name, price, image_path, title_text, co
   ('avatar_god', 'avatar', 'God', 100, 'assets/avatars/god.png', null, null, null),
   ('avatar_minogoe', 'avatar', 'Minogoe', 20, 'assets/avatars/minogoe.png', null, null, null),
   ('avatar_burger', 'avatar', 'Burger', 15, 'assets/avatars/burger.png', null, null, null),
-  ('avatar_beatarmy', 'avatar', 'Beat Army', 5, 'assets/avatars/beatarmy.png', null, null, null)
+  ('avatar_beatarmy', 'avatar', 'Beat Army', 5, 'assets/avatars/beatarmy.png', null, null, null),
+  ('piece_color_lilac', 'piece_color', 'Lilac', 50, null, null, '#b892d6', null),
+  ('piece_color_purple', 'piece_color', 'Purple', 50, null, null, '#7e4fb5', null),
+  ('piece_color_aqua', 'piece_color', 'Aqua', 50, null, null, '#3ec9c0', null),
+  ('piece_color_lime', 'piece_color', 'Lime', 50, null, null, '#a8d84a', null),
+  ('piece_color_grey', 'piece_color', 'Grey', 50, null, null, '#98a1ad', null),
+  ('piece_color_gold', 'piece_color', 'Gold', 50, null, null, '#d9b23c', null)
 on conflict (id) do update set
   type = excluded.type,
   name = excluded.name,

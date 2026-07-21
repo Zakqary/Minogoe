@@ -4929,3 +4929,84 @@ begin
   return new;
 end;
 $$;
+
+-- ---------- Phase 57: purchasable/equippable piece colors ----------
+-- A new shop_items type, reusing the existing `color` column (previously
+-- titles-only) rather than adding a new one. Follows the exact
+-- avatar_id/title_id "always-owned free default" pattern (Phase 13) so the
+-- shop can show "Default" as a normal Equip option instead of a bespoke
+-- null-clearing special case - piece_color_default's `color` is left null
+-- on purpose, so equipping it explicitly and never equipping anything both
+-- fall through to the same positional-default fallback client-side
+-- (game.js's playerPieceColorHex()).
+
+alter table public.shop_items drop constraint if exists shop_items_type_check;
+alter table public.shop_items add constraint shop_items_type_check
+  check (type in ('avatar', 'title', 'piece_color'));
+
+alter table public.profiles add column if not exists piece_color_id text;
+alter table public.profiles drop constraint if exists profiles_piece_color_id_fkey;
+alter table public.profiles add constraint profiles_piece_color_id_fkey
+  foreign key (piece_color_id) references public.shop_items(id) on delete set null;
+
+insert into public.shop_items (id, type, name, price, image_path, title_text, color, notice) values
+  ('piece_color_default', 'piece_color', 'Default', 0, null, null, null, null)
+on conflict (id) do nothing;
+
+insert into public.user_inventory (user_id, item_id)
+select id, 'piece_color_default' from public.profiles
+on conflict (user_id, item_id) do nothing;
+
+-- Redefines handle_new_user() once more (full body carried forward from
+-- Phase 46, the last redefinition) to also grant the new default.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uname text := new.raw_user_meta_data->>'username';
+begin
+  if uname is null
+     or char_length(uname) < 3
+     or char_length(uname) > 20
+     or uname !~ '^[A-Za-z0-9_\- ]+$' then
+    raise exception 'Username must be 3-20 characters, using only letters, numbers, spaces, underscores, and hyphens.';
+  end if;
+
+  if exists (select 1 from public.profiles where lower(username) = lower(uname)) then
+    raise exception 'That username is already taken (usernames are not case-sensitive).';
+  end if;
+
+  insert into public.profiles (id, username) values (new.id, uname);
+  insert into public.user_inventory (user_id, item_id) values (new.id, 'avatar_default');
+  insert into public.user_inventory (user_id, item_id) values (new.id, 'title_freshy');
+  insert into public.user_inventory (user_id, item_id) values (new.id, 'piece_color_default');
+  return new;
+end;
+$$;
+
+-- Same shape as equip_avatar()/equip_title().
+create or replace function public.equip_piece_color(p_item_id text)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if p_item_id is not null and not exists (
+    select 1 from public.user_inventory ui
+    join public.shop_items si on si.id = ui.item_id
+    where ui.user_id = uid and ui.item_id = p_item_id and si.type = 'piece_color'
+  ) then
+    raise exception 'Piece color not owned';
+  end if;
+
+  update public.profiles set piece_color_id = p_item_id where id = uid;
+end;
+$$;

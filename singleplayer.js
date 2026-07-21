@@ -1450,6 +1450,17 @@ function drawShapeIcon(canvasEl, coords, px = 8) {
   for (const [r, c] of coords) cctx.fillRect(c * px, r * px, px - 1, px - 1);
 }
 
+// For the translucent hover-preview fill below - duplicated from game.js's
+// own hexToRgba() (same "duplicate small pieces rather than share a module"
+// convention as everything else in this file).
+function hexToRgba(hex, alpha) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 function drawBoard() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   // Blind Eogonim's whole gimmick: every occupied cell renders as if empty
@@ -1465,10 +1476,15 @@ function drawBoard() {
   // piece (the same orange already used for "player 2" everywhere else on
   // the site, so the color association carries over from a real match).
   const deadColor = '#4a2a30';
+  // Only the human player's own pieces (val === 1) ever take a custom
+  // equipped color - the other values are semantic game-state colors (bot-
+  // owned, dead/blighted, cleared pocket), not "whose pieces," and must
+  // stay fixed regardless of what the player has equipped.
+  const myColor = pieceColorHex(Auth.getProfile()?.piece_color_id) || '#5b7fd9';
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
       const val = hidePieces ? 0 : state.board[idx(r, c)];
-      ctx.fillStyle = val === 1 ? '#5b7fd9'
+      ctx.fillStyle = val === 1 ? myColor
         : val === 2 ? (state.mode === 'godbot' ? '#d97a52' : (state.mode === 'blight' || state.mode === 'curse') ? deadColor : '#74ae82')
         : val === 3 ? deadColor // GodBot's "blight one of your territories" bonus action only - see pickGodbotBlightTarget()
         : '#1e1b24';
@@ -1493,7 +1509,7 @@ function drawBoard() {
     // other mode keeps the normal blue/gray valid/invalid preview.
     ctx.fillStyle = state.mode === 'blindeogonim'
       ? 'rgba(255,255,255,0.35)'
-      : state.hover.valid ? 'rgba(91,127,217,0.55)' : 'rgba(140,140,140,0.5)';
+      : state.hover.valid ? hexToRgba(myColor, 0.55) : 'rgba(140,140,140,0.5)';
     for (const [dr, dc] of orientation) {
       const r = state.hover.r0 + dr, c = state.hover.c0 + dc;
       if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) continue;

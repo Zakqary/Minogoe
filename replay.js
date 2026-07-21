@@ -121,6 +121,11 @@ let gameStartedAtMs = null;
 // PLAYER_COLORS/--p1..--p4 exactly.
 let playerCount = 2;
 const PLAYER_COLORS = ['#5b7fd9', '#d97a52', '#7ec982', '#c96bd6'];
+// Per-player resolved colors for THIS replay - PLAYER_COLORS unless a
+// player had a custom piece color equipped (frozen at replay-load time via
+// pieceColorHex(), same as game.js's playerPieceColorHex() fallback logic).
+// Reset to the positional defaults at the top of each load function below.
+let resolvedColors = PLAYER_COLORS.slice();
 
 function idxOf(r, c) { return r * boardSize + c; }
 
@@ -210,7 +215,7 @@ function drawBoard() {
         continue;
       }
       const val = board[cellIdx];
-      ctx.fillStyle = val === 0 ? '#1e1b24' : PLAYER_COLORS[val - 1];
+      ctx.fillStyle = val === 0 ? '#1e1b24' : resolvedColors[val - 1];
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
       ctx.strokeRect(c * CELL_PX + 0.5, r * CELL_PX + 0.5, CELL_PX - 1, CELL_PX - 1);
     }
@@ -279,7 +284,7 @@ function drawTimingChart() {
     const isCurrent = i === stepIndex - 1;
 
     ctx.globalAlpha = isCurrent ? 1 : 0.7;
-    ctx.fillStyle = PLAYER_COLORS[d.player - 1];
+    ctx.fillStyle = resolvedColors[d.player - 1];
     ctx.fillRect(0, y, barW, barH);
     ctx.globalAlpha = 1;
 
@@ -350,9 +355,10 @@ function setFfaHandBlocksVisible(visible) {
 }
 
 async function loadFfaReplay(gameId, metaEl) {
+  await Catalog.ready();
   const { data, error } = await supabaseClient
     .from('ffa_games')
-    .select('*, ffa_game_players(seat, score, rank, profiles:player_id(username))')
+    .select('*, ffa_game_players(seat, score, rank, profiles:player_id(username, piece_color_id))')
     .eq('id', gameId)
     .single();
 
@@ -380,6 +386,7 @@ async function loadFfaReplay(gameId, metaEl) {
   // ffa_game_players isn't guaranteed to come back seat-ordered.
   const bySeat = [0, 1, 2, 3].map((seat) => (data.ffa_game_players || []).find((p) => p.seat === seat));
   const names = bySeat.map((p, i) => (p && p.profiles ? p.profiles.username : `Guest ${i + 1}`));
+  resolvedColors = bySeat.map((p, i) => pieceColorHex(p && p.profiles ? p.profiles.piece_color_id : null) || PLAYER_COLORS[i]);
 
   let resultText;
   if (data.abandoned) {
@@ -392,7 +399,7 @@ async function loadFfaReplay(gameId, metaEl) {
   }
 
   metaEl.innerHTML = `
-    <div>${names.map((n, i) => `<strong style="color:${PLAYER_COLORS[i]}">${escapeHtml(n)}</strong>`).join(' vs ')}</div>
+    <div>${names.map((n, i) => `<strong style="color:${resolvedColors[i]}">${escapeHtml(n)}</strong>`).join(' vs ')}</div>
     <div>Mode: free-for-all &middot; ${escapeHtml(resultText)}</div>
     <div>${new Date(data.ended_at).toLocaleString()}</div>
   `;
@@ -423,12 +430,13 @@ async function loadReplay() {
     return;
   }
 
+  await Catalog.ready();
   playerCount = 2;
   setFfaHandBlocksVisible(false);
 
   const { data, error } = await supabaseClient
     .from('games')
-    .select('*, player1:player1_id(username), player2:player2_id(username)')
+    .select('*, player1:player1_id(username, piece_color_id), player2:player2_id(username, piece_color_id)')
     .eq('id', gameId)
     .single();
 
@@ -453,6 +461,10 @@ async function loadReplay() {
 
   const p1Name = data.player1 ? data.player1.username : 'Guest';
   const p2Name = data.player2 ? data.player2.username : (data.mode === 'bot' ? 'Bot' : 'Guest');
+  resolvedColors = [
+    pieceColorHex(data.player1 ? data.player1.piece_color_id : null) || PLAYER_COLORS[0],
+    pieceColorHex(data.player2 ? data.player2.piece_color_id : null) || PLAYER_COLORS[1],
+  ];
   const resultText = data.winner == null
     ? 'Tie'
     : `${data.winner === 1 ? p1Name : p2Name} won${data.forfeit ? ' by forfeit' : ''}`;
@@ -464,7 +476,7 @@ async function loadReplay() {
     : `${data.score1} - ${data.score2}`;
 
   metaEl.innerHTML = `
-    <div><strong>${escapeHtml(p1Name)}</strong> (Player 1, blue) vs <strong>${escapeHtml(p2Name)}</strong> (Player 2, red)</div>
+    <div><strong style="color:${resolvedColors[0]}">${escapeHtml(p1Name)}</strong> vs <strong style="color:${resolvedColors[1]}">${escapeHtml(p2Name)}</strong></div>
     <div>Mode: ${escapeHtml(modeLabel(data.mode))} &middot; Final score: ${scoreText} &middot; ${escapeHtml(resultText)}</div>
     <div>${new Date(data.ended_at).toLocaleString()}</div>
   `;

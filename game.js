@@ -19,6 +19,17 @@ const FFA_BOARD_SIZE = 15;
 // matches --p1/--p2/--p3/--p4 in style.css exactly (kept in sync by hand;
 // this file has no access to CSS custom properties from canvas drawing).
 const PLAYER_COLORS = ['#5b7fd9', '#d97a52', '#7ec982', '#c96bd6'];
+
+// For the translucent hover/placement-preview fill, which needs an alpha
+// channel a plain hex can't express.
+function hexToRgba(hex, alpha) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 const ACTIVE_MATCH_KEY = 'minogoe_activeMatch'; // localStorage key for reconnect-after-reload
 const MATCH_INTRO_DURATION_MS = 4500; // how long the pre-match "vs" intro card stays up before auto-dismissing
 
@@ -222,6 +233,7 @@ const state = {
   opponentUsername: null, // the connected peer's username, if they're logged in
   opponentAvatarId: null, // the connected peer's equipped avatar item id, if any
   opponentTitleId: null,  // the connected peer's equipped title item id, if any
+  opponentPieceColorId: null, // the connected peer's equipped piece-color item id, if any
   opponentEloRating: null, // the connected peer's ELO rating, if they're logged in
   opponentCompanion: null, // the connected peer's chosen companion Mino ({ color, rarity, modifier, stage }), if any
   introShown: false,  // whether the match intro card has already been shown this match
@@ -591,6 +603,38 @@ function playerTitleId(playerNum) {
     return profile ? profile.title_id : null;
   }
   return null;
+}
+
+// Same shape as playerAvatarId/playerTitleId - the equipped piece-color
+// item id, or null (bot/guest slots, or nothing/the free Default equipped).
+function playerPieceColorId(playerNum) {
+  if (state.gameMode === 'ffa') {
+    if (playerNum === state.myPlayer) {
+      const profile = Auth.getProfile();
+      return profile ? profile.piece_color_id : null;
+    }
+    const info = state.ffaPlayers && state.ffaPlayers[playerNum - 1];
+    return (info && info.pieceColorId) || null;
+  }
+  if (state.online) {
+    if (playerNum === state.myPlayer) {
+      const profile = Auth.getProfile();
+      return profile ? profile.piece_color_id : null;
+    }
+    return state.opponentPieceColorId || null;
+  }
+  if (playerNum === 1) {
+    const profile = Auth.getProfile();
+    return profile ? profile.piece_color_id : null;
+  }
+  return null;
+}
+
+// Resolves all the way down to an actual hex - falls back to the fixed
+// positional color (PLAYER_COLORS) for bot/guest slots and anyone who
+// hasn't bought/equipped a custom color.
+function playerPieceColorHex(playerNum) {
+  return pieceColorHex(playerPieceColorId(playerNum)) || PLAYER_COLORS[playerNum - 1];
 }
 
 // The chosen companion Mino ({ color, rarity, modifier, stage }) for whoever's
@@ -2566,6 +2610,11 @@ canvas.height = BOARD_SIZE * CELL_PX;
 const ctx = canvas.getContext('2d');
 
 function drawBoard() {
+  // Resolved once per draw (not per cell) - each player's equipped custom
+  // color if they have one, else the fixed positional PLAYER_COLORS
+  // fallback (see playerPieceColorHex()).
+  const resolvedColors = Array.from({ length: state.playerCount || 2 }, (_, i) => playerPieceColorHex(i + 1));
+
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.lineWidth = 1;
@@ -2585,7 +2634,7 @@ function drawBoard() {
         continue;
       }
       const val = state.board[cellIdx];
-      ctx.fillStyle = val === 0 ? '#1e1b24' : PLAYER_COLORS[val - 1];
+      ctx.fillStyle = val === 0 ? '#1e1b24' : resolvedColors[val - 1];
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
       ctx.strokeRect(c * CELL_PX + 0.5, r * CELL_PX + 0.5, CELL_PX - 1, CELL_PX - 1);
     }
@@ -2598,7 +2647,7 @@ function drawBoard() {
     const dotRadius = CELL_PX * 0.16;
     for (const { index, owner } of state.scoringCells) {
       const r = Math.floor(index / BOARD_SIZE), c = index % BOARD_SIZE;
-      ctx.fillStyle = owner === 1 ? '#5b7fd9' : '#d97a52';
+      ctx.fillStyle = resolvedColors[owner - 1];
       ctx.beginPath();
       ctx.arc(c * CELL_PX + CELL_PX / 2, r * CELL_PX + CELL_PX / 2, dotRadius, 0, Math.PI * 2);
       ctx.fill();
@@ -2620,7 +2669,7 @@ function drawBoard() {
   if (state.selected && state.hover && !state.gameOver) {
     const orientation = ORIENTATIONS[state.selected.shapeName][state.selected.orientationIndex];
     const color = state.hover.valid
-      ? (state.turn === 1 ? 'rgba(91,127,217,0.55)' : 'rgba(217,122,82,0.55)')
+      ? hexToRgba(resolvedColors[state.turn - 1], 0.55)
       : 'rgba(140,140,140,0.5)';
     ctx.fillStyle = color;
     for (const [dr, dc] of orientation) {
@@ -2731,13 +2780,17 @@ function render() {
       : scoreFor(p);
     document.getElementById(`handLabel${p}`).innerHTML = `${playerLink(playerProfileId(p), playerLabel(p))}'s hand`;
     renderHand(`hand${p}`, handFor(p), p);
+    // Equipped piece color overrides the CSS --p1..--p4 border, since that's
+    // now per-account rather than a fixed constant per slot.
+    const scoreBlock = document.getElementById(`scoreBlock${p}`);
+    if (scoreBlock) scoreBlock.style.borderBottomColor = playerPieceColorHex(p);
   }
 
   if (state.gameStarted) {
     const proj = computeFinalScores(state.board);
     if (state.gameMode === 'ffa') {
       const chips = [1, 2, 3, 4]
-        .map((p) => `<span class="projected-value projected-p${p}">${playerLabel(p)} ${proj[`score${p}`]}</span>`)
+        .map((p) => `<span class="projected-value projected-p${p}" style="color:${playerPieceColorHex(p)}">${playerLabel(p)} ${proj[`score${p}`]}</span>`)
         .join('');
       document.getElementById('projected').innerHTML = `
         <span class="projected-label">Projected</span>
@@ -2754,8 +2807,8 @@ function render() {
       // actually scan at a glance mid-game.
       document.getElementById('projected').innerHTML = `
         <span class="projected-label">Projected</span>
-        <span class="projected-value projected-p1">${playerLabel(1)} ${proj1}</span>
-        <span class="projected-value projected-p2">${playerLabel(2)} ${proj2}</span>
+        <span class="projected-value projected-p1" style="color:${playerPieceColorHex(1)}">${playerLabel(1)} ${proj1}</span>
+        <span class="projected-value projected-p2" style="color:${playerPieceColorHex(2)}">${playerLabel(2)} ${proj2}</span>
         <span class="projected-undecided">${proj.undecided} undecided</span>
       `;
     }
@@ -3279,6 +3332,7 @@ function handleRejoinReady() {
     username: myProfile ? myProfile.username : null,
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
+    pieceColorId: myProfile ? myProfile.piece_color_id : null,
     eloRating: myProfile ? myProfile.elo_rating : null,
     companion: myProfile ? myProfile.companion : null,
   });
@@ -3287,6 +3341,7 @@ function handleRejoinReady() {
     username: myProfile ? myProfile.username : null,
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
+    pieceColorId: myProfile ? myProfile.piece_color_id : null,
   });
 
   const iHaveLiveGame = state.gameStarted && !state.gameOver;
@@ -3456,6 +3511,7 @@ function handleNetReady() {
   state.opponentUsername = null;
   state.opponentAvatarId = null;
   state.opponentTitleId = null;
+  state.opponentPieceColorId = null;
   state.opponentEloRating = null;
   state.opponentCompanion = null;
   state.introShown = false;
@@ -3480,6 +3536,7 @@ function handleNetReady() {
     username: myProfile ? myProfile.username : null,
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
+    pieceColorId: myProfile ? myProfile.piece_color_id : null,
     eloRating: myProfile ? myProfile.elo_rating : null,
     companion: myProfile ? myProfile.companion : null,
   });
@@ -3488,6 +3545,7 @@ function handleNetReady() {
     username: myProfile ? myProfile.username : null,
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
+    pieceColorId: myProfile ? myProfile.piece_color_id : null,
   });
 
   if (state.gameMode === 'private' && Net.isHost) {
@@ -3581,6 +3639,7 @@ function handleNetDataInner(msg, fromSeat) {
         username: msg.username ?? null,
         avatarId: msg.avatarId ?? null,
         titleId: msg.titleId ?? null,
+        pieceColorId: msg.pieceColorId ?? null,
       };
       // Only the HOST has a direct (non-relayed) connection to every seat,
       // so it's the only side guaranteed to eventually learn everyone's
@@ -3600,6 +3659,7 @@ function handleNetDataInner(msg, fromSeat) {
       state.opponentUsername = msg.username;
       state.opponentAvatarId = msg.avatarId ?? null;
       state.opponentTitleId = msg.titleId ?? null;
+      state.opponentPieceColorId = msg.pieceColorId ?? null;
       state.opponentEloRating = msg.eloRating ?? null;
       state.opponentCompanion = msg.companion ?? null;
       showMatchIntroCard();
@@ -4099,6 +4159,7 @@ function handleFfaReady() {
     username: myProfile ? myProfile.username : null,
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
+    pieceColorId: myProfile ? myProfile.piece_color_id : null,
   };
   // Never echoed back to me over the network (see net-ffa.js's relay
   // comment - a sender never receives its own broadcast), so recorded
@@ -4171,6 +4232,7 @@ function beginFfaGame(hand) {
     username: myProfile ? myProfile.username : null,
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
+    pieceColorId: myProfile ? myProfile.piece_color_id : null,
   });
 
   if (NetFfa.isHost) {
@@ -4199,6 +4261,7 @@ function handleFfaRejoinReady() {
     username: myProfile ? myProfile.username : null,
     avatarId: myProfile ? myProfile.avatar_id : null,
     titleId: myProfile ? myProfile.title_id : null,
+    pieceColorId: myProfile ? myProfile.piece_color_id : null,
   };
   state.ffaPlayers[state.ffaSeat] = myIdentity;
   netSend({ type: 'identify', ...myIdentity });

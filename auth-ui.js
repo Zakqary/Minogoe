@@ -48,6 +48,15 @@ function titleColor(titleId) {
   return (item && item.color) || '#e0a75c';
 }
 
+// A player's equipped piece color (shop_items.color) - null when unbought,
+// unequipped, or explicitly set to the free "Default" item (whose color is
+// intentionally left null). Callers fall back to their own positional
+// default: pieceColorHex(id) || PLAYER_COLORS[playerNum - 1].
+function pieceColorHex(colorId) {
+  const item = catalogGet(colorId);
+  return (item && item.color) || null;
+}
+
 function titleBadgeHtml(titleId) {
   const color = escapeHtml(titleColor(titleId));
   const style = `color:${color}; background:color-mix(in srgb, ${color} 18%, transparent); border-color:color-mix(in srgb, ${color} 55%, transparent);`;

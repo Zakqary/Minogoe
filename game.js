@@ -3103,16 +3103,20 @@ function requestResync() {
   state.connecting = true;
   render();
   setLobbyStatus('Game state out of sync - resyncing...');
-  Net.send({ type: 'resync-request' });
+  netSend({ type: 'resync-request' });
 
   clearTimeout(resyncRequestTimeoutId);
   resyncRequestTimeoutId = setTimeout(() => {
     if (!state.connecting) return; // already resolved
-    // This attempt failed - reset connecting so handleConnectionStale()'s
-    // own guard doesn't just bounce off it, then let it start a fresh
-    // (heavier) recovery phase.
+    // This attempt failed - reset connecting so the next recovery phase's
+    // own guard doesn't just bounce off it still being true.
     state.connecting = false;
-    handleConnectionStale();
+    // handleConnectionStale() is 2-player-only (checks Net.matchId/
+    // Net.rejoin, neither of which ffa uses) and would otherwise silently
+    // no-op here, leaving an ffa game frozen on "resyncing..." forever
+    // with no further recovery attempt at all.
+    if (state.gameMode === 'ffa') attemptFfaRejoin();
+    else handleConnectionStale();
   }, RESYNC_REQUEST_TIMEOUT_MS);
 }
 
@@ -4066,6 +4070,28 @@ function beginFfaGame(hand) {
   playGameStartChime();
   checkGameEnd();
   render();
+
+  // Re-sent here (already sent once, in handleFfaReady()/
+  // handleFfaRejoinReady() right as this client's own connection came up)
+  // rather than relied on as a one-shot - a joiner's identify sent the
+  // instant ITS OWN link to the host opens can arrive at the host before
+  // the host has finished connecting to every other seat, and the host
+  // can only relay to connections that are already open when the message
+  // arrives - there's no retry, so that identify is lost for whichever
+  // seats weren't connected yet at that exact moment (this is what was
+  // showing up as some seats never getting a name/avatar). By the time
+  // EITHER side reaches this function - the host sending ffa-start, or a
+  // joiner receiving it - the host is guaranteed fully connected to all 3
+  // seats (that's exactly the condition ffa-start itself waits for), so a
+  // resend here is guaranteed to actually reach everyone.
+  const myProfile = Auth.getProfile();
+  netSend({
+    type: 'identify',
+    userId: Auth.getUser()?.id ?? null,
+    username: myProfile ? myProfile.username : null,
+    avatarId: myProfile ? myProfile.avatar_id : null,
+    titleId: myProfile ? myProfile.title_id : null,
+  });
 
   if (NetFfa.isHost) {
     netSend({ type: 'ffa-start', hand });

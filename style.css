@@ -911,7 +911,7 @@ h2, h3 {
 .online-panel button:hover { border-color: var(--accent); color: var(--accent-hover); }
 .online-panel button:disabled { opacity: 0.4; cursor: default; border-color: var(--border); color: var(--text); }
 
-#connectBtn, #casualQueueBtn, #rankedQueueBtn, #newGameBtn, #spStartBtn {
+#connectBtn, #casualQueueBtn, #rankedQueueBtn, #ffaQueueBtn, #newGameBtn, #spStartBtn {
   background: var(--accent);
   border-color: var(--accent);
   color: #211505;
@@ -1114,7 +1114,8 @@ h2, h3 {
 }
 
 #connectBtn:hover:not(:disabled), #casualQueueBtn:hover:not(:disabled),
-#rankedQueueBtn:hover:not(:disabled), #newGameBtn:hover:not(:disabled), #spStartBtn:hover:not(:disabled) {
+#rankedQueueBtn:hover:not(:disabled), #ffaQueueBtn:hover:not(:disabled),
+#newGameBtn:hover:not(:disabled), #spStartBtn:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   color: #211505 !important;
@@ -1125,7 +1126,7 @@ h2, h3 {
   color: var(--text-faint);
 }
 
-#connectBtn:disabled, #casualQueueBtn:disabled, #rankedQueueBtn:disabled, #newGameBtn:disabled {
+#connectBtn:disabled, #casualQueueBtn:disabled, #rankedQueueBtn:disabled, #ffaQueueBtn:disabled, #newGameBtn:disabled {
   background: var(--surface-2);
   border-color: var(--border);
   color: var(--text-faint) !important;

@@ -218,14 +218,22 @@ const CHART_ROW_H = 20;
 const CHART_WIDTH = 220;
 const CHART_LABEL_W = 46; // reserved space for the "Xs" time label text
 
-// Duration for move i is the gap between when it was made and whenever
-// control passed to that player - either the previous move's timestamp, or
-// the game's started_at for the very first move. Replays recorded before
-// per-move timestamps existed won't have moveLog[].t at all - detected via
-// the first entry missing it, since that's a whole-game, all-or-nothing
-// property of when the game was played.
+// Each moveLog entry now carries its own durationMs, measured entirely on
+// the mover's own device (Date.now() at commit minus when their turn
+// started, per game.js's turnStartedAtMs) - a single clock for both ends
+// of the subtraction. Games recorded before this existed only have a raw
+// .t wall-clock timestamp per move, which the OLD chart used to diff
+// against the previous move's .t - but consecutive moves alternate between
+// two different players' machines, so that diff was really "how far apart
+// are these two computers' system clocks," not a turn duration; it's kept
+// here only as a best-effort display for those older replays, since the
+// real per-move number was never recorded for them and can't be recovered.
 function computeTurnDurations() {
-  if (moveLog.length === 0 || moveLog[0].t === undefined) return null;
+  if (moveLog.length === 0) return null;
+  if (moveLog[0].durationMs !== undefined) {
+    return moveLog.map((mv) => ({ player: mv.player, ms: Math.max(0, mv.durationMs) }));
+  }
+  if (moveLog[0].t === undefined) return null;
   const durations = [];
   let prevT = gameStartedAtMs;
   for (const mv of moveLog) {

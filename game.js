@@ -385,6 +385,21 @@ function applyFullState(msg) {
   // the countdown ticking against the restored deadline instead.
   state.turnDeadline = msg.turnDeadline ?? null;
   lastObservedTurnKey = `${state.turn}-${state.plyCount}-${state.gameOver}`;
+  // Same idea as the turnDeadline restore above, for turn-DURATION tracking
+  // (turnStartedAtMs) instead of the countdown display: derive how long
+  // this turn has already been running from the sender's authoritative
+  // deadline, rather than either "now" (would understate it) or whatever
+  // stale value survived a page reload (meaningless once a reload actually
+  // happened). Only possible when a timer is active - an untimed game has
+  // no such reference to derive from, so it falls back to
+  // handleTurnTransition()'s normal "now" seeding instead.
+  if (state.turnDeadline) {
+    const limitSec = currentTurnTimeLimitSec();
+    if (limitSec) {
+      turnStartedAtMs = state.turnDeadline - limitSec * 1000;
+      turnStartedAtMsRestoredByResync = true;
+    }
+  }
   // Also suppresses syncTurnTimerWithConnecting()'s own resume logic (see
   // its comment) - state.connecting is about to be cleared by the 'resync'
   // handler right after this returns, and without this it would try to
@@ -1369,11 +1384,18 @@ function requestPass() {
   manualPass(false);
 }
 
-function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false, t = Date.now(), autoTimeout = false) {
+function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false, t = Date.now(), autoTimeout = false, durationMs = null) {
   if (state.online && !fromRemote && state.myPlayer !== state.turn) return;
 
   expireStaleUndoRequest();
   state.history.push(snapshotState());
+
+  // Measured on THIS device's own clock only when this device is the one
+  // actually committing the move live (see turnStartedAtMs's own comment
+  // for why a remote move's transmitted durationMs is used as-is instead
+  // of ever being recomputed here against our own turnStartedAtMs, which
+  // is tracking OUR turn, not necessarily one that just arrived from afar).
+  const finalDurationMs = fromRemote ? durationMs : Math.max(0, Date.now() - turnStartedAtMs);
 
   const player = state.turn;
   const orientation = ORIENTATIONS[shapeName][orientationIndex];
@@ -1387,7 +1409,7 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   // countMyAutoPlacementsThisGame() derives "have I already used this
   // game's one auto-place leniency" from, so a reconnect/resync (which
   // already restores the full moveLog) can't accidentally forget it.
-  state.moveLog.push({ player, shapeName, orientationIndex, r0, c0, t, autoTimeout });
+  state.moveLog.push({ player, shapeName, orientationIndex, r0, c0, t, autoTimeout, durationMs: finalDurationMs });
   state.lastMove = { shapeName, orientationIndex, r0, c0, player };
   state.passStreak = 0;
   if (autoTimeout) {
@@ -1429,7 +1451,7 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   // provably correct rather than "correct because the grace period is
   // long enough."
   if (state.online && !fromRemote) {
-    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq, autoTimeout });
+    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq, autoTimeout, durationMs: finalDurationMs });
     Net.sendToServer({ type: 'live-game-move', player, shapeName, orientationIndex, r0, c0, t });
   }
 
@@ -1919,6 +1941,31 @@ function resumeTurnTimerTicking() {
 let turnTimerPaused = false;
 let turnTimerRemainingMsWhenPaused = 0;
 
+// When the CURRENT device actually commits a move (fromRemote === false in
+// commitPlacement), its own turn duration is measured as Date.now() minus
+// this - always a single device's own clock for both ends of the
+// subtraction, then transmitted to the peer as-is. This is deliberately NOT
+// "the other move's timestamp diffed against mine" (which is what moveLog
+// entries' own .t field would give you) - .t is each mover's own wall
+// clock, and two machines' wall clocks are never assumed to agree, so
+// diffing an absolute timestamp from one device against one from another
+// silently produces garbage (seconds off in either direction) proportional
+// to however out-of-sync their clocks happen to be. This is exactly what
+// broke the turn-timing chart in replay.js.
+let turnStartedAtMs = Date.now();
+// Set while state.connecting is true (see syncTurnTimerWithConnecting()
+// below) so a resync/reconnect freeze doesn't get counted as thinking time
+// once it clears - tracked independently of turnTimerPaused/limitSec since
+// duration tracking matters even for untimed games, unlike the countdown
+// display itself.
+let turnDurationFreezeStartedAt = null;
+// One-shot flag set by applyFullState() when it has already derived
+// turnStartedAtMs itself from a restored, already-in-progress turnDeadline -
+// tells the very next handleTurnTransition() call not to clobber that with
+// a fresh "now", exactly mirroring how it pre-seeds lastObservedTurnKey for
+// the same reason.
+let turnStartedAtMsRestoredByResync = false;
+
 // Casual/ranked have a fixed per-mode limit; a private room's limit is
 // whatever the host picked in the settings overlay for this specific game
 // (state.privateTimerSeconds - null/untimed by default, same as hotseat/vsBot).
@@ -1961,6 +2008,17 @@ function restartTurnTimerIfNeeded() {
 // however long the freeze itself lasted) once it clears.
 function syncTurnTimerWithConnecting() {
   if (state.gameOver || !state.online) return;
+
+  // Runs regardless of whether a per-turn timer is even active - an
+  // untimed game's recorded turn durations shouldn't balloon just because
+  // a reconnect happened to freeze the board mid-turn either.
+  if (state.connecting) {
+    if (turnDurationFreezeStartedAt === null) turnDurationFreezeStartedAt = Date.now();
+  } else if (turnDurationFreezeStartedAt !== null) {
+    turnStartedAtMs += Date.now() - turnDurationFreezeStartedAt;
+    turnDurationFreezeStartedAt = null;
+  }
+
   const limitSec = currentTurnTimeLimitSec();
   if (!limitSec) return;
 
@@ -2135,6 +2193,18 @@ function handleTurnTransition() {
   const key = `${state.turn}-${state.plyCount}-${state.gameOver}`;
   if (key === lastObservedTurnKey) return;
   lastObservedTurnKey = key;
+
+  // Baseline for THIS device's own next duration measurement, whether or
+  // not it ends up being the one to move next - see turnStartedAtMs's own
+  // comment. Skipped once the game has actually ended (nothing left to
+  // time), and skipped here for a turn applyFullState() has already
+  // restored an in-progress deadline for (it seeds turnStartedAtMs itself
+  // in that case, from the authoritative restored deadline rather than
+  // "now").
+  if (!state.gameOver && !turnStartedAtMsRestoredByResync) {
+    turnStartedAtMs = Date.now();
+  }
+  turnStartedAtMsRestoredByResync = false;
 
   if (!state.gameOver) {
     maybeDingForTurn();
@@ -3091,7 +3161,7 @@ function handleNetDataInner(msg) {
     render();
   } else if (msg.type === 'move') {
     if (!isExpectedNextAction(msg.seq)) { requestResync(); return; }
-    commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true, msg.t, !!msg.autoTimeout);
+    commitPlacement(msg.shapeName, msg.orientationIndex, msg.r0, msg.c0, true, msg.t, !!msg.autoTimeout, msg.durationMs);
   } else if (msg.type === 'pass') {
     if (!isExpectedNextAction(msg.seq)) { requestResync(); return; }
     manualPass(true);

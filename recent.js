@@ -31,15 +31,14 @@ function ffaPlayersHtml(players) {
     .join(', ');
 }
 
-// Standard competition ranking display for an ffa_game_players row set -
-// mirrors game.js's own computeFfaRanks()/endFfaGame() standings text,
-// just reading the already-computed rank column instead of recomputing it
-// (the rank is stored per seat at result-submission time, see schema.sql's
-// submit_ffa_result()).
+// Score display for an ffa_game_players row set, already in rank order -
+// no need to also print "#1"/"#2"/etc next to each name, since the rank is
+// entirely implied by the listed order (and repeating it for all 4 players
+// was making this column absurdly wide, distorting the whole table).
 function ffaStandingsHtml(players) {
   return [...players]
     .sort((a, b) => a.rank - b.rank)
-    .map((p) => `#${p.rank} ${escapeHtml(p.profiles ? p.profiles.username : 'Guest')} (${p.score})`)
+    .map((p) => `${escapeHtml(p.profiles ? p.profiles.username : 'Guest')} (${p.score})`)
     .join(', ');
 }
 

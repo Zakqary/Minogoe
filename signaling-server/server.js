@@ -182,8 +182,8 @@ function generateRoomCode() {
 function pairSockets(entryA, entryB, mode) {
   const code = generateRoomCode();
   const slots = [
-    { socket: entryA.socket, userId: entryA.userId ?? null, isHost: true, disconnectTimer: null },
-    { socket: entryB.socket, userId: entryB.userId ?? null, isHost: false, disconnectTimer: null },
+    { socket: entryA.socket, userId: entryA.userId ?? null, isHost: true, disconnectTimer: null, tabId: entryA.tabId ?? null },
+    { socket: entryB.socket, userId: entryB.userId ?? null, isHost: false, disconnectTimer: null, tabId: entryB.tabId ?? null },
   ];
   rooms.set(code, { mode, slots });
   socketRoom.set(entryA.socket, code);
@@ -401,7 +401,7 @@ wss.on('connection', (socket) => {
         }
 
         const isHost = room.slots.length === 0;
-        room.slots.push({ socket, userId, isHost, disconnectTimer: null });
+        room.slots.push({ socket, userId, isHost, disconnectTimer: null, tabId: msg.tabId || null });
         socketRoom.set(socket, roomCode);
         // matchId was missing here (unlike pairSockets()'s 'joined' for
         // queue matches, which always included it) - net.js's matchId
@@ -444,12 +444,34 @@ wss.on('connection', (socket) => {
           socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'You are not part of that match.' }));
           return;
         }
-        // A verified rejoin from the same user always supersedes whatever
-        // socket was previously in this slot - a real page reload's old
-        // connection may not have finished closing on our end yet (its
-        // 'close' event can lag slightly behind the browser tearing it down),
-        // and we don't want that race to block the one thing this feature
-        // exists for. Just close the stale one out from under it.
+
+        // A verified rejoin from the same user usually just means their own
+        // reload's old connection hasn't finished closing on our end yet
+        // (its 'close' event can lag slightly behind the browser tearing
+        // the tab down) - safe to just supersede it, which is what this
+        // used to do unconditionally. But the client also shares one
+        // localStorage "resume my active match" record across every tab of
+        // the same origin (see game.js's ACTIVE_MATCH_KEY) - so a
+        // COMPLETELY DIFFERENT tab (often one just left open from an
+        // earlier session) can end up sending this exact same rejoin for a
+        // match it was never part of, purely because it read that shared
+        // record. If the existing socket in this slot is a different tabId
+        // AND is still genuinely alive (open, and has answered its most
+        // recent heartbeat ping - see the isAlive/ping/pong handling
+        // below), this is that second case: reject it instead of evicting
+        // a real, currently-playing connection out from under itself. Only
+        // treat "different tabId" as suspicious when we actually know both
+        // tabIds - an older client that never sent one, or a slot created
+        // before this existed, still falls back to the original trusting
+        // behavior.
+        const sameTab = !slot.tabId || !msg.tabId || slot.tabId === msg.tabId;
+        const existingSocketAlive = slot.socket && slot.socket !== socket
+          && slot.socket.readyState === WebSocket.OPEN && slot.socket.isAlive !== false;
+        if (!sameTab && existingSocketAlive) {
+          socket.send(JSON.stringify({ type: 'rejoin-failed', reason: 'This match is already open in another tab.' }));
+          return;
+        }
+
         if (slot.socket && slot.socket !== socket && slot.socket.readyState === WebSocket.OPEN) {
           slot.socket.close();
         }
@@ -457,6 +479,7 @@ wss.on('connection', (socket) => {
         clearTimeout(slot.disconnectTimer);
         slot.disconnectTimer = null;
         slot.socket = socket;
+        slot.tabId = msg.tabId || slot.tabId;
         socketRoom.set(socket, msg.matchId);
 
         socket.send(JSON.stringify({ type: 'joined', isHost: slot.isHost, matchId: msg.matchId }));
@@ -486,7 +509,7 @@ wss.on('connection', (socket) => {
         }
 
         removeFromQueues(socket);
-        const entry = { socket, userId: user.id, eloRating: Number(msg.eloRating) || 1200 };
+        const entry = { socket, userId: user.id, eloRating: Number(msg.eloRating) || 1200, tabId: msg.tabId || null };
         if (queueType === 'ranked') {
           rankedQueue.push(entry);
           tryMatchRanked();

@@ -529,7 +529,7 @@ function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase, localHan
   if (state.connecting && !isRemote) return;
 
   if (state.online && !Net.isHost && !isRemote) {
-    log('Only the host can start a new game - ask them to click New Game.');
+    log('Only the host can start a new game - ask them to click Rematch.');
     return;
   }
 
@@ -631,10 +631,10 @@ function requestNewGame() {
   if (state.gameMode === 'private') {
     // newGame() already logs and bails for a non-host, but that would skip
     // straight past the settings panel entirely - check here too so a
-    // joiner clicking New Game gets the same explanation instead of nothing
+    // joiner clicking Rematch gets the same explanation instead of nothing
     // visibly happening.
     if (!Net.isHost) {
-      log('Only the host can start a new game - ask them to click New Game.');
+      log('Only the host can start a new game - ask them to click Rematch.');
       return;
     }
     beginGameSetup();
@@ -644,7 +644,7 @@ function requestNewGame() {
   if (state.pendingNewGameRequest) return;
   state.pendingNewGameRequest = true;
   render();
-  setLobbyStatus('New game request sent - waiting for your opponent to respond...');
+  setLobbyStatus('Rematch request sent - waiting for your opponent to respond...');
   Net.send({ type: 'newgame-request' });
 }
 
@@ -655,10 +655,10 @@ function respondToNewGameRequest(accept) {
     if (Net.isHost) {
       newGame();
     } else {
-      setLobbyStatus('Waiting for the host to start the new game...');
+      setLobbyStatus('Waiting for the host to start the rematch...');
     }
   } else {
-    log('You declined the new game request.');
+    log('You declined the rematch request.');
   }
   render();
 }
@@ -2616,7 +2616,10 @@ function saveActiveMatch() {
   if (state.gameMode !== 'casual' && state.gameMode !== 'ranked') return;
   const user = Auth.getUser();
   if (!user || !Net.matchId) return;
-  localStorage.setItem(ACTIVE_MATCH_KEY, JSON.stringify({ matchId: Net.matchId, userId: user.id }));
+  // tabId lets tryResumeActiveMatch() recognize whether a saved record is
+  // THIS tab's own match (safe to silently reconnect to) or some other
+  // tab's - see its comment for why that distinction matters.
+  localStorage.setItem(ACTIVE_MATCH_KEY, JSON.stringify({ matchId: Net.matchId, userId: user.id, tabId: Net.tabId }));
   updateResumeMatchBanner();
 }
 
@@ -2806,11 +2809,30 @@ function handleConnectionStale() {
   attemptRejoin(Net.matchId, user.id, accessToken);
 }
 
-// Called both automatically (once auth resolves after page load) and
-// manually (the "Rejoin" button below) - a manual fallback matters because
-// the automatic path depends on Auth's auth-state-change firing correctly,
-// and there's no reason to strand someone mid-match if that ever hiccups.
-function tryResumeActiveMatch(retriesLeft = 10) {
+// Called both automatically (once auth resolves after page load, on a
+// bfcache restore, and on each retry below) and manually (the "Rejoin"
+// button) - a manual fallback matters because the automatic path depends
+// on Auth's auth-state-change firing correctly, and there's no reason to
+// strand someone mid-match if that ever hiccups.
+//
+// ACTIVE_MATCH_KEY lives in localStorage, which every tab of the site
+// shares - so without the isManual/tabId check below, leaving an old tab
+// open and later starting a fresh casual/ranked match in a DIFFERENT tab
+// would make the OLD tab's own next auth-change event silently try to
+// "resume" the NEW tab's live match instead. The server would honor that
+// (same logged-in user, valid token) and evict the actually-playing tab's
+// connection to hand the room to the stale one - exactly the "queued into
+// ranked and ended up in an old match, board already finished, scoreboard
+// garbled" bug this fixes. Net.tabId (net.js) is stable across a reload of
+// THIS SAME tab but unique to every other tab, so comparing it against
+// whatever tabId was saved with the record tells "my own tab reconnecting"
+// apart from "some other tab's match." The automatic paths never bypass
+// this; only an explicit Rejoin-button click (isManual) does, since the
+// user might legitimately be doing this from a brand new tab because the
+// original one is actually gone - the server's own tabId+liveness check
+// (see server.js's 'rejoin' handler) is what makes that safe rather than
+// this client-side check alone.
+function tryResumeActiveMatch(retriesLeft = 10, isManual = false) {
   updateResumeMatchBanner();
   if (state.online || state.connecting) return; // already mid-match - nothing to resume
   const raw = localStorage.getItem(ACTIVE_MATCH_KEY);
@@ -2818,12 +2840,13 @@ function tryResumeActiveMatch(retriesLeft = 10) {
   let record;
   try { record = JSON.parse(raw); } catch { clearActiveMatch(); return; }
   if (!record || !record.matchId || !record.userId) { clearActiveMatch(); return; }
+  if (!isManual && record.tabId && record.tabId !== Net.tabId) return;
 
   const accessToken = Auth.getAccessToken();
   if (!accessToken) {
     // Auth may not have finished resolving yet on a fresh page load - retry
     // for a few seconds rather than silently giving up forever.
-    if (retriesLeft > 0) setTimeout(() => tryResumeActiveMatch(retriesLeft - 1), 500);
+    if (retriesLeft > 0) setTimeout(() => tryResumeActiveMatch(retriesLeft - 1, isManual), 500);
     return;
   }
 
@@ -3030,14 +3053,14 @@ function handleNetDataInner(msg) {
   } else if (msg.type === 'newgame-response') {
     state.pendingNewGameRequest = false;
     if (msg.accepted) {
-      log('Opponent accepted your new game request.');
+      log('Opponent accepted your rematch request.');
       if (Net.isHost) {
         newGame();
       } else {
-        setLobbyStatus('Waiting for the host to start the new game...');
+        setLobbyStatus('Waiting for the host to start the rematch...');
       }
     } else {
-      log('Opponent declined your new game request.');
+      log('Opponent declined your rematch request.');
     }
     render();
   }
@@ -3372,7 +3395,7 @@ async function refreshQueueCounts() {
   }
 }
 
-document.getElementById('resumeMatchBtn').addEventListener('click', () => tryResumeActiveMatch());
+document.getElementById('resumeMatchBtn').addEventListener('click', () => tryResumeActiveMatch(10, true));
 
 // A phone coming back from the background is exactly the case net.js's
 // periodic staleness check is slowest to catch (it could be up to ~3s from

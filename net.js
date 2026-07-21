@@ -16,6 +16,32 @@ const Net = (() => {
   ];
   const CONNECT_TIMEOUT_MS = 15000;
 
+  // A stable id for THIS browser tab specifically - generated once and kept
+  // in sessionStorage, which (unlike localStorage) is never shared with
+  // other tabs of the same origin but does survive a reload of this same
+  // tab. Sent with every join/queue/rejoin so the signaling server can tell
+  // "my own tab reconnecting after a reload" apart from "a completely
+  // different tab (e.g. one left open from an earlier match) trying to
+  // jump into a match it was never part of" - see server.js's 'rejoin'
+  // handler, and game.js's tryResumeActiveMatch() for the client-side half
+  // of this same fix.
+  function generateTabId() {
+    try {
+      let id = sessionStorage.getItem('minogoe_tabId');
+      if (!id) {
+        id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        sessionStorage.setItem('minogoe_tabId', id);
+      }
+      return id;
+    } catch {
+      // sessionStorage can throw in some locked-down/private-browsing
+      // contexts - fall back to a per-load id. Loses reload continuity
+      // (a reload would look like a new tab), but never breaks the page.
+      return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+  }
+  const TAB_ID = generateTabId();
+
   let ws = null;
   let pc = null;
   let dc = null;
@@ -337,7 +363,7 @@ const Net = (() => {
 
     openSocket(serverUrl, () => {
       callbacks.onStatus && callbacks.onStatus('Connected to signaling server...');
-      ws.send(JSON.stringify(joinMessage));
+      ws.send(JSON.stringify({ ...joinMessage, tabId: TAB_ID }));
     }, { onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRoomFull, onConnectionStale });
   }
 
@@ -353,7 +379,7 @@ const Net = (() => {
 
     openSocket(serverUrl, () => {
       callbacks.onStatus && callbacks.onStatus('Reconnecting to your match...');
-      ws.send(JSON.stringify({ type: 'rejoin', matchId: targetMatchId, userId, accessToken }));
+      ws.send(JSON.stringify({ type: 'rejoin', matchId: targetMatchId, userId, accessToken, tabId: TAB_ID }));
     }, { onStatus, onReady, onData, onPeerLeft, onOpponentDisconnected, onOpponentTimeout, onRejoinFailed, onConnectionStale });
   }
 
@@ -450,6 +476,7 @@ const Net = (() => {
     get connected() { return connected; },
     get matchedMode() { return matchedMode; },
     get matchId() { return matchId; },
+    get tabId() { return TAB_ID; },
     get isRejoin() { return isRejoin; },
     get selfInitiatedRejoin() { return selfInitiatedRejoin; },
   };

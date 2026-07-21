@@ -13,7 +13,11 @@ const CUSTOM_SHAPE_BOARD_SIZE = 14; // bounding box for plus/x/heart - bigger th
 const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
 const HANDICAP_POINTS = 0.5; // whoever moves second gets a half-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
-const TURN_TIME_LIMITS = { casual: 120, ranked: 60 }; // seconds; bot/hotseat are always untimed. Private rooms are host-configurable (see state.privateTimerSeconds) - untimed by default.
+const TURN_TIME_LIMITS = { casual: 120, ranked: 60, ffa: 90 }; // seconds; bot/hotseat are always untimed. Private rooms are host-configurable (see state.privateTimerSeconds) - untimed by default.
+// Board fill color per player number (1-indexed, array is 0-indexed) -
+// matches --p1/--p2/--p3/--p4 in style.css exactly (kept in sync by hand;
+// this file has no access to CSS custom properties from canvas drawing).
+const PLAYER_COLORS = ['#5b7fd9', '#d97a52', '#7ec982', '#c96bd6'];
 const ACTIVE_MATCH_KEY = 'minogoe_activeMatch'; // localStorage key for reconnect-after-reload
 const MATCH_INTRO_DURATION_MS = 4500; // how long the pre-match "vs" intro card stays up before auto-dismissing
 
@@ -275,6 +279,22 @@ const state = {
   // every other piece of real game state. null means untimed, matching
   // hotseat/vsBot/an unconfigured private room's existing behavior.
   privateTimerSeconds: null,
+
+  // ---------- 4-player free-for-all (gameMode === 'ffa' only) ----------
+  // Every existing mode uses hand1/hand2/score1/score2/opponentX above,
+  // completely untouched - FFA gets its own parallel seat-indexed
+  // representation instead of trying to force 4 seats into those pairwise
+  // fields. player numbers stay 1-indexed everywhere (board values,
+  // state.turn, playerLabel()) exactly like today, just up to 4 instead of
+  // capped at 2 - array index [player - 1] throughout.
+  playerCount: 2,      // 2 for every existing mode; 4 only in ffa
+  hands: null,         // ffa only: [hand1, hand2, hand3, hand4]
+  scores: null,        // ffa only: [score1, score2, score3, score4]
+  ffaSeat: null,        // my own seat, 0-3 (== player - 1), once matched
+  ffaPlayers: null,     // ffa only: [{userId,username,avatarId,titleId}|null, x4], seat-indexed - replaces the singular opponentX fields, which only ever assumed one opponent
+  ffaEliminatedSeats: null, // ffa only: Set<seat 0-3> - permanently auto-passed after that seat's own reconnect grace expired; the others play on
+  ffaAbandoned: false,  // ffa only: true once the host disconnected and never came back - match ended with no real result
+  ffaRanks: null,       // ffa only: [rank1, rank2, rank3, rank4] seat-indexed, set once the game ends (standard competition ranking - ties share a rank)
 };
 
 function snapshotState() {
@@ -332,6 +352,12 @@ function serializeFullState() {
     turnDeadline: state.turnDeadline,
     privateTimerSeconds: state.privateTimerSeconds,
     boardShape: state.boardShape,
+    // ffa only - harmless/unused on the receiving end for every other mode.
+    playerCount: state.playerCount,
+    hands: state.hands,
+    scores: state.scores,
+    ffaEliminatedSeats: state.ffaEliminatedSeats ? [...state.ffaEliminatedSeats] : null,
+    ffaRanks: state.ffaRanks,
   };
 }
 
@@ -343,13 +369,34 @@ function applyFullState(msg) {
   // defaults back to a normal 12x12 board until this runs, which would
   // otherwise misalign every idx()/voidMask lookup against the resynced
   // (possibly 14x14 custom-shape) board contents.
-  state.boardShape = msg.boardShape || 'square';
-  state.voidMask = applyBoardShapeSizing(state.boardShape);
+  if (state.gameMode === 'ffa') {
+    // FFA always forces a fixed 20x20 square board (never a custom shape,
+    // and BOARD_SIZE/CELL_PX sizing here mirrors beginFfaGame() rather than
+    // applyBoardShapeSizing(), which only knows the 12/14 sizes the other
+    // modes use).
+    BOARD_SIZE = 20;
+    CELL_PX = TARGET_BOARD_PX / BOARD_SIZE;
+    canvas.width = BOARD_SIZE * CELL_PX;
+    canvas.height = BOARD_SIZE * CELL_PX;
+    state.boardShape = 'square';
+    state.voidMask = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
+  } else {
+    state.boardShape = msg.boardShape || 'square';
+    state.voidMask = applyBoardShapeSizing(state.boardShape);
+  }
   state.board = Int8Array.from(msg.board);
-  state.hand1 = msg.hand1;
-  state.hand2 = msg.hand2;
-  state.score1 = msg.score1;
-  state.score2 = msg.score2;
+  state.playerCount = msg.playerCount || 2;
+  if (state.gameMode === 'ffa') {
+    state.hands = msg.hands;
+    state.scores = msg.scores;
+    state.ffaEliminatedSeats = new Set(msg.ffaEliminatedSeats || []);
+    state.ffaRanks = msg.ffaRanks || null;
+  } else {
+    state.hand1 = msg.hand1;
+    state.hand2 = msg.hand2;
+    state.score1 = msg.score1;
+    state.score2 = msg.score2;
+  }
   state.turn = msg.turn;
   state.plyCount = msg.plyCount;
   state.passStreak = msg.passStreak;
@@ -363,8 +410,11 @@ function applyFullState(msg) {
   // state.myPlayer isn't part of this payload (it depends on Net.isHost,
   // which is the one thing that legitimately differs between the two
   // peers) - recomputed locally instead, now that gameSequence and
-  // hostIsPlayerOneBase have just been caught up to the sender's.
-  if (state.online) state.myPlayer = computeMyPlayerForCurrentGame();
+  // hostIsPlayerOneBase have just been caught up to the sender's. FFA has
+  // no such ambiguity - a seat's player number never changes for the life
+  // of a match (no rematches, no coin-flip) - so it's left exactly as
+  // ffaSeat + 1 already set it.
+  if (state.online && state.gameMode !== 'ffa') state.myPlayer = computeMyPlayerForCurrentGame();
   state.privateTimerSeconds = msg.privateTimerSeconds ?? null;
   state.scoringCells = msg.scoringCells;
   state.selected = null;
@@ -442,7 +492,18 @@ function handicapPlayer() {
 }
 
 // ---------- Player display names ----------
+// ffa's "up to 3 other seats" identity (state.ffaPlayers, seat-indexed) is
+// looked up first in each of these four - the singular opponentX fields
+// below only ever meant anything when there was exactly one opponent.
 function playerLabel(playerNum) {
+  if (state.gameMode === 'ffa') {
+    if (playerNum === state.myPlayer) {
+      const profile = Auth.getProfile();
+      return profile ? profile.username : `Player ${playerNum}`;
+    }
+    const info = state.ffaPlayers && state.ffaPlayers[playerNum - 1];
+    return (info && info.username) || `Player ${playerNum}`;
+  }
   if (state.online) {
     if (playerNum === state.myPlayer) {
       const profile = Auth.getProfile();
@@ -461,6 +522,14 @@ function playerLabel(playerNum) {
 // The account id behind a given player slot, if it's a real (non-guest,
 // non-bot) account - used to link their name to their profile.
 function playerProfileId(playerNum) {
+  if (state.gameMode === 'ffa') {
+    if (playerNum === state.myPlayer) {
+      const user = Auth.getUser();
+      return user ? user.id : null;
+    }
+    const info = state.ffaPlayers && state.ffaPlayers[playerNum - 1];
+    return (info && info.userId) || null;
+  }
   if (state.online) {
     if (playerNum === state.myPlayer) {
       const user = Auth.getUser();
@@ -478,6 +547,14 @@ function playerProfileId(playerNum) {
 // The avatar/title item ids equipped by whoever's in a given player slot -
 // null for bot/guest slots (which have no profile), matching playerProfileId.
 function playerAvatarId(playerNum) {
+  if (state.gameMode === 'ffa') {
+    if (playerNum === state.myPlayer) {
+      const profile = Auth.getProfile();
+      return profile ? profile.avatar_id : null;
+    }
+    const info = state.ffaPlayers && state.ffaPlayers[playerNum - 1];
+    return (info && info.avatarId) || null;
+  }
   if (state.online) {
     if (playerNum === state.myPlayer) {
       const profile = Auth.getProfile();
@@ -493,6 +570,14 @@ function playerAvatarId(playerNum) {
 }
 
 function playerTitleId(playerNum) {
+  if (state.gameMode === 'ffa') {
+    if (playerNum === state.myPlayer) {
+      const profile = Auth.getProfile();
+      return profile ? profile.title_id : null;
+    }
+    const info = state.ffaPlayers && state.ffaPlayers[playerNum - 1];
+    return (info && info.titleId) || null;
+  }
   if (state.online) {
     if (playerNum === state.myPlayer) {
       const profile = Auth.getProfile();
@@ -1242,9 +1327,14 @@ function scheduleBotMove() {
 }
 
 // ---------- Final scoring ----------
+// score3/score4 are always computed (cheap - the flood-fill/borderOwners
+// core was already owner-count-agnostic) but only ever non-zero in ffa
+// mode - every existing 2-player caller destructures just
+// {score1, score2, undecided, scoringCells} and silently ignores them, so
+// this needed no branching at all to generalize past 2 owners.
 function computeFinalScores(board) {
   const visited = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
-  let score1 = 0, score2 = 0, undecided = 0;
+  let score1 = 0, score2 = 0, score3 = 0, score4 = 0, undecided = 0;
   const scoringCells = []; // { index, owner } for every cell that counted toward a score
   for (let i = 0; i < board.length; i++) {
     if (board[i] === 0 && !visited[i] && !state.voidMask[i]) {
@@ -1275,45 +1365,117 @@ function computeFinalScores(board) {
       if (borderOwners.size === 1) {
         const owner = [...borderOwners][0];
         if (owner === 1) score1 += regionCells.length;
-        else score2 += regionCells.length;
+        else if (owner === 2) score2 += regionCells.length;
+        else if (owner === 3) score3 += regionCells.length;
+        else score4 += regionCells.length;
         for (const cellIdx of regionCells) scoringCells.push({ index: cellIdx, owner });
       } else {
         undecided += regionCells.length;
       }
     }
   }
-  return { score1, score2, undecided, scoringCells };
+  return { score1, score2, score3, score4, undecided, scoringCells };
 }
 
 // ---------- Turn / pass / end-game logic ----------
+// Player numbers stay 1-indexed (board values, state.turn) for every mode,
+// ffa included - handFor()/scoreFor() below index into state.hands/scores
+// at [player - 1].
+function handFor(player) {
+  // Defensive fallback for the brief window between handleFfaReady() (which
+  // already sets state.gameMode/playerCount so an incoming 'identify' can
+  // legitimately trigger a render() before state.hands has anything real
+  // in it yet) and beginFfaGame()/the 'ffa-start' message actually dealing
+  // real hands.
+  if (state.gameMode === 'ffa') return (state.hands && state.hands[player - 1]) || [];
+  return player === 1 ? state.hand1 : state.hand2;
+}
+function scoreFor(player) {
+  if (state.gameMode === 'ffa') return (state.scores && state.scores[player - 1]) || 0;
+  return player === 1 ? state.score1 : state.score2;
+}
+function setScoreFor(player, value) {
+  if (state.gameMode === 'ffa') { state.scores[player - 1] = value; return; }
+  if (player === 1) state.score1 = value; else state.score2 = value;
+}
+
+// Routes a real-time gameplay message (move/pass/chat/resync/forfeit) over
+// whichever transport this mode actually uses - NetFfa's host-relay star
+// for ffa, Net's plain 1:1 data channel for everything else. Message
+// TYPE strings are shared as-is between the two (never ambiguous - they
+// travel over entirely separate channels), so no translation is needed
+// here, unlike netSendToServer() below.
+function netSend(obj) {
+  if (state.gameMode === 'ffa') NetFfa.send(obj); else Net.send(obj);
+}
+
+// The signaling server itself hosts BOTH the 2-player live-game-* handlers
+// and their ffa- prefixed equivalents (see server.js) - unlike netSend()'s
+// data channel, this one physical process needs the type strings
+// disambiguated, so ffa mode gets a small rename here rather than the
+// server having to guess which protocol a bare 'live-game-move' belongs to.
+const FFA_SERVER_MESSAGE_TYPES = {
+  'live-game-start': 'ffa-live-game-start',
+  'live-game-move': 'ffa-live-game-move',
+  'live-player-info': 'ffa-live-player-info',
+};
+function netSendToServer(obj) {
+  if (state.gameMode === 'ffa') {
+    NetFfa.sendToServer({ ...obj, type: FFA_SERVER_MESSAGE_TYPES[obj.type] || obj.type });
+  } else {
+    Net.sendToServer(obj);
+  }
+}
+
+// How many seats are still actually playing - equal to state.playerCount
+// everywhere except ffa once a seat's own reconnect grace has expired and
+// it's been permanently eliminated (the others play on without it).
+function activePlayerCount() {
+  if (state.gameMode === 'ffa' && state.ffaEliminatedSeats) return state.playerCount - state.ffaEliminatedSeats.size;
+  return state.playerCount;
+}
+
+// `(turn % playerCount) + 1` is provably identical to the old hardcoded
+// `turn === 1 ? 2 : 1` when playerCount is 2 (1 -> (1%2)+1=2, 2 -> (2%2)+1=1)
+// - every non-ffa mode is unaffected by this generalization. The extra
+// do-while skip-eliminated-seats loop is a no-op whenever
+// ffaEliminatedSeats is empty/null, which is always true outside ffa.
 function switchTurn() {
-  state.turn = state.turn === 1 ? 2 : 1;
+  let next = state.turn;
+  do {
+    next = (next % state.playerCount) + 1;
+  } while (state.gameMode === 'ffa' && state.ffaEliminatedSeats && state.ffaEliminatedSeats.has(next - 1) && next !== state.turn);
+  state.turn = next;
   state.plyCount += 1;
 }
 
-// Voluntary passing is only allowed once your opponent's hand is empty
-// (they can never place again) OR it's your own last piece (you can never
-// place again either, after this) - otherwise you could hoard passes on
-// your early turns to play with more board information than your
-// opponent had. Both players deal the same number of pieces, so "my hand
-// has exactly 1 left" is the precise, symmetric equivalent of "opponent's
-// hand is already empty" - previously only whichever player happened to
-// place their own final piece SECOND ever got this option, since the
-// first player's last piece always found the opponent's hand still
-// non-empty.
+// Voluntary passing is only allowed once every OTHER (still-active) seat's
+// hand is already empty (none of them can ever place again) OR it's your
+// own last piece (you can never place again either, after this) -
+// otherwise you could hoard passes on your early turns to play with more
+// board information than everyone else had. Every seat is dealt the same
+// number of pieces, so "my hand has exactly 1 left" is the precise,
+// symmetric equivalent of "every other active seat's hand is already
+// empty" - previously (2-player only) this checked a single opponent;
+// generalizes directly to "all of them" for ffa.
 function canVoluntarilyPass() {
-  const myHand = state.turn === 1 ? state.hand1 : state.hand2;
+  const myHand = handFor(state.turn);
+  if (state.gameMode === 'ffa') {
+    const others = [1, 2, 3, 4].filter((p) => p !== state.turn && !state.ffaEliminatedSeats.has(p - 1));
+    return others.every((p) => state.hands[p - 1].length === 0) || myHand.length === 1;
+  }
   const oppHand = state.turn === 1 ? state.hand2 : state.hand1;
   return oppHand.length === 0 || myHand.length === 1;
 }
 
 // Auto-passes the current turn holder for as long as they have no legal
-// move at all (empty hand, or nothing fits) - ending the game once that
-// makes two forced/voluntary passes in a row.
+// move at all (empty hand, or nothing fits) - ending the game once every
+// currently-active seat has forced/voluntarily passed in a row (2 for the
+// normal 2-player case, fewer once ffa seats have been eliminated).
 function checkGameEnd() {
   if (state.gameOver) return;
   while (!state.gameOver) {
-    const hand = state.turn === 1 ? state.hand1 : state.hand2;
+    const hand = handFor(state.turn);
     if (hasAnyLegalMove(hand, state.board)) return;
 
     const player = state.turn;
@@ -1321,8 +1483,8 @@ function checkGameEnd() {
     state.passStreak += 1;
     switchTurn();
 
-    if (state.passStreak >= 2) {
-      endGame('Both players passed in a row.');
+    if (state.passStreak >= activePlayerCount()) {
+      endGame(state.gameMode === 'ffa' ? 'Everyone remaining passed in a row.' : 'Both players passed in a row.');
       return;
     }
   }
@@ -1362,11 +1524,11 @@ function manualPass(fromRemote = false) {
   // opponent, otherwise their client never learns the game ended and is
   // left waiting on a turn that will never come.
   if (state.online && !fromRemote) {
-    Net.send({ type: 'pass', seq: state.plyCount });
+    netSend({ type: 'pass', seq: state.plyCount });
   }
 
-  if (state.passStreak >= 2) {
-    endGame('Both players passed in a row.');
+  if (state.passStreak >= activePlayerCount()) {
+    endGame(state.gameMode === 'ffa' ? 'Everyone remaining passed in a row.' : 'Both players passed in a row.');
     return;
   }
 
@@ -1402,7 +1564,7 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   for (const [dr, dc] of orientation) {
     state.board[idx(r0 + dr, c0 + dc)] = player;
   }
-  const hand = player === 1 ? state.hand1 : state.hand2;
+  const hand = handFor(player);
   hand.splice(hand.indexOf(shapeName), 1);
   // autoTimeout travels with the move itself (moveLog + the network
   // message below) rather than as a separate synced counter - it's what
@@ -1451,8 +1613,8 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   // provably correct rather than "correct because the grace period is
   // long enough."
   if (state.online && !fromRemote) {
-    Net.send({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq, autoTimeout, durationMs: finalDurationMs });
-    Net.sendToServer({ type: 'live-game-move', player, shapeName, orientationIndex, r0, c0, t });
+    netSend({ type: 'move', shapeName, orientationIndex, r0, c0, t, seq, autoTimeout, durationMs: finalDurationMs });
+    netSendToServer({ type: 'live-game-move', player, shapeName, orientationIndex, r0, c0, t });
   }
 
   checkGameEnd();
@@ -1521,13 +1683,47 @@ function respondToUndoRequest(accept) {
   render();
 }
 
+// FFA never ends the whole match just because one seat gives up or times
+// out (unlike the 2-player forfeit, which always ends the game outright) -
+// the seat is permanently removed from turn rotation (see switchTurn()'s
+// own skip-eliminated-seats loop) and the other still-active seats keep
+// playing normally. Whatever that seat had already placed stays on the
+// board and is scored exactly as normal at the end (scoring is board-
+// state-driven, not turn-driven), so eliminating them costs their future
+// turns, not their already-claimed territory. Apply-only (no network I/O
+// of its own) - every call site is responsible for broadcasting an
+// 'ffa-eliminate' itself exactly once, whether that's a self-declared
+// voluntary forfeit/self-timeout or the host's authoritative declaration
+// of someone ELSE'S timeout (see tickTurnTimer()'s ffa branch).
+function eliminateFfaSeat(seat, reason) {
+  if (state.gameOver || !state.ffaEliminatedSeats || state.ffaEliminatedSeats.has(seat)) return;
+  state.ffaEliminatedSeats.add(seat);
+  const player = seat + 1;
+  log(reason === 'forfeit'
+    ? `${playerLabel(player)} forfeited. The remaining players continue.`
+    : `${playerLabel(player)} ran out of time and was eliminated. The remaining players continue.`);
+  if (state.turn === player) switchTurn();
+  if (activePlayerCount() <= 1) {
+    endGame('Only one player remains.');
+    return;
+  }
+  checkGameEnd();
+  render();
+}
+
 function forfeitGame() {
   if (!state.gameStarted || state.gameOver || state.connecting) return;
   if (!window.confirm('Are you sure you want to forfeit this game?')) return;
 
   const forfeitingPlayer = state.online ? state.myPlayer : (state.vsBot ? 1 : state.turn);
-  const winner = forfeitingPlayer === 1 ? 2 : 1;
 
+  if (state.gameMode === 'ffa') {
+    eliminateFfaSeat(forfeitingPlayer - 1, 'forfeit');
+    netSend({ type: 'ffa-eliminate', seat: forfeitingPlayer - 1, reason: 'forfeit' });
+    return;
+  }
+
+  const winner = forfeitingPlayer === 1 ? 2 : 1;
   if (state.online) {
     Net.send({ type: 'forfeit', forfeitingPlayer });
   }
@@ -1554,8 +1750,13 @@ function endGame(reason, forcedWinner) {
   clearInterval(timeoutConfirmRetryTimer);
   timeoutConfirmRetryTimer = null;
   if (state.online) {
-    Net.leaveRoom();
+    if (state.gameMode === 'ffa') NetFfa.leaveRoom(); else Net.leaveRoom();
     clearActiveMatch();
+  }
+
+  if (state.gameMode === 'ffa') {
+    endFfaGame(reason);
+    return;
   }
 
   const { score1, score2, undecided, scoringCells } = computeFinalScores(state.board);
@@ -1689,6 +1890,83 @@ async function recordGameResult(winner, forfeit) {
       showEloResult(state.myPlayer === 1 ? eloRow.elo_delta_p1 : eloRow.elo_delta_p2, eloRow.elo_halved);
     }
   }
+}
+
+// FFA's winner determination is a ranking, not a binary win/lose/tie - a
+// tie for 1st is entirely possible with 4 independent scores, unlike the
+// 2-player case's simple > / < / = compare. Standard competition ranking:
+// ties share a rank, and the next distinct score skips ahead accordingly
+// (1, 1, 3, 4), computed fresh each time rather than incrementally.
+function computeFfaRanks(scores) {
+  const seats = [0, 1, 2, 3];
+  const ranked = [...seats].sort((a, b) => scores[b] - scores[a]);
+  const ranks = new Array(4);
+  ranked.forEach((seat, i) => {
+    ranks[seat] = (i > 0 && scores[seat] === scores[ranked[i - 1]]) ? ranks[ranked[i - 1]] : i + 1;
+  });
+  return ranks;
+}
+
+function endFfaGame(reason) {
+  const { score1, score2, score3, score4, undecided, scoringCells } = computeFinalScores(state.board);
+  state.scores = [score1, score2, score3, score4];
+  state.scoringCells = scoringCells;
+
+  if (state.ffaAbandoned) {
+    log(`Game over. ${reason}`);
+    recordFfaGameResult(true);
+    render();
+    return;
+  }
+
+  state.ffaRanks = computeFfaRanks(state.scores);
+  const standings = [0, 1, 2, 3]
+    .sort((a, b) => state.ffaRanks[a] - state.ffaRanks[b])
+    .map((seat) => `#${state.ffaRanks[seat]} ${playerLabel(seat + 1)} (${state.scores[seat]})`)
+    .join(', ');
+  log(`Game over. ${reason} Final standings - ${standings}. (${undecided} undecided)`);
+  recordFfaGameResult(false);
+  render();
+}
+
+// Both sides independently attempting this and letting client_match_id's
+// unique constraint reject the duplicates is the exact same dedup pattern
+// recordGameResult() already relies on for 2-player games - here all 4
+// clients attempt it, and the submit_ffa_result() RPC's own uniqueness
+// check (schema.sql Phase 55) makes every call after the first a harmless
+// no-op regardless of which of the 4 lands first.
+async function recordFfaGameResult(abandoned) {
+  if (!state.online) return;
+  const matchId = NetFfa.matchId;
+  if (!matchId) return;
+
+  const seatsPayload = [0, 1, 2, 3].map((seat) => ({
+    seat,
+    player_id: (state.ffaPlayers[seat] && state.ffaPlayers[seat].userId) || null,
+    score: state.scores[seat],
+    rank: abandoned ? null : state.ffaRanks[seat],
+  }));
+  // Every seat needs a real account id for the RPC's participant check - if
+  // an identify never arrived from some seat (e.g. they dropped before
+  // ever sending one), skip recording entirely rather than submit a result
+  // with a hole in it.
+  if (seatsPayload.some((s) => !s.player_id)) return;
+
+  const { error } = await supabaseClient.rpc('submit_ffa_result', {
+    p_client_match_id: matchId,
+    p_board_size: BOARD_SIZE,
+    p_started_at: state.gameStartedAt,
+    p_abandoned: abandoned,
+    p_seats: seatsPayload,
+  });
+  if (error) {
+    if (error.code !== '23505') log('Could not save FFA game result: ' + error.message);
+    return;
+  }
+  log('FFA game result saved to match history.');
+  await Auth.refreshProfile();
+  if (typeof checkForNewPacks === 'function') checkForNewPacks();
+  if (typeof checkForNewGifts === 'function') checkForNewGifts();
 }
 
 let eloResultTimer = null;
@@ -1901,6 +2179,18 @@ function tickTurnTimer() {
     stopTurnTimer();
     if (state.turn === state.myPlayer) {
       handleSelfTimeout();
+    } else if (state.gameMode === 'ffa') {
+      // No symmetric "confirm with the peer before declaring it" dance for
+      // ffa (see timeoutOpponentForfeit()'s own comment) - the host is
+      // already the sole relay/authority for every message in a star
+      // topology, so its own local state IS ground truth; it never needs
+      // to double-check with anyone. A non-host just waits for the host's
+      // authoritative ffa-eliminate broadcast instead of guessing itself.
+      if (NetFfa.isHost) {
+        const seat = state.turn - 1;
+        eliminateFfaSeat(seat, 'timeout');
+        netSend({ type: 'ffa-eliminate', seat, reason: 'timeout' });
+      }
     } else {
       // Don't rely solely on the timed-out player's own client to self-report -
       // their tab may be backgrounded/throttled and never fire this at all,
@@ -2070,7 +2360,7 @@ function handleSelfTimeout() {
     timeoutForfeit();
     return;
   }
-  const hand = state.myPlayer === 1 ? state.hand1 : state.hand2;
+  const hand = handFor(state.myPlayer);
   const placements = enumerateLegalPlacements(hand, state.board);
   // Shouldn't actually be reachable - checkGameEnd() already auto-passes
   // a hand with zero legal moves before it can ever become "my turn" in
@@ -2088,6 +2378,12 @@ function handleSelfTimeout() {
 function timeoutForfeit() {
   if (state.gameOver) return;
   const forfeitingPlayer = state.myPlayer;
+  if (state.gameMode === 'ffa') {
+    const seat = forfeitingPlayer - 1;
+    eliminateFfaSeat(seat, 'timeout');
+    netSend({ type: 'ffa-eliminate', seat, reason: 'timeout' });
+    return;
+  }
   const winner = forfeitingPlayer === 1 ? 2 : 1;
   if (state.online) Net.send({ type: 'forfeit', forfeitingPlayer });
   endGame(`${playerLabel(forfeitingPlayer)} ran out of time.`, winner);
@@ -2238,7 +2534,7 @@ function drawBoard() {
         continue;
       }
       const val = state.board[cellIdx];
-      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
+      ctx.fillStyle = val === 0 ? '#1e1b24' : PLAYER_COLORS[val - 1];
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
       ctx.strokeRect(c * CELL_PX + 0.5, r * CELL_PX + 0.5, CELL_PX - 1, CELL_PX - 1);
     }
@@ -2359,46 +2655,62 @@ function render() {
     const status = document.getElementById('onlineStatus')?.textContent;
     banner.textContent = status && status.trim() ? status : 'Reconnecting...';
   } else if (state.online) {
-    const you = state.myPlayer === state.turn ? ' (your turn)' : " (opponent's turn)";
+    // ffa has up to 3 possible "opponents," not one, so playerLabel()'s own
+    // name (already seat-specific) says enough on its own without the
+    // generic "(opponent's turn)" suffix.
+    const you = state.myPlayer === state.turn
+      ? ' (your turn)'
+      : (state.gameMode === 'ffa' ? '' : " (opponent's turn)");
     banner.textContent = `${playerLabel(state.turn)}'s turn${you}`;
   } else {
     banner.textContent = `${playerLabel(state.turn)}'s turn`;
   }
 
-  document.getElementById('scoreLabel1').innerHTML = playerBadgeHtml(1);
-  document.getElementById('scoreLabel2').innerHTML = playerBadgeHtml(2);
-  if (state.gameOver && state.forfeit) {
-    document.getElementById('score1').textContent = state.winner === 1 ? 'W' : 'FF';
-    document.getElementById('score2').textContent = state.winner === 2 ? 'W' : 'FF';
-  } else {
-    document.getElementById('score1').textContent = state.score1;
-    document.getElementById('score2').textContent = state.score2;
-  }
+  const isFfaMode = state.playerCount === 4;
+  document.getElementById('scoreBlock3').classList.toggle('ffa-only', !isFfaMode);
+  document.getElementById('scoreBlock4').classList.toggle('ffa-only', !isFfaMode);
+  document.getElementById('handBlock3').classList.toggle('ffa-only', !isFfaMode);
+  document.getElementById('handBlock4').classList.toggle('ffa-only', !isFfaMode);
 
-  document.getElementById('handLabel1').innerHTML = `${playerLink(playerProfileId(1), playerLabel(1))}'s hand`;
-  document.getElementById('handLabel2').innerHTML = `${playerLink(playerProfileId(2), playerLabel(2))}'s hand`;
+  for (let p = 1; p <= state.playerCount; p++) {
+    document.getElementById(`scoreLabel${p}`).innerHTML = playerBadgeHtml(p);
+    const scoreEl = document.getElementById(`score${p}`);
+    scoreEl.textContent = (state.gameOver && state.forfeit)
+      ? (state.winner === p ? 'W' : 'FF')
+      : scoreFor(p);
+    document.getElementById(`handLabel${p}`).innerHTML = `${playerLink(playerProfileId(p), playerLabel(p))}'s hand`;
+    renderHand(`hand${p}`, handFor(p), p);
+  }
 
   if (state.gameStarted) {
     const proj = computeFinalScores(state.board);
-    const proj1 = proj.score1 + (handicapPlayer() === 1 ? HANDICAP_POINTS : 0);
-    const proj2 = proj.score2 + (handicapPlayer() === 2 ? HANDICAP_POINTS : 0);
-    // Same information as before (if the game ended right now: P1's score,
-    // P2's score, and how much of the board is still undecided), just laid
-    // out as compact labeled chips instead of one dense sentence - still
-    // sized/muted well below the real scoreboard above it, just easier to
-    // actually scan at a glance mid-game.
-    document.getElementById('projected').innerHTML = `
-      <span class="projected-label">Projected</span>
-      <span class="projected-value projected-p1">${playerLabel(1)} ${proj1}</span>
-      <span class="projected-value projected-p2">${playerLabel(2)} ${proj2}</span>
-      <span class="projected-undecided">${proj.undecided} undecided</span>
-    `;
+    if (state.gameMode === 'ffa') {
+      const chips = [1, 2, 3, 4]
+        .map((p) => `<span class="projected-value projected-p${p}">${playerLabel(p)} ${proj[`score${p}`]}</span>`)
+        .join('');
+      document.getElementById('projected').innerHTML = `
+        <span class="projected-label">Projected</span>
+        ${chips}
+        <span class="projected-undecided">${proj.undecided} undecided</span>
+      `;
+    } else {
+      const proj1 = proj.score1 + (handicapPlayer() === 1 ? HANDICAP_POINTS : 0);
+      const proj2 = proj.score2 + (handicapPlayer() === 2 ? HANDICAP_POINTS : 0);
+      // Same information as before (if the game ended right now: P1's score,
+      // P2's score, and how much of the board is still undecided), just laid
+      // out as compact labeled chips instead of one dense sentence - still
+      // sized/muted well below the real scoreboard above it, just easier to
+      // actually scan at a glance mid-game.
+      document.getElementById('projected').innerHTML = `
+        <span class="projected-label">Projected</span>
+        <span class="projected-value projected-p1">${playerLabel(1)} ${proj1}</span>
+        <span class="projected-value projected-p2">${playerLabel(2)} ${proj2}</span>
+        <span class="projected-undecided">${proj.undecided} undecided</span>
+      `;
+    }
   } else {
     document.getElementById('projected').textContent = 'No game in progress yet.';
   }
-
-  renderHand('hand1', state.hand1, 1);
-  renderHand('hand2', state.hand2, 2);
 
   updateSelectionInfo();
 
@@ -2428,6 +2740,7 @@ function render() {
 
   document.getElementById('casualQueueBtn').disabled = state.online || state.connecting || state.queueSearching;
   document.getElementById('rankedQueueBtn').disabled = state.online || state.connecting || state.queueSearching;
+  document.getElementById('ffaQueueBtn').disabled = state.online || state.connecting || state.queueSearching;
   // Only show Cancel while genuinely establishing a first connection - not
   // while state.connecting is true because we're mid-game waiting for a
   // disconnected opponent to reconnect (state.online is already true then).
@@ -2638,7 +2951,7 @@ function sendChat() {
   if (!text) return;
   input.value = '';
   log(`\u{1F4AC} ${playerLabel(state.myPlayer)}: ${text}`);
-  Net.send({ type: 'chat', text });
+  netSend({ type: 'chat', text });
 }
 
 // ---------- Canvas interaction ----------
@@ -3125,9 +3438,9 @@ function handleNetReady() {
 // but the DOM stale - an uncaught exception here would otherwise abort
 // partway through a branch and skip its render() call, leaving click
 // handlers bound to whatever was last drawn instead of current reality.
-function handleNetData(msg) {
+function handleNetData(msg, fromSeat) {
   try {
-    handleNetDataInner(msg);
+    handleNetDataInner(msg, fromSeat);
   } catch (err) {
     console.error('Pentomino: error handling network message', msg, err);
   } finally {
@@ -3146,8 +3459,12 @@ function isExpectedNextAction(seq) {
   return typeof seq !== 'number' || seq === state.plyCount + 1;
 }
 
-function handleNetDataInner(msg) {
-  if (msg.type === 'newgame') {
+function handleNetDataInner(msg, fromSeat) {
+  if (msg.type === 'ffa-start') {
+    beginFfaGame(msg.hand);
+  } else if (msg.type === 'ffa-eliminate') {
+    eliminateFfaSeat(msg.seat, msg.reason);
+  } else if (msg.type === 'newgame') {
     state.privateTimerSeconds = msg.privateTimerSeconds ?? null;
     state.boardShape = msg.boardShape || 'square';
     newGame(msg.hand, msg.gameSequence, msg.hostIsPlayerOneBase);
@@ -3181,25 +3498,49 @@ function handleNetDataInner(msg) {
     const winner = msg.forfeitingPlayer === 1 ? 2 : 1;
     endGame(`${playerLabel(msg.forfeitingPlayer)} forfeited.`, winner);
   } else if (msg.type === 'identify') {
-    state.opponentUserId = msg.userId;
-    state.opponentUsername = msg.username;
-    state.opponentAvatarId = msg.avatarId ?? null;
-    state.opponentTitleId = msg.titleId ?? null;
-    state.opponentEloRating = msg.eloRating ?? null;
-    state.opponentCompanion = msg.companion ?? null;
-    showMatchIntroCard();
-    render();
+    if (state.gameMode === 'ffa') {
+      // Seat-indexed identity array, not the singular opponentX fields -
+      // ffa has up to 3 "opponents" from any one seat's perspective, so
+      // there's no single slot for those fields to mean anything.
+      state.ffaPlayers[fromSeat] = {
+        userId: msg.userId ?? null,
+        username: msg.username ?? null,
+        avatarId: msg.avatarId ?? null,
+        titleId: msg.titleId ?? null,
+      };
+      render();
+    } else {
+      state.opponentUserId = msg.userId;
+      state.opponentUsername = msg.username;
+      state.opponentAvatarId = msg.avatarId ?? null;
+      state.opponentTitleId = msg.titleId ?? null;
+      state.opponentEloRating = msg.eloRating ?? null;
+      state.opponentCompanion = msg.companion ?? null;
+      showMatchIntroCard();
+      render();
+    }
   } else if (msg.type === 'chat') {
-    const opponentPlayerNum = state.myPlayer === 1 ? 2 : 1;
-    log(`\u{1F4AC} ${playerLabel(opponentPlayerNum)}: ${msg.text}`);
+    if (state.gameMode === 'ffa') {
+      const info = state.ffaPlayers[fromSeat];
+      const label = info && info.username ? info.username : `Player ${fromSeat + 1}`;
+      log(`\u{1F4AC} ${label}: ${msg.text}`);
+    } else {
+      const opponentPlayerNum = state.myPlayer === 1 ? 2 : 1;
+      log(`\u{1F4AC} ${playerLabel(opponentPlayerNum)}: ${msg.text}`);
+    }
     playChatPing();
   } else if (msg.type === 'elo-result') {
     showEloResult(state.myPlayer === 1 ? msg.delta_p1 : msg.delta_p2, msg.halved);
   } else if (msg.type === 'resync-request') {
     // The peer noticed a gap/mismatch in the move sequence and wants our
     // canonical state to catch up - same payload used for the post-rejoin
-    // resync, just triggered in-band instead of after a reconnect.
-    Net.send({ type: 'resync', ...serializeFullState() });
+    // resync, just triggered in-band instead of after a reconnect. In ffa,
+    // only the host ever responds - it's the sole relay/authority for
+    // everyone, so it's the only side whose state should ever be treated
+    // as canonical (a non-host "resyncing" someone would just be relaying
+    // its own possibly-stale copy).
+    if (state.gameMode === 'ffa' && !NetFfa.isHost) return;
+    netSend({ type: 'resync', ...serializeFullState() });
   } else if (msg.type === 'resync') {
     clearTimeout(resyncFallbackTimer);
     clearTimeout(resyncRequestTimeoutId);
@@ -3216,7 +3557,7 @@ function handleNetDataInner(msg) {
       // finalize a suspected opponent-timeout in this branch either: if
       // they're behind, they simply don't know it's their turn yet, so
       // ending the game now would be exactly the wrong call.
-      Net.send({ type: 'resync', ...serializeFullState() });
+      netSend({ type: 'resync', ...serializeFullState() });
     } else {
       applyFullState(msg);
       if (wasAwaitingTimeoutConfirm) {
@@ -3602,8 +3943,243 @@ function startQueue(queueType) {
 document.getElementById('casualQueueBtn').addEventListener('click', () => startQueue('casual'));
 document.getElementById('rankedQueueBtn').addEventListener('click', () => startQueue('ranked'));
 
+// ---------- 4-player free-for-all queue ----------
+// Deliberately its own connect/ready/data flow rather than a branch inside
+// startQueue()/handleNetReady() - it drives NetFfa (a whole separate
+// networking module, see its own header comment for why), and enough of
+// the surrounding bookkeeping (myPlayer never depends on a coin flip,
+// there's no rematch, "the opponent" is up to 3 different seats instead of
+// one) differs enough that folding it into the 2-player functions would
+// mean threading an ffa branch through nearly every line of them.
+function startFfaQueue() {
+  const user = Auth.getUser();
+  if (!user) {
+    setLobbyStatus('Sign in (top right) first to use the FFA queue.');
+    return;
+  }
+  const accessToken = Auth.getAccessToken();
+
+  state.queueSearching = true;
+  render();
+  setLobbyStatus('Searching for 3 other free-for-all players...');
+  NetFfa.connect({
+    serverUrl: SIGNALING_SERVER_URL,
+    userId: user.id,
+    accessToken,
+    onStatus: setLobbyStatus,
+    onReady: handleFfaReady,
+    onData: handleNetData, // (msg, fromSeat) - the same dispatcher the 2-player path uses, generalized to accept fromSeat
+    onPeerLeft: handleFfaPeerLeft,
+    onSeatDisconnected: handleFfaSeatDisconnected,
+    onSeatForfeited: (seat) => eliminateFfaSeat(seat, 'timeout'),
+    onMatchAbandoned: handleFfaMatchAbandoned,
+    onConnectionStale: handleFfaConnectionStale,
+  });
+}
+
+document.getElementById('ffaQueueBtn').addEventListener('click', () => startFfaQueue());
+
+function handleFfaReady() {
+  if (NetFfa.isRejoin) {
+    handleFfaRejoinReady();
+    return;
+  }
+
+  state.online = true;
+  state.connecting = false;
+  state.vsBot = false;
+  state.queueSearching = false;
+  state.gameMode = 'ffa';
+  state.playerCount = 4;
+  state.ffaSeat = NetFfa.mySeat;
+  state.myPlayer = state.ffaSeat + 1;
+  state.ffaPlayers = [null, null, null, null];
+  state.ffaEliminatedSeats = new Set();
+  state.ffaAbandoned = false;
+  state.ffaRanks = null;
+  state.introShown = false;
+  state.gameSequence = 0;
+  state.pendingUndoRequest = false;
+  state.incomingUndoRequest = false;
+  document.getElementById('createRoomBtn').disabled = true;
+  document.getElementById('connectBtn').disabled = true;
+  document.getElementById('roomInput').disabled = true;
+  setLobbyStatus(`Connected! You are Player ${state.myPlayer}. (ffa)`);
+  log(`Connected to the free-for-all match. You are Player ${state.myPlayer}.`);
+
+  const myProfile = Auth.getProfile();
+  const myIdentity = {
+    userId: Auth.getUser()?.id ?? null,
+    username: myProfile ? myProfile.username : null,
+    avatarId: myProfile ? myProfile.avatar_id : null,
+    titleId: myProfile ? myProfile.title_id : null,
+  };
+  // Never echoed back to me over the network (see net-ffa.js's relay
+  // comment - a sender never receives its own broadcast), so recorded
+  // locally too, not just sent.
+  state.ffaPlayers[state.ffaSeat] = myIdentity;
+  netSend({ type: 'identify', ...myIdentity });
+
+  if (NetFfa.isHost) beginFfaGame(drawHand());
+  else render();
+
+  saveActiveMatch(); // no-op outside casual/ranked - kept for symmetry/consistency, not because ffa resumes this way yet
+}
+
+function beginFfaGame(hand) {
+  BOARD_SIZE = 20;
+  CELL_PX = TARGET_BOARD_PX / BOARD_SIZE;
+  canvas.width = BOARD_SIZE * CELL_PX;
+  canvas.height = BOARD_SIZE * CELL_PX;
+  state.boardShape = 'square';
+  state.voidMask = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
+  state.board = new Int8Array(BOARD_SIZE * BOARD_SIZE);
+  state.playerCount = 4;
+  state.hands = [[...hand], [...hand], [...hand], [...hand]];
+  state.scores = [0, 0, 0, 0];
+  state.initialHand = [...hand];
+  state.moveLog = [];
+  state.lastMove = null;
+  state.turn = 1;
+  state.startingPlayer = 1;
+  state.plyCount = 0;
+  state.passStreak = 0;
+  state.gameOver = false;
+  state.winner = undefined;
+  state.forfeit = false;
+  state.selected = null;
+  state.mouseRC = null;
+  state.hover = null;
+  state.lastTapCell = null;
+  state.scoringCells = null;
+  state.history = [];
+  state.gameStarted = true;
+  state.gameStartedAt = new Date().toISOString();
+  state.ffaEliminatedSeats = state.ffaEliminatedSeats || new Set();
+  state.ffaAbandoned = false;
+  state.ffaRanks = null;
+  lastObservedTurnKey = null;
+  clearLog();
+  log('New free-for-all game started. All 4 players drew the same hand.');
+  playGameStartChime();
+  checkGameEnd();
+  render();
+
+  if (NetFfa.isHost) {
+    netSend({ type: 'ffa-start', hand });
+    netSendToServer({ type: 'live-game-start', boardSize: BOARD_SIZE, initialHand: hand });
+  }
+}
+
+function handleFfaRejoinReady() {
+  clearTimeout(rejoinTimeoutId);
+  state.online = true;
+  state.connecting = false;
+  state.gameMode = 'ffa';
+  state.playerCount = 4;
+  state.ffaSeat = NetFfa.mySeat;
+  state.myPlayer = state.ffaSeat + 1;
+  state.ffaPlayers = state.ffaPlayers || [null, null, null, null];
+  state.ffaEliminatedSeats = state.ffaEliminatedSeats || new Set();
+  document.getElementById('createRoomBtn').disabled = true;
+  document.getElementById('connectBtn').disabled = true;
+  document.getElementById('roomInput').disabled = true;
+
+  const myProfile = Auth.getProfile();
+  const myIdentity = {
+    userId: Auth.getUser()?.id ?? null,
+    username: myProfile ? myProfile.username : null,
+    avatarId: myProfile ? myProfile.avatar_id : null,
+    titleId: myProfile ? myProfile.title_id : null,
+  };
+  state.ffaPlayers[state.ffaSeat] = myIdentity;
+  netSend({ type: 'identify', ...myIdentity });
+
+  if (state.gameStarted && !state.gameOver) {
+    setLobbyStatus('Reconnected! Recovering the match...');
+    // Only the host is authoritative for ffa resync (see the
+    // 'resync-request' handler's own comment) - ask it directly instead of
+    // waiting on a symmetric race the star topology doesn't actually have.
+    netSend({ type: 'resync-request' });
+  } else {
+    setLobbyStatus('Reconnected! Waiting for the match to resume...');
+  }
+  render();
+}
+
+// Mirrors attemptRejoin()'s 2-player equivalent, against NetFfa instead of
+// Net - only relevant for a NON-host seat, whose one connection (to the
+// host) just died; a host-side seat dying is instead handled entirely via
+// the signaling server's own independent disconnect-grace detection (see
+// handleFfaSeatDisconnected/onSeatForfeited below).
+function attemptFfaRejoin() {
+  const user = Auth.getUser();
+  const accessToken = Auth.getAccessToken();
+  const matchId = NetFfa.matchId;
+  if (!user || !accessToken || !matchId) return;
+
+  state.connecting = true;
+  render();
+  setLobbyStatus('Connection lost - reconnecting...');
+
+  clearTimeout(rejoinTimeoutId);
+  rejoinTimeoutId = setTimeout(() => {
+    if (!state.connecting) return;
+    state.connecting = false;
+    setLobbyStatus('Reconnect attempt timed out.');
+    render();
+  }, REJOIN_TIMEOUT_MS);
+
+  NetFfa.rejoin({
+    serverUrl: SIGNALING_SERVER_URL,
+    matchId,
+    userId: user.id,
+    accessToken,
+    onStatus: setLobbyStatus,
+    onReady: handleFfaReady,
+    onData: handleNetData,
+    onPeerLeft: handleFfaPeerLeft,
+    onSeatDisconnected: handleFfaSeatDisconnected,
+    onSeatForfeited: (seat) => eliminateFfaSeat(seat, 'timeout'),
+    onMatchAbandoned: handleFfaMatchAbandoned,
+    onConnectionStale: handleFfaConnectionStale,
+    onRejoinFailed: (reason) => {
+      clearTimeout(rejoinTimeoutId);
+      state.connecting = false;
+      setLobbyStatus(reason || 'Could not reconnect to your previous match.');
+      render();
+    },
+  });
+}
+
+function handleFfaPeerLeft() {
+  if (!state.gameOver && !NetFfa.isHost) attemptFfaRejoin();
+}
+
+function handleFfaConnectionStale() {
+  if (!state.gameOver && !state.connecting && !NetFfa.isHost) attemptFfaRejoin();
+}
+
+function handleFfaSeatDisconnected(seat, isHost, graceMs) {
+  if (isHost) {
+    setLobbyStatus('The host disconnected - waiting to see if they reconnect...');
+    log('The host disconnected. Waiting for them to reconnect...');
+  } else {
+    log(`${playerLabel(seat + 1)} disconnected - they'll be eliminated if they don't reconnect soon.`);
+  }
+  render();
+}
+
+function handleFfaMatchAbandoned() {
+  if (state.gameOver) return;
+  state.ffaAbandoned = true;
+  setLobbyStatus('The host never reconnected - this match has ended.');
+  endGame('The host disconnected and the match could not continue.');
+}
+
 document.getElementById('cancelConnectBtn').addEventListener('click', () => {
   Net.cancelQueue();
+  NetFfa.cancelQueue(); // harmless no-op if the FFA queue was never the active one
   state.connecting = false;
   state.queueSearching = false;
   // connectToPrivateRoom() disables one of createRoomBtn/connectBtn+roomInput
@@ -3639,9 +4215,10 @@ async function refreshQueueCounts() {
   try {
     const res = await fetch(`${SIGNALING_HTTP_URL}/queue-counts`);
     if (!res.ok) return;
-    const { casual, ranked } = await res.json();
+    const { casual, ranked, ffa } = await res.json();
     document.getElementById('casualQueueCount').textContent = formatQueueCount(casual);
     document.getElementById('rankedQueueCount').textContent = formatQueueCount(ranked);
+    document.getElementById('ffaQueueCount').textContent = formatQueueCount(ffa || 0);
   } catch {
     // signaling server unreachable - leave whatever was last shown
   }

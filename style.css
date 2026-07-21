@@ -16,6 +16,10 @@
   --p1-soft: rgba(91, 127, 217, 0.55);
   --p2: #d97a52;
   --p2-soft: rgba(217, 122, 82, 0.55);
+  --p3: #7ec982;
+  --p3-soft: rgba(126, 201, 130, 0.55);
+  --p4: #c96bd6;
+  --p4-soft: rgba(201, 107, 214, 0.55);
   --danger: #a24a4a;
   --danger-hover: #c05c5c;
   --success: #74ae82;
@@ -1622,6 +1626,14 @@ h2, h3 {
 
 .score.p1 { border-bottom: 3px solid var(--p1); }
 .score.p2 { border-bottom: 3px solid var(--p2); }
+.score.p3 { border-bottom: 3px solid var(--p3); }
+.score.p4 { border-bottom: 3px solid var(--p4); }
+
+/* Hidden by default - only the 4-player free-for-all mode shows these
+   (toggled via a class, not display:none inline, so render() can just
+   flip one class per element instead of touching style.display everywhere
+   a p3/p4 element exists). */
+.ffa-only { display: none; }
 
 .score .label { font-size: 12px; color: var(--text-faint); }
 .score .value { font-family: var(--font-display); font-size: 28px; font-weight: 700; }
@@ -1654,6 +1666,8 @@ h2, h3 {
 
 .projected-p1 { color: var(--p1); }
 .projected-p2 { color: var(--p2); }
+.projected-p3 { color: var(--p3); }
+.projected-p4 { color: var(--p4); }
 
 .projected-undecided {
   color: var(--text-faint);

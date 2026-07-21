@@ -3606,6 +3606,17 @@ document.getElementById('cancelConnectBtn').addEventListener('click', () => {
   Net.cancelQueue();
   state.connecting = false;
   state.queueSearching = false;
+  // connectToPrivateRoom() disables one of createRoomBtn/connectBtn+roomInput
+  // for the duration of a Create Room or Join Room attempt (whichever path
+  // wasn't taken) - every other way that attempt can end (onRoomFull, the
+  // resync-fallback timeout) already re-enables all three, but this Cancel
+  // button is shared with the casual/ranked queue-search flow too and was
+  // missing the same reset, leaving them stuck disabled after cancelling a
+  // private-room connect. Harmless to always reset here even when cancelling
+  // a queue search instead, since that flow never touches these three.
+  document.getElementById('createRoomBtn').disabled = false;
+  document.getElementById('connectBtn').disabled = false;
+  document.getElementById('roomInput').disabled = false;
   setLobbyStatus('Cancelled.');
   render();
 });

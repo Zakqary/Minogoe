@@ -1,12 +1,93 @@
 // ---------- Configuration ----------
-const BOARD_SIZE = 12;
-const CELL_PX = 52; // 12 * 52 = 624px board
+// Both mutable (not const) - a private room can pick a custom board shape
+// (see BOARD_SHAPES below), which uses a bigger bounding box than the
+// normal square board. Reassigned together in newGame(), same pattern
+// singleplayer.js already uses per-mode. TARGET_BOARD_PX is the on-screen
+// footprint every shape renders at - CELL_PX is derived from it instead of
+// being fixed, so a bigger bounding box (custom shapes) doesn't visually
+// balloon the board panel bigger than a normal game's.
+let BOARD_SIZE = 12;
+const TARGET_BOARD_PX = 624; // 12 * 52, the normal square board's on-screen size
+let CELL_PX = TARGET_BOARD_PX / BOARD_SIZE;
+const CUSTOM_SHAPE_BOARD_SIZE = 14; // bounding box for plus/x/heart - bigger than 12x12 so the carved-out shape still has room for a full hand
 const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
 const HANDICAP_POINTS = 0.5; // whoever moves second gets a half-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
 const TURN_TIME_LIMITS = { casual: 120, ranked: 60 }; // seconds; bot/hotseat are always untimed. Private rooms are host-configurable (see state.privateTimerSeconds) - untimed by default.
 const ACTIVE_MATCH_KEY = 'minogoe_activeMatch'; // localStorage key for reconnect-after-reload
 const MATCH_INTRO_DURATION_MS = 4500; // how long the pre-match "vs" intro card stays up before auto-dismissing
+
+// ---------- Custom board shapes (private rooms only) ----------
+// Each entry (other than 'square', which needs no mask) is a function
+// (size) => Uint8Array of length size*size, 1 meaning "void" - a cell that
+// can never be placed on and never counts as anyone's territory, treated
+// exactly like being off the edge of the board everywhere this is
+// consulted (isValidPlacement, computeFinalScores's flood-fill, drawBoard).
+// Never a sentinel value inside state.board itself - computeFinalScores()
+// would treat any non-zero cell as a border owner, so a void sentinel
+// there would poison every adjacent region into "undecided" instead of
+// behaving like a neutral wall.
+const BOARD_SHAPES = {
+  square: null,
+  plus: (size) => {
+    const mask = new Uint8Array(size * size);
+    const armWidth = Math.round(size / 2.4);
+    const lo = Math.floor((size - armWidth) / 2);
+    const hi = lo + armWidth;
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const inVerticalArm = c >= lo && c < hi;
+        const inHorizontalArm = r >= lo && r < hi;
+        if (!inVerticalArm && !inHorizontalArm) mask[r * size + c] = 1;
+      }
+    }
+    return mask;
+  },
+  x: (size) => {
+    const mask = new Uint8Array(size * size);
+    const halfThickness = Math.round(size / 3.4);
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const onMainDiag = Math.abs(r - c) <= halfThickness;
+        const onAntiDiag = Math.abs(r - (size - 1 - c)) <= halfThickness;
+        if (!onMainDiag && !onAntiDiag) mask[r * size + c] = 1;
+      }
+    }
+    return mask;
+  },
+  // Classic implicit heart curve (x^2+y^2-1)^3 - x^2*y^3 <= 0 is "inside",
+  // scaled to the board and with y flipped (row 0 is the top of the
+  // screen, but the curve's two lobes sit at positive y) so the lobes land
+  // at the top of the board and the point at the bottom.
+  heart: (size) => {
+    const mask = new Uint8Array(size * size);
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const x = ((c + 0.5) / size - 0.5) * 2.4;
+        const y = (0.5 - (r + 0.5) / size) * 2.4 + 0.35;
+        const val = (x * x + y * y - 1) ** 3 - x * x * y * y * y;
+        if (val > 0) mask[r * size + c] = 1;
+      }
+    }
+    return mask;
+  },
+};
+
+// Shared by newGame() (a fresh board) and applyFullState() (a resync must
+// restore the SAME sizing before applying the resynced board contents, or
+// idx()/voidMask lookups would misalign against a custom shape's bigger
+// bounding box - see applyFullState()'s comment). Sets BOARD_SIZE/CELL_PX/
+// canvas dimensions and returns the matching voidMask; does not touch
+// state.board itself, since the two callers populate it differently (a
+// fresh empty array vs. the resynced contents).
+function applyBoardShapeSizing(shape) {
+  BOARD_SIZE = shape === 'square' ? 12 : CUSTOM_SHAPE_BOARD_SIZE;
+  CELL_PX = TARGET_BOARD_PX / BOARD_SIZE;
+  canvas.width = BOARD_SIZE * CELL_PX;
+  canvas.height = BOARD_SIZE * CELL_PX;
+  const shapeMaskFn = BOARD_SHAPES[shape];
+  return shapeMaskFn ? shapeMaskFn(BOARD_SIZE) : new Uint8Array(BOARD_SIZE * BOARD_SIZE);
+}
 
 // ---------- Base shapes (row, col), keyed and prefixed by piece size ----------
 const BASE_SHAPES = {
@@ -101,6 +182,12 @@ for (const name of Object.keys(BASE_SHAPES)) {
 const state = {
   gameStarted: false, // true once a hand has actually been drawn and a game is underway
   board: new Int8Array(BOARD_SIZE * BOARD_SIZE),
+  // 1 per void cell (see BOARD_SHAPES) - all-zero for the normal square
+  // board. Always sized to match state.board, reassigned together in
+  // newGame(); safe to index unconditionally everywhere else since it's
+  // never null.
+  voidMask: new Uint8Array(BOARD_SIZE * BOARD_SIZE),
+  boardShape: 'square', // 'square' | 'plus' | 'x' | 'heart' - private rooms only
   hand1: [],
   hand2: [],
   score1: 0,
@@ -244,11 +331,20 @@ function serializeFullState() {
     scoringCells: state.scoringCells,
     turnDeadline: state.turnDeadline,
     privateTimerSeconds: state.privateTimerSeconds,
+    boardShape: state.boardShape,
   };
 }
 
 function applyFullState(msg) {
   state.gameStarted = true;
+  // Must be restored BEFORE state.board, since a custom shape's board is a
+  // different size (BOARD_SIZE/CELL_PX/canvas/voidMask) than whatever this
+  // tab happened to have lying around locally - e.g. a fresh page reload
+  // defaults back to a normal 12x12 board until this runs, which would
+  // otherwise misalign every idx()/voidMask lookup against the resynced
+  // (possibly 14x14 custom-shape) board contents.
+  state.boardShape = msg.boardShape || 'square';
+  state.voidMask = applyBoardShapeSizing(state.boardShape);
   state.board = Int8Array.from(msg.board);
   state.hand1 = msg.hand1;
   state.hand2 = msg.hand2;
@@ -562,6 +658,15 @@ function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase, localHan
   }
 
   state.gameStarted = true;
+  // Custom board shapes are a private-room-only setting (see
+  // beginGameSetup()/the 'newgame' message) - always normalize back to
+  // 'square' for every other mode so a stale value left over from an
+  // earlier private game in this tab can never leak into a casual/ranked/
+  // hotseat/vsBot game. BOARD_SIZE/CELL_PX are mutable (not const)
+  // specifically so a game can size the board differently than the last
+  // one - see their declaration comment.
+  state.boardShape = state.gameMode === 'private' ? state.boardShape : 'square';
+  state.voidMask = applyBoardShapeSizing(state.boardShape);
   state.board = new Int8Array(BOARD_SIZE * BOARD_SIZE);
   const hand = remoteHand || localHandOverride || drawHand();
   state.hand1 = [...hand];
@@ -602,12 +707,12 @@ function newGame(remoteHand, remoteSequence, remoteHostIsPlayerOneBase, localHan
   render();
 
   if (state.online && Net.isHost && !isRemote) {
-    Net.send({ type: 'newgame', hand, gameSequence: state.gameSequence, hostIsPlayerOneBase: state.hostIsPlayerOneBase, privateTimerSeconds: state.privateTimerSeconds });
+    Net.send({ type: 'newgame', hand, gameSequence: state.gameSequence, hostIsPlayerOneBase: state.hostIsPlayerOneBase, privateTimerSeconds: state.privateTimerSeconds, boardShape: state.boardShape });
     // Registers/resets this match's spectator feed - host-only (mirroring
     // the 'newgame' send above), and re-sent on every rematch since the
     // board and hostPlayerNum (who's coloring is who this game) both reset
     // too. See signaling-server/server.js's liveGames comment.
-    Net.sendToServer({ type: 'live-game-start', boardSize: BOARD_SIZE, initialHand: hand, hostPlayerNum: state.myPlayer });
+    Net.sendToServer({ type: 'live-game-start', boardSize: BOARD_SIZE, boardShape: state.boardShape === 'square' ? null : state.boardShape, initialHand: hand, hostPlayerNum: state.myPlayer });
   }
 
   scheduleBotMove(); // no-op unless this is a vs Bot game where the bot won the coin flip to go first
@@ -669,7 +774,8 @@ function isValidPlacement(shapeName, orientationIndex, r0, c0, board) {
   for (const [dr, dc] of orientation) {
     const r = r0 + dr, c = c0 + dc;
     if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return false;
-    if (board[idx(r, c)] !== 0) return false;
+    const cellIdx = idx(r, c);
+    if (state.voidMask[cellIdx] || board[cellIdx] !== 0) return false;
   }
   return true;
 }
@@ -684,7 +790,8 @@ function hasAnyLegalMove(hand, board) {
         for (let c0 = 0; c0 <= BOARD_SIZE - 1 - maxDc; c0++) {
           let ok = true;
           for (const [dr, dc] of orientation) {
-            if (board[idx(r0 + dr, c0 + dc)] !== 0) { ok = false; break; }
+            const cellIdx = idx(r0 + dr, c0 + dc);
+            if (state.voidMask[cellIdx] || board[cellIdx] !== 0) { ok = false; break; }
           }
           if (ok) return true;
         }
@@ -707,7 +814,8 @@ function enumerateLegalPlacements(hand, board) {
         for (let c0 = 0; c0 <= BOARD_SIZE - 1 - maxDc; c0++) {
           let ok = true;
           for (const [dr, dc] of orientation) {
-            if (board[idx(r0 + dr, c0 + dc)] !== 0) { ok = false; break; }
+            const cellIdx = idx(r0 + dr, c0 + dc);
+            if (state.voidMask[cellIdx] || board[cellIdx] !== 0) { ok = false; break; }
           }
           if (ok) placements.push({ shapeName, orientationIndex, r0, c0 });
         }
@@ -1124,7 +1232,7 @@ function computeFinalScores(board) {
   let score1 = 0, score2 = 0, undecided = 0;
   const scoringCells = []; // { index, owner } for every cell that counted toward a score
   for (let i = 0; i < board.length; i++) {
-    if (board[i] === 0 && !visited[i]) {
+    if (board[i] === 0 && !visited[i] && !state.voidMask[i]) {
       const regionCells = [i];
       visited[i] = 1;
       let qi = 0;
@@ -1136,6 +1244,11 @@ function computeFinalScores(board) {
         for (const [nr, nc] of neighbors) {
           if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
           const nidx = idx(nr, nc);
+          // A void cell behaves exactly like being off the edge of the
+          // board - skipped entirely, never added as a border owner, so a
+          // region hugging a void boundary can still be fully enclosed by
+          // just one color (same treatment the array bounds already get).
+          if (state.voidMask[nidx]) continue;
           const val = board[nidx];
           if (val === 0) {
             if (!visited[nidx]) { visited[nidx] = 1; regionCells.push(nidx); }
@@ -1473,6 +1586,7 @@ async function recordGameResult(winner, forfeit) {
       initial_hand: state.initialHand,
       move_log: state.moveLog,
       board_size: BOARD_SIZE,
+      board_shape: state.boardShape === 'square' ? null : state.boardShape,
       started_at: state.gameStartedAt,
     };
   } else {
@@ -1505,6 +1619,7 @@ async function recordGameResult(winner, forfeit) {
       initial_hand: state.initialHand,
       move_log: state.moveLog,
       board_size: BOARD_SIZE,
+      board_shape: state.boardShape === 'square' ? null : state.boardShape,
       started_at: state.gameStartedAt,
       // Net.matchId alone is the same for every rematch within this
       // connection - appending gameSequence makes this unique PER GAME, so
@@ -2035,24 +2150,28 @@ const ctx = canvas.getContext('2d');
 
 function drawBoard() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (let r = 0; r < BOARD_SIZE; r++) {
-    for (let c = 0; c < BOARD_SIZE; c++) {
-      const val = state.board[idx(r, c)];
-      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
-      ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
-    }
-  }
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.lineWidth = 1;
-  for (let i = 0; i <= BOARD_SIZE; i++) {
-    ctx.beginPath();
-    ctx.moveTo(i * CELL_PX, 0);
-    ctx.lineTo(i * CELL_PX, canvas.height);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(0, i * CELL_PX);
-    ctx.lineTo(canvas.width, i * CELL_PX);
-    ctx.stroke();
+  // Fill and outline only playable cells, in one pass - grid lines
+  // naturally hug the actual shape's silhouette instead of sweeping across
+  // the whole bounding square. A void cell (see BOARD_SHAPES/
+  // state.voidMask) gets an explicit, clearly-darker "cut out" fill rather
+  // than being left fully transparent - relying on the page background
+  // alone made a thin shape like the X barely readable, since it's close
+  // in value to the empty-cell color.
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      const cellIdx = idx(r, c);
+      if (state.voidMask[cellIdx]) {
+        ctx.fillStyle = '#0b0a0e';
+        ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
+        continue;
+      }
+      const val = state.board[cellIdx];
+      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
+      ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
+      ctx.strokeRect(c * CELL_PX + 0.5, r * CELL_PX + 0.5, CELL_PX - 1, CELL_PX - 1);
+    }
   }
 
   // Once the game is over, mark every empty square that counted toward a
@@ -2089,7 +2208,7 @@ function drawBoard() {
     ctx.fillStyle = color;
     for (const [dr, dc] of orientation) {
       const r = state.hover.r0 + dr, c = state.hover.c0 + dc;
-      if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) continue;
+      if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE || state.voidMask[idx(r, c)]) continue;
       ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
     }
   }
@@ -2957,6 +3076,7 @@ function isExpectedNextAction(seq) {
 function handleNetDataInner(msg) {
   if (msg.type === 'newgame') {
     state.privateTimerSeconds = msg.privateTimerSeconds ?? null;
+    state.boardShape = msg.boardShape || 'square';
     newGame(msg.hand, msg.gameSequence, msg.hostIsPlayerOneBase);
   } else if (msg.type === 'room-settings') {
     // Host-authoritative mirror - see beginGameSetup()'s comment.
@@ -3151,7 +3271,7 @@ function isGameSetupController() {
 
 function beginGameSetup() {
   state.awaitingRoomStart = true;
-  state.roomSettings = { handMode: 'random', timerSeconds: null };
+  state.roomSettings = { handMode: 'random', timerSeconds: null, boardShape: 'square' };
   state.roomHandCounts = {};
   render();
   broadcastRoomSettings(); // harmless no-op offline - Net.send() is a no-op with no data channel
@@ -3261,11 +3381,30 @@ function renderRoomSettingsPanel() {
     const timerSeconds = settings.timerSeconds ?? null;
     const timerButtons = [
       [document.getElementById('timerNoneBtn'), null],
+      [document.getElementById('timer10Btn'), 10],
       [document.getElementById('timer60Btn'), 60],
       [document.getElementById('timer120Btn'), 120],
     ];
     for (const [btn, val] of timerButtons) {
       btn.classList.toggle('active', timerSeconds === val);
+      btn.disabled = !isHost;
+    }
+  }
+
+  // Custom board shapes are also online-private-room-only, same reasoning
+  // as the Timer row.
+  const boardShapeRow = document.getElementById('boardShapeSettingRow');
+  boardShapeRow.style.display = state.online ? '' : 'none';
+  if (state.online) {
+    const boardShape = settings.boardShape || 'square';
+    const shapeButtons = [
+      [document.getElementById('boardShapeSquareBtn'), 'square'],
+      [document.getElementById('boardShapePlusBtn'), 'plus'],
+      [document.getElementById('boardShapeXBtn'), 'x'],
+      [document.getElementById('boardShapeHeartBtn'), 'heart'],
+    ];
+    for (const [btn, val] of shapeButtons) {
+      btn.classList.toggle('active', boardShape === val);
       btn.disabled = !isHost;
     }
   }
@@ -3314,17 +3453,32 @@ function setRoomTimerChoice(seconds) {
 }
 
 document.getElementById('timerNoneBtn').addEventListener('click', () => setRoomTimerChoice(null));
+document.getElementById('timer10Btn').addEventListener('click', () => setRoomTimerChoice(10));
 document.getElementById('timer60Btn').addEventListener('click', () => setRoomTimerChoice(60));
 document.getElementById('timer120Btn').addEventListener('click', () => setRoomTimerChoice(120));
+
+function setRoomBoardShapeChoice(shape) {
+  if (!isGameSetupController()) return;
+  state.roomSettings.boardShape = shape;
+  broadcastRoomSettings();
+  render();
+}
+
+document.getElementById('boardShapeSquareBtn').addEventListener('click', () => setRoomBoardShapeChoice('square'));
+document.getElementById('boardShapePlusBtn').addEventListener('click', () => setRoomBoardShapeChoice('plus'));
+document.getElementById('boardShapeXBtn').addEventListener('click', () => setRoomBoardShapeChoice('x'));
+document.getElementById('boardShapeHeartBtn').addEventListener('click', () => setRoomBoardShapeChoice('heart'));
 
 document.getElementById('startPrivateGameBtn').addEventListener('click', () => {
   if (!isGameSetupController()) return;
   if (state.roomSettings.handMode === 'select' && !isHandSelectionValid()) return;
   const handOverride = state.roomSettings.handMode === 'select' ? buildHandFromCounts(state.roomHandCounts) : undefined;
   // Only ever a real choice for an online private room - hotseat/vsBot never
-  // show the timer row (see renderRoomSettingsPanel()), so this stays null
-  // (untimed) for them, same as before this feature existed.
+  // show the timer/board-shape rows (see renderRoomSettingsPanel()), so
+  // these stay null/'square' (untimed, normal board) for them, same as
+  // before either feature existed.
   state.privateTimerSeconds = state.roomSettings.timerSeconds ?? null;
+  state.boardShape = state.roomSettings.boardShape || 'square';
   newGame(undefined, undefined, undefined, handOverride);
 });
 

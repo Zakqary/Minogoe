@@ -1414,9 +1414,12 @@ h2, h3 {
 
 .room-setting-toggle { flex: 0 0 auto; width: 160px; }
 
-/* Timer is a 3-way toggle (No Timer/60s/120s) rather than the hand row's
-   2-way one - wider so "No Timer" doesn't get squeezed. */
-.room-setting-toggle.timer-toggle { width: 220px; }
+/* Timer is a 4-way toggle (No Timer/10s/60s/120s) rather than the hand
+   row's 2-way one - wider so "No Timer" doesn't get squeezed. */
+.room-setting-toggle.timer-toggle { width: 280px; }
+
+/* Board Shape is also a 4-way toggle (Square/Plus/X/Heart). */
+.room-setting-toggle.board-shape-toggle { width: 280px; }
 
 .hand-picker-panel {
   display: flex;

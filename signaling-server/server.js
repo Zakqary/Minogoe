@@ -62,6 +62,7 @@ function getOrCreateLiveGame(roomCode) {
     game = {
       mode: null,
       boardSize: null,
+      boardShape: null,
       initialHand: null,
       moveLog: [],
       startedAt: Date.now(),
@@ -554,6 +555,7 @@ wss.on('connection', (socket) => {
       const game = getOrCreateLiveGame(roomCode);
       game.mode = room.mode;
       game.boardSize = Number(msg.boardSize) || null;
+      game.boardShape = typeof msg.boardShape === 'string' ? msg.boardShape.slice(0, 20) : null;
       game.initialHand = Array.isArray(msg.initialHand) ? msg.initialHand : [];
       game.moveLog = [];
       game.hostPlayerNum = msg.hostPlayerNum === 2 ? 2 : 1;
@@ -562,6 +564,7 @@ wss.on('connection', (socket) => {
         type: 'spectate-reset',
         mode: game.mode,
         boardSize: game.boardSize,
+        boardShape: game.boardShape,
         initialHand: game.initialHand,
         player1: players[1],
         player2: players[2],
@@ -620,6 +623,7 @@ wss.on('connection', (socket) => {
         type: 'spectate-snapshot',
         mode: game.mode,
         boardSize: game.boardSize,
+        boardShape: game.boardShape,
         initialHand: game.initialHand,
         moveLog: game.moveLog,
         player1: players[1],

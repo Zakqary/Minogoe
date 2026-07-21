@@ -6,7 +6,52 @@
 // duplicating from game.js: this only needs to draw a board and hands from
 // a move log, not run the interactive game.
 
-const CELL_PX = 40;
+const TARGET_BOARD_PX = 480; // 12 * 40, the normal square board's on-screen size
+let CELL_PX = 40;
+
+// Duplicated from game.js's own BOARD_SHAPES (same reasoning as everything
+// else in this file) - must generate byte-identical masks, since the host
+// only ever transmits the shape id, never the raw mask (see game.js's
+// recordGameResult()/live-game-start comment).
+const BOARD_SHAPES = {
+  square: null,
+  plus: (size) => {
+    const mask = new Uint8Array(size * size);
+    const armWidth = Math.round(size / 2.4);
+    const lo = Math.floor((size - armWidth) / 2);
+    const hi = lo + armWidth;
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        if (!(c >= lo && c < hi) && !(r >= lo && r < hi)) mask[r * size + c] = 1;
+      }
+    }
+    return mask;
+  },
+  x: (size) => {
+    const mask = new Uint8Array(size * size);
+    const halfThickness = Math.round(size / 3.4);
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const onMainDiag = Math.abs(r - c) <= halfThickness;
+        const onAntiDiag = Math.abs(r - (size - 1 - c)) <= halfThickness;
+        if (!onMainDiag && !onAntiDiag) mask[r * size + c] = 1;
+      }
+    }
+    return mask;
+  },
+  heart: (size) => {
+    const mask = new Uint8Array(size * size);
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const x = ((c + 0.5) / size - 0.5) * 2.4;
+        const y = (0.5 - (r + 0.5) / size) * 2.4 + 0.35;
+        const val = (x * x + y * y - 1) ** 3 - x * x * y * y * y;
+        if (val > 0) mask[r * size + c] = 1;
+      }
+    }
+    return mask;
+  },
+};
 
 const BASE_SHAPES = {
   P_F: [[0,1],[0,2],[1,0],[1,1],[2,1]],
@@ -62,6 +107,8 @@ const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
 
 // ---------- Spectate state ----------
 let boardSize = 12;
+let boardShape = null; // null (square) | 'plus' | 'x' | 'heart'
+let voidMask = new Uint8Array(boardSize * boardSize); // all-zero for square, always sized to match `board`
 let moveLog = [];
 let initialHand = [];
 let board = null;
@@ -102,7 +149,7 @@ function computeScores() {
   const visited = new Uint8Array(boardSize * boardSize);
   let score1 = 0, score2 = 0, undecided = 0;
   for (let i = 0; i < board.length; i++) {
-    if (board[i] === 0 && !visited[i]) {
+    if (board[i] === 0 && !visited[i] && !voidMask[i]) {
       const regionCells = [i];
       visited[i] = 1;
       let qi = 0;
@@ -114,6 +161,7 @@ function computeScores() {
         for (const [nr, nc] of neighbors) {
           if (nr < 0 || nr >= boardSize || nc < 0 || nc >= boardSize) continue;
           const nidx = idxOf(nr, nc);
+          if (voidMask[nidx]) continue;
           const val = board[nidx];
           if (val === 0) {
             if (!visited[nidx]) { visited[nidx] = 1; regionCells.push(nidx); }
@@ -207,28 +255,26 @@ function renderHands() {
 
 function drawBoard() {
   const canvas = document.getElementById('board');
+  CELL_PX = TARGET_BOARD_PX / boardSize;
   canvas.width = boardSize * CELL_PX;
   canvas.height = boardSize * CELL_PX;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (let r = 0; r < boardSize; r++) {
-    for (let c = 0; c < boardSize; c++) {
-      const val = board[idxOf(r, c)];
-      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
-      ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
-    }
-  }
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.lineWidth = 1;
-  for (let i = 0; i <= boardSize; i++) {
-    ctx.beginPath();
-    ctx.moveTo(i * CELL_PX, 0);
-    ctx.lineTo(i * CELL_PX, canvas.height);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(0, i * CELL_PX);
-    ctx.lineTo(canvas.width, i * CELL_PX);
-    ctx.stroke();
+  for (let r = 0; r < boardSize; r++) {
+    for (let c = 0; c < boardSize; c++) {
+      const cellIdx = idxOf(r, c);
+      if (voidMask[cellIdx]) {
+        ctx.fillStyle = '#0b0a0e';
+        ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
+        continue;
+      }
+      const val = board[cellIdx];
+      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
+      ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
+      ctx.strokeRect(c * CELL_PX + 0.5, r * CELL_PX + 0.5, CELL_PX - 1, CELL_PX - 1);
+    }
   }
 }
 
@@ -278,6 +324,9 @@ function renderAll() {
 
 function resetGameState(msg) {
   boardSize = msg.boardSize || 12;
+  boardShape = msg.boardShape || null;
+  const shapeMaskFn = boardShape && BOARD_SHAPES[boardShape];
+  voidMask = shapeMaskFn ? shapeMaskFn(boardSize) : new Uint8Array(boardSize * boardSize);
   initialHand = msg.initialHand || [];
   moveLog = msg.moveLog || [];
   player1 = msg.player1 || null;

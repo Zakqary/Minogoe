@@ -4613,3 +4613,12 @@ begin
   limit 20;
 end;
 $$;
+
+-- ---------- Phase 54: custom board shapes for private rooms ----------
+-- Null (the default) means the normal square board - only ever a real
+-- value ('plus' | 'x' | 'heart') for a private-room game where the host
+-- picked one in the room settings overlay. Just the shape id, never the
+-- raw void-cell mask - game.js/replay.js/spectate.js each regenerate the
+-- identical mask from their own copy of BOARD_SHAPES given this id plus
+-- board_size (already a column), so there's nothing else to store.
+alter table public.games add column if not exists board_shape text;

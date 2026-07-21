@@ -252,8 +252,22 @@
         <span class="room-setting-name">Timer</span>
         <div class="mode-buttons room-setting-toggle timer-toggle">
           <button type="button" class="mode-btn active" id="timerNoneBtn">No Timer</button>
+          <button type="button" class="mode-btn" id="timer10Btn">10s</button>
           <button type="button" class="mode-btn" id="timer60Btn">60s</button>
           <button type="button" class="mode-btn" id="timer120Btn">120s</button>
+        </div>
+      </div>
+
+      <!-- Online private rooms only, same reasoning as the Timer row above -
+           a custom board shape is a whole-match setting that only makes
+           sense for a real connection between two people. -->
+      <div class="room-setting-row" id="boardShapeSettingRow">
+        <span class="room-setting-name">Board</span>
+        <div class="mode-buttons room-setting-toggle board-shape-toggle">
+          <button type="button" class="mode-btn active" id="boardShapeSquareBtn">Square</button>
+          <button type="button" class="mode-btn" id="boardShapePlusBtn">Plus</button>
+          <button type="button" class="mode-btn" id="boardShapeXBtn">X</button>
+          <button type="button" class="mode-btn" id="boardShapeHeartBtn">Heart</button>
         </div>
       </div>
 

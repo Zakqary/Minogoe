@@ -3,7 +3,51 @@
 // tightly coupled to the live/interactive state machine and this page
 // only needs to draw a board and step through a recorded move log.
 
-const CELL_PX = 40;
+const TARGET_BOARD_PX = 480; // 12 * 40, the normal square board's on-screen size
+let CELL_PX = 40;
+
+// Duplicated from game.js's own BOARD_SHAPES (same reasoning as everything
+// else in this file) - must generate byte-identical masks, since the
+// recorded game only ever stores the shape id, never the raw mask.
+const BOARD_SHAPES = {
+  square: null,
+  plus: (size) => {
+    const mask = new Uint8Array(size * size);
+    const armWidth = Math.round(size / 2.4);
+    const lo = Math.floor((size - armWidth) / 2);
+    const hi = lo + armWidth;
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        if (!(c >= lo && c < hi) && !(r >= lo && r < hi)) mask[r * size + c] = 1;
+      }
+    }
+    return mask;
+  },
+  x: (size) => {
+    const mask = new Uint8Array(size * size);
+    const halfThickness = Math.round(size / 3.4);
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const onMainDiag = Math.abs(r - c) <= halfThickness;
+        const onAntiDiag = Math.abs(r - (size - 1 - c)) <= halfThickness;
+        if (!onMainDiag && !onAntiDiag) mask[r * size + c] = 1;
+      }
+    }
+    return mask;
+  },
+  heart: (size) => {
+    const mask = new Uint8Array(size * size);
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const x = ((c + 0.5) / size - 0.5) * 2.4;
+        const y = (0.5 - (r + 0.5) / size) * 2.4 + 0.35;
+        const val = (x * x + y * y - 1) ** 3 - x * x * y * y * y;
+        if (val > 0) mask[r * size + c] = 1;
+      }
+    }
+    return mask;
+  },
+};
 
 const BASE_SHAPES = {
   P_F: [[0,1],[0,2],[1,0],[1,1],[2,1]],
@@ -65,6 +109,7 @@ function modeLabel(mode) {
 
 // ---------- Replay state ----------
 let boardSize = 12;
+let voidMask = new Uint8Array(boardSize * boardSize); // all-zero for square, always sized to match `board`
 let moveLog = [];
 let initialHand = [];
 let board = null;
@@ -145,28 +190,26 @@ function renderHands() {
 
 function drawBoard() {
   const canvas = document.getElementById('board');
+  CELL_PX = TARGET_BOARD_PX / boardSize;
   canvas.width = boardSize * CELL_PX;
   canvas.height = boardSize * CELL_PX;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (let r = 0; r < boardSize; r++) {
-    for (let c = 0; c < boardSize; c++) {
-      const val = board[idxOf(r, c)];
-      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
-      ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
-    }
-  }
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.lineWidth = 1;
-  for (let i = 0; i <= boardSize; i++) {
-    ctx.beginPath();
-    ctx.moveTo(i * CELL_PX, 0);
-    ctx.lineTo(i * CELL_PX, canvas.height);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(0, i * CELL_PX);
-    ctx.lineTo(canvas.width, i * CELL_PX);
-    ctx.stroke();
+  for (let r = 0; r < boardSize; r++) {
+    for (let c = 0; c < boardSize; c++) {
+      const cellIdx = idxOf(r, c);
+      if (voidMask[cellIdx]) {
+        ctx.fillStyle = '#0b0a0e';
+        ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
+        continue;
+      }
+      const val = board[cellIdx];
+      ctx.fillStyle = val === 1 ? '#5b7fd9' : val === 2 ? '#d97a52' : '#1e1b24';
+      ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
+      ctx.strokeRect(c * CELL_PX + 0.5, r * CELL_PX + 0.5, CELL_PX - 1, CELL_PX - 1);
+    }
   }
 }
 
@@ -316,6 +359,8 @@ async function loadReplay() {
   }
 
   boardSize = data.board_size;
+  const shapeMaskFn = data.board_shape && BOARD_SHAPES[data.board_shape];
+  voidMask = shapeMaskFn ? shapeMaskFn(boardSize) : new Uint8Array(boardSize * boardSize);
   moveLog = data.move_log;
   initialHand = data.initial_hand;
   gameStartedAtMs = new Date(data.started_at).getTime();

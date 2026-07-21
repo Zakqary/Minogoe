@@ -517,6 +517,33 @@ h2, h3 {
 .rank-bronze td { background: rgba(205, 127, 50, 0.14); }
 .rank-top5 td { background: rgba(255, 255, 255, 0.05); }
 
+/* Recent Games only - an FFA row's Score cell lists all 4 players'
+   scores (see recent.js's ffaStandingsHtml()), a much longer string than
+   a normal 2-player "10 - 8". Auto table layout was letting that one long
+   line stretch the Score column as wide as it needed before ever
+   wrapping, squeezing the Players column down to almost nothing in the
+   process. table-layout: fixed + explicit column widths forces it to
+   wrap onto multiple lines within its own share of the table instead. */
+#recentGamesContent .games-table {
+  table-layout: fixed;
+}
+
+#recentGamesContent .games-table th,
+#recentGamesContent .games-table td {
+  overflow-wrap: break-word;
+}
+
+#recentGamesContent .games-table th:nth-child(1),
+#recentGamesContent .games-table td:nth-child(1) { width: 32%; }
+#recentGamesContent .games-table th:nth-child(2),
+#recentGamesContent .games-table td:nth-child(2) { width: 26%; }
+#recentGamesContent .games-table th:nth-child(3),
+#recentGamesContent .games-table td:nth-child(3) { width: 14%; }
+#recentGamesContent .games-table th:nth-child(4),
+#recentGamesContent .games-table td:nth-child(4) { width: 15%; }
+#recentGamesContent .games-table th:nth-child(5),
+#recentGamesContent .games-table td:nth-child(5) { width: 13%; }
+
 .leaderboard-toggle {
   display: flex;
   align-items: center;

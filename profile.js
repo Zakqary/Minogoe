@@ -33,9 +33,8 @@ const BADGES = [
   { id: 'breaker', name: 'Breaker', description: 'Surpass 1300 ELO', statKey: 'highest_elo', threshold: 1300 },
   { id: 'elite', name: 'Elite', description: 'Surpass 1500 ELO', statKey: 'highest_elo', threshold: 1500 },
   { id: 'ranked_regular', name: 'Ranked Regular', description: 'Play 50 ranked games', statKey: 'ranked_games_played', threshold: 50 },
-  { id: 'bot_basher', name: 'Bot Basher', description: 'Beat the bot 25 times', statKey: 'bot_wins', threshold: 25 },
-  { id: 'green_thumb', name: 'Green Thumb', description: 'Grow your garden to 10 pots', statKey: 'garden_pot_count', threshold: 10 },
-  { id: 'coin_collector', name: 'Coin Collector', description: 'Earn 1,000 lifetime coins', statKey: 'lifetime_coins_earned', threshold: 1000 },
+  { id: 'green_thumb', name: 'Green Thumb', description: 'Grow your garden to 5 pots', statKey: 'garden_pot_count', threshold: 5 },
+  { id: 'coin_collector', name: 'Coin Collector', description: 'Earn 100 lifetime coins', statKey: 'lifetime_coins_earned', threshold: 100 },
 ];
 
 function badgesHtml(profile) {

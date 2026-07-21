@@ -2801,6 +2801,7 @@ function handleRejoinReady() {
   // on the right, possibly-swapped-from-game-1 answer instead of
   // clobbering it back to a naive "host is always player 1".
   state.myPlayer = computeMyPlayerForCurrentGame();
+  document.getElementById('createRoomBtn').disabled = true;
   document.getElementById('connectBtn').disabled = true;
   document.getElementById('roomInput').disabled = true;
 
@@ -2851,6 +2852,7 @@ function handleRejoinReady() {
       log('Could not recover your match state.');
       clearActiveMatch();
       state.online = false;
+      document.getElementById('createRoomBtn').disabled = false;
       document.getElementById('connectBtn').disabled = false;
       document.getElementById('roomInput').disabled = false;
       render();
@@ -3014,6 +3016,7 @@ function handleNetReady() {
   state.hostIsPlayerOneBase = Math.random() < 0.5;
   state.pendingUndoRequest = false;
   state.incomingUndoRequest = false;
+  document.getElementById('createRoomBtn').disabled = true;
   document.getElementById('connectBtn').disabled = true;
   document.getElementById('roomInput').disabled = true;
   setLobbyStatus(`Connected! You are Player ${state.myPlayer}. (${state.gameMode})`);
@@ -3209,7 +3212,15 @@ function generatePrivateRoomCode() {
   return code;
 }
 
-function connectToPrivateRoom(room) {
+// viaCreate distinguishes which of the two Direct Connect paths this call
+// came from, purely to decide which controls to gray out below - Create
+// Room and Join Room both being live at once while already mid-connection
+// (waiting for a friend to join your room, or waiting on a room code
+// lookup) was confusing, since only one of them can actually apply to
+// what you're currently doing. Whichever path you DID take stays enabled,
+// since the status message below explicitly invites clicking it again if
+// the connection seems stuck.
+function connectToPrivateRoom(room, viaCreate = false) {
   if (!room) {
     setLobbyStatus('Enter a room code.');
     return;
@@ -3217,6 +3228,9 @@ function connectToPrivateRoom(room) {
   state.connecting = true;
   render();
   setLobbyStatus(`Connecting to room ${room}... (if this seems stuck for a while, it is safe to click again to retry)`);
+  document.getElementById('createRoomBtn').disabled = !viaCreate;
+  document.getElementById('connectBtn').disabled = viaCreate;
+  document.getElementById('roomInput').disabled = viaCreate;
   // userId/accessToken are only included when actually signed in - a guest
   // joins exactly as before. The server verifies the token itself before
   // trusting userId for anything (see server.js's 'join' handler); this
@@ -3235,13 +3249,16 @@ function connectToPrivateRoom(room) {
     onPeerLeft: handleNetPeerLeft,
     onRoomFull: () => {
       state.connecting = false;
+      document.getElementById('createRoomBtn').disabled = false;
+      document.getElementById('connectBtn').disabled = false;
+      document.getElementById('roomInput').disabled = false;
       render();
     },
   });
 }
 
 document.getElementById('connectBtn').addEventListener('click', () => {
-  connectToPrivateRoom(document.getElementById('roomInput').value.trim());
+  connectToPrivateRoom(document.getElementById('roomInput').value.trim(), false);
 });
 
 document.getElementById('createRoomBtn').addEventListener('click', () => {
@@ -3251,7 +3268,7 @@ document.getElementById('createRoomBtn').addEventListener('click', () => {
   // with a stranger instead of their friend.
   const code = generatePrivateRoomCode();
   document.getElementById('roomInput').value = code;
-  connectToPrivateRoom(code);
+  connectToPrivateRoom(code, true);
 });
 
 // ---------- Pre-game settings (private rooms, hotseat, vs Bot) ----------

@@ -13,7 +13,8 @@ const CUSTOM_SHAPE_BOARD_SIZE = 14; // bounding box for plus/x/heart - bigger th
 const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
 const HANDICAP_POINTS = 0.5; // whoever moves second gets a half-point head start
 const SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
-const TURN_TIME_LIMITS = { casual: 120, ranked: 60, ffa: 90 }; // seconds; bot/hotseat are always untimed. Private rooms are host-configurable (see state.privateTimerSeconds) - untimed by default.
+const TURN_TIME_LIMITS = { casual: 120, ranked: 60, ffa: 60 }; // seconds; bot/hotseat are always untimed. Private rooms are host-configurable (see state.privateTimerSeconds) - untimed by default.
+const FFA_BOARD_SIZE = 15;
 // Board fill color per player number (1-indexed, array is 0-indexed) -
 // matches --p1/--p2/--p3/--p4 in style.css exactly (kept in sync by hand;
 // this file has no access to CSS custom properties from canvas drawing).
@@ -370,11 +371,11 @@ function applyFullState(msg) {
   // otherwise misalign every idx()/voidMask lookup against the resynced
   // (possibly 14x14 custom-shape) board contents.
   if (state.gameMode === 'ffa') {
-    // FFA always forces a fixed 20x20 square board (never a custom shape,
-    // and BOARD_SIZE/CELL_PX sizing here mirrors beginFfaGame() rather than
+    // FFA always forces a fixed square board (never a custom shape, and
+    // BOARD_SIZE/CELL_PX sizing here mirrors beginFfaGame() rather than
     // applyBoardShapeSizing(), which only knows the 12/14 sizes the other
     // modes use).
-    BOARD_SIZE = 20;
+    BOARD_SIZE = FFA_BOARD_SIZE;
     CELL_PX = TARGET_BOARD_PX / BOARD_SIZE;
     canvas.width = BOARD_SIZE * CELL_PX;
     canvas.height = BOARD_SIZE * CELL_PX;
@@ -1506,9 +1507,14 @@ function expireStaleUndoRequest() {
   log('An outstanding undo request expired since a new move was made.');
 }
 
-function manualPass(fromRemote = false) {
+// hostOverride is ffa-only: lets the HOST commit a pass on behalf of
+// whichever seat is currently stuck (out of legal moves at the exact
+// moment their timer ran out) without satisfying the normal "it must be
+// MY turn" guard below - see hostAutoActForSeat()'s own comment for why
+// this exists instead of just calling manualPass() directly.
+function manualPass(fromRemote = false, hostOverride = false) {
   if (state.gameOver) return;
-  if (state.online && !fromRemote && state.myPlayer !== state.turn) return;
+  if (state.online && !fromRemote && !hostOverride && state.myPlayer !== state.turn) return;
 
   expireStaleUndoRequest();
   const player = state.turn;
@@ -1546,8 +1552,13 @@ function requestPass() {
   manualPass(false);
 }
 
-function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false, t = Date.now(), autoTimeout = false, durationMs = null) {
-  if (state.online && !fromRemote && state.myPlayer !== state.turn) return;
+// hostOverride is ffa-only: lets the HOST commit a placement on behalf of
+// whichever seat's timer just ran out (they haven't self-reported, e.g. a
+// backgrounded/laggy tab) without satisfying the normal "it must be MY
+// turn" guard below - see hostAutoActForSeat()'s own comment for why this
+// exists instead of just calling commitPlacement() directly.
+function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false, t = Date.now(), autoTimeout = false, durationMs = null, hostOverride = false) {
+  if (state.online && !fromRemote && !hostOverride && state.myPlayer !== state.turn) return;
 
   expireStaleUndoRequest();
   state.history.push(snapshotState());
@@ -1556,8 +1567,11 @@ function commitPlacement(shapeName, orientationIndex, r0, c0, fromRemote = false
   // actually committing the move live (see turnStartedAtMs's own comment
   // for why a remote move's transmitted durationMs is used as-is instead
   // of ever being recomputed here against our own turnStartedAtMs, which
-  // is tracking OUR turn, not necessarily one that just arrived from afar).
-  const finalDurationMs = fromRemote ? durationMs : Math.max(0, Date.now() - turnStartedAtMs);
+  // is tracking OUR turn, not necessarily one that just arrived from afar) -
+  // a hostOverride commit is measuring someone ELSE's turn, so it's
+  // treated the same as a remote one: durationMs must be supplied by the
+  // caller rather than derived from this device's own clock.
+  const finalDurationMs = (fromRemote || hostOverride) ? durationMs : Math.max(0, Date.now() - turnStartedAtMs);
 
   const player = state.turn;
   const orientation = ORIENTATIONS[shapeName][orientationIndex];
@@ -1683,25 +1697,28 @@ function respondToUndoRequest(accept) {
   render();
 }
 
-// FFA never ends the whole match just because one seat gives up or times
-// out (unlike the 2-player forfeit, which always ends the game outright) -
+// FFA never ends the whole match just because one seat gives up or drops
+// (unlike the 2-player forfeit, which always ends the game outright) -
 // the seat is permanently removed from turn rotation (see switchTurn()'s
 // own skip-eliminated-seats loop) and the other still-active seats keep
 // playing normally. Whatever that seat had already placed stays on the
 // board and is scored exactly as normal at the end (scoring is board-
 // state-driven, not turn-driven), so eliminating them costs their future
-// turns, not their already-claimed territory. Apply-only (no network I/O
-// of its own) - every call site is responsible for broadcasting an
-// 'ffa-eliminate' itself exactly once, whether that's a self-declared
-// voluntary forfeit/self-timeout or the host's authoritative declaration
-// of someone ELSE'S timeout (see tickTurnTimer()'s ffa branch).
+// turns, not their already-claimed territory. Reserved for a REAL
+// disconnect (the signaling server's own grace period expiring, see
+// onSeatForfeited) or a voluntary forfeit - simply running out of time on
+// a turn while still connected never eliminates anyone anymore (see
+// hostAutoActForSeat()/handleSelfTimeout()), since that would disrupt the
+// match over something as ordinary as being slow on one turn. Apply-only
+// (no network I/O of its own) - every call site is responsible for
+// broadcasting an 'ffa-eliminate' itself exactly once.
 function eliminateFfaSeat(seat, reason) {
   if (state.gameOver || !state.ffaEliminatedSeats || state.ffaEliminatedSeats.has(seat)) return;
   state.ffaEliminatedSeats.add(seat);
   const player = seat + 1;
   log(reason === 'forfeit'
     ? `${playerLabel(player)} forfeited. The remaining players continue.`
-    : `${playerLabel(player)} ran out of time and was eliminated. The remaining players continue.`);
+    : `${playerLabel(player)} disconnected and didn't reconnect in time. The remaining players continue.`);
   if (state.turn === player) switchTurn();
   if (activePlayerCount() <= 1) {
     endGame('Only one player remains.');
@@ -1709,6 +1726,37 @@ function eliminateFfaSeat(seat, reason) {
   }
   checkGameEnd();
   render();
+}
+
+// FALLBACK ONLY - the timed-out seat's own client always self-reports via
+// handleSelfTimeout() first; this only ever runs if that seat's client
+// never fires at all (a backgrounded/throttled tab, exactly like
+// timeoutOpponentForfeit()'s own 2-player equivalent). Committed with
+// hostOverride so it bypasses the normal "it must be MY turn" guard - the
+// host is placing on behalf of a DIFFERENT seat here, not itself - and
+// broadcast exactly like a normal move/pass would be (commitPlacement()/
+// manualPass() still send whenever fromRemote is false, regardless of
+// hostOverride, since the rest of the room hasn't seen this move yet
+// either way).
+function hostAutoActForSeat(seat) {
+  const hand = state.hands[seat];
+  const placements = enumerateLegalPlacements(hand, state.board);
+  const limitSec = currentTurnTimeLimitSec();
+  const durationMs = limitSec ? limitSec * 1000 : 0;
+  if (placements.length === 0) {
+    // Nothing this seat could legally place - skip their turn on their
+    // behalf rather than leaving the whole match stuck waiting on a piece
+    // that can never fit (checkGameEnd() should already have auto-passed
+    // this seat before it became their turn at all, so this is a
+    // defensive fallback, not the expected path).
+    manualPass(false, true);
+    return;
+  }
+  const choice = placements[Math.floor(Math.random() * placements.length)];
+  // commitPlacement() itself already logs "ran out of time - a piece was
+  // placed for them automatically" whenever autoTimeout is true - no need
+  // to duplicate that here.
+  commitPlacement(choice.shapeName, choice.orientationIndex, choice.r0, choice.c0, false, Date.now(), true, durationMs, true);
 }
 
 function forfeitGame() {
@@ -2186,13 +2234,13 @@ function tickTurnTimer() {
       // ffa (see timeoutOpponentForfeit()'s own comment) - the host is
       // already the sole relay/authority for every message in a star
       // topology, so its own local state IS ground truth; it never needs
-      // to double-check with anyone. A non-host just waits for the host's
-      // authoritative ffa-eliminate broadcast instead of guessing itself.
-      if (NetFfa.isHost) {
-        const seat = state.turn - 1;
-        eliminateFfaSeat(seat, 'timeout');
-        netSend({ type: 'ffa-eliminate', seat, reason: 'timeout' });
-      }
+      // to double-check with anyone. This only fires as a FALLBACK - the
+      // timed-out seat's own client always self-reports via
+      // handleSelfTimeout() first; this only matters if that seat is
+      // backgrounded/laggy enough that its own timer never fires. A
+      // non-host just waits for the host's authoritative move/pass
+      // broadcast instead of acting itself.
+      if (NetFfa.isHost) hostAutoActForSeat(state.turn - 1);
     } else {
       // Don't rely solely on the timed-out player's own client to self-report -
       // their tab may be backgrounded/throttled and never fire this at all,
@@ -2358,7 +2406,13 @@ function countMyAutoPlacementsThisGame() {
 // to interfere with.
 function handleSelfTimeout() {
   if (state.gameOver) return;
-  if (countMyAutoPlacementsThisGame() >= 1) {
+  // FFA never spends the one-time leniency/forfeit path below - a timeout
+  // should never disturb anyone else's game, so every single timeout just
+  // auto-places (or passes, if genuinely nothing fits) for as long as the
+  // match runs. Elimination in ffa is reserved for a real disconnect (see
+  // eliminateFfaSeat()'s own comment), never for simply running out of time
+  // while still connected.
+  if (state.gameMode !== 'ffa' && countMyAutoPlacementsThisGame() >= 1) {
     timeoutForfeit();
     return;
   }
@@ -2366,11 +2420,12 @@ function handleSelfTimeout() {
   const placements = enumerateLegalPlacements(hand, state.board);
   // Shouldn't actually be reachable - checkGameEnd() already auto-passes
   // a hand with zero legal moves before it can ever become "my turn" in
-  // the first place - but falling back to a real forfeit rather than
-  // silently doing nothing is the only safe option if this invariant is
-  // ever wrong.
+  // the first place - but falling back to something safe is the only
+  // option if this invariant is ever wrong: ffa just passes (least
+  // disruptive), every other mode falls back to a real forfeit.
   if (placements.length === 0) {
-    timeoutForfeit();
+    if (state.gameMode === 'ffa') manualPass(false);
+    else timeoutForfeit();
     return;
   }
   const choice = placements[Math.floor(Math.random() * placements.length)];
@@ -2380,12 +2435,6 @@ function handleSelfTimeout() {
 function timeoutForfeit() {
   if (state.gameOver) return;
   const forfeitingPlayer = state.myPlayer;
-  if (state.gameMode === 'ffa') {
-    const seat = forfeitingPlayer - 1;
-    eliminateFfaSeat(seat, 'timeout');
-    netSend({ type: 'ffa-eliminate', seat, reason: 'timeout' });
-    return;
-  }
   const winner = forfeitingPlayer === 1 ? 2 : 1;
   if (state.online) Net.send({ type: 'forfeit', forfeitingPlayer });
   endGame(`${playerLabel(forfeitingPlayer)} ran out of time.`, winner);
@@ -2719,9 +2768,23 @@ function render() {
   canvas.classList.toggle('placing', !!state.selected && !state.gameOver);
 
   document.getElementById('rotateBtn').disabled = state.connecting || !state.gameStarted;
-  document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted || !state.gameOver || state.pendingNewGameRequest || state.awaitingRoomStart;
-  document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
-    || state.history.length === 0 || state.pendingUndoRequest;
+  // Forfeit/Undo/Rematch don't make sense in a 4-seat free-for-all - there's
+  // no single "opponent" to request an undo from or offer a rematch to
+  // (see this project's decision to skip a rematch flow for ffa entirely),
+  // and a timed-out/stuck seat is now handled automatically (auto-placing a
+  // random piece) rather than needing anyone to manually forfeit. Hidden
+  // outright rather than just disabled, since they're not a real option
+  // here at all, not a temporarily-unavailable one.
+  const isFfaMatch = state.gameMode === 'ffa';
+  document.getElementById('newGameBtn').style.display = isFfaMatch ? 'none' : '';
+  document.getElementById('undoBtn').style.display = isFfaMatch ? 'none' : '';
+  document.getElementById('forfeitBtn').style.display = isFfaMatch ? 'none' : '';
+  if (!isFfaMatch) {
+    document.getElementById('newGameBtn').disabled = state.connecting || !state.gameStarted || !state.gameOver || state.pendingNewGameRequest || state.awaitingRoomStart;
+    document.getElementById('undoBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
+      || state.history.length === 0 || state.pendingUndoRequest;
+    document.getElementById('forfeitBtn').disabled = state.connecting || !state.gameStarted || state.gameOver;
+  }
   const tooEarlyToPass = state.gameStarted && !state.gameOver && !canVoluntarilyPass();
   document.getElementById('passBtn').disabled = state.connecting || !state.gameStarted || state.gameOver
     || (state.online && state.myPlayer !== state.turn)
@@ -2730,10 +2793,9 @@ function render() {
   document.getElementById('passBtn').title = tooEarlyToPass
     ? 'Pass unlocks on your last piece, or once your opponent has none left'
     : '';
-  document.getElementById('forfeitBtn').disabled = state.connecting || !state.gameStarted || state.gameOver;
 
-  document.getElementById('undoRequestBanner').style.display = state.incomingUndoRequest ? 'flex' : 'none';
-  document.getElementById('newGameRequestBanner').style.display = state.incomingNewGameRequest ? 'flex' : 'none';
+  document.getElementById('undoRequestBanner').style.display = (!isFfaMatch && state.incomingUndoRequest) ? 'flex' : 'none';
+  document.getElementById('newGameRequestBanner').style.display = (!isFfaMatch && state.incomingNewGameRequest) ? 'flex' : 'none';
 
   document.getElementById('hotseatBtn').classList.toggle('active', !state.vsBot);
   document.getElementById('vsBotBtn').classList.toggle('active', state.vsBot);
@@ -3470,6 +3532,12 @@ function handleNetDataInner(msg, fromSeat) {
     beginFfaGame(msg.hand);
   } else if (msg.type === 'ffa-eliminate') {
     eliminateFfaSeat(msg.seat, msg.reason);
+  } else if (msg.type === 'ffa-roster') {
+    // Host-authoritative mirror, same pattern as private rooms' own
+    // 'room-settings' - just adopt whatever the host says wholesale (see
+    // the 'identify' handler's own comment for why this exists at all).
+    state.ffaPlayers = msg.players;
+    render();
   } else if (msg.type === 'newgame') {
     state.privateTimerSeconds = msg.privateTimerSeconds ?? null;
     state.boardShape = msg.boardShape || 'square';
@@ -3514,6 +3582,18 @@ function handleNetDataInner(msg, fromSeat) {
         avatarId: msg.avatarId ?? null,
         titleId: msg.titleId ?? null,
       };
+      // Only the HOST has a direct (non-relayed) connection to every seat,
+      // so it's the only side guaranteed to eventually learn everyone's
+      // identity no matter how connections happen to come up in whatever
+      // order - relaying one seat's identify to ANOTHER seat can still
+      // race against that other seat's own link not being open yet (see
+      // beginFfaGame()'s own comment on the resend it already does for
+      // this). Rebroadcasting the host's own up-to-date roster every time
+      // it learns something new means every seat eventually converges on
+      // the same full picture, entirely independent of that relay race -
+      // this is belt-and-suspenders on top of the per-seat resend, not a
+      // replacement for it.
+      if (NetFfa.isHost) netSend({ type: 'ffa-roster', players: state.ffaPlayers });
       render();
     } else {
       state.opponentUserId = msg.userId;
@@ -3977,7 +4057,7 @@ function startFfaQueue() {
     onData: handleNetData, // (msg, fromSeat) - the same dispatcher the 2-player path uses, generalized to accept fromSeat
     onPeerLeft: handleFfaPeerLeft,
     onSeatDisconnected: handleFfaSeatDisconnected,
-    onSeatForfeited: (seat) => eliminateFfaSeat(seat, 'timeout'),
+    onSeatForfeited: (seat) => eliminateFfaSeat(seat, 'disconnected'),
     onMatchAbandoned: handleFfaMatchAbandoned,
     onConnectionStale: handleFfaConnectionStale,
   });
@@ -4033,7 +4113,7 @@ function handleFfaReady() {
 }
 
 function beginFfaGame(hand) {
-  BOARD_SIZE = 20;
+  BOARD_SIZE = FFA_BOARD_SIZE;
   CELL_PX = TARGET_BOARD_PX / BOARD_SIZE;
   canvas.width = BOARD_SIZE * CELL_PX;
   canvas.height = BOARD_SIZE * CELL_PX;
@@ -4168,7 +4248,7 @@ function attemptFfaRejoin() {
     onData: handleNetData,
     onPeerLeft: handleFfaPeerLeft,
     onSeatDisconnected: handleFfaSeatDisconnected,
-    onSeatForfeited: (seat) => eliminateFfaSeat(seat, 'timeout'),
+    onSeatForfeited: (seat) => eliminateFfaSeat(seat, 'disconnected'),
     onMatchAbandoned: handleFfaMatchAbandoned,
     onConnectionStale: handleFfaConnectionStale,
     onRejoinFailed: (reason) => {

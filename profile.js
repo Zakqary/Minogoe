@@ -234,19 +234,48 @@ async function renderProfilePage() {
     }
   }
 
-  const { data: games, error } = await supabaseClient
-    .from('games')
-    .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
-    .or(`player1_id.eq.${userId},player2_id.eq.${userId}`)
-    .order('ended_at', { ascending: false })
-    .limit(20);
+  const [{ data: games, error }, { data: myFfaRows, error: ffaError }] = await Promise.all([
+    supabaseClient
+      .from('games')
+      .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
+      .or(`player1_id.eq.${userId},player2_id.eq.${userId}`)
+      .order('ended_at', { ascending: false })
+      .limit(20),
+    // My own seat in each ffa game I played, plus its parent game's
+    // ended_at/abandoned - a single, unambiguous embed direction (many
+    // ffa_game_players rows -> one ffa_games row), unlike trying to also
+    // embed the OTHER 3 seats' names in the same query, which would mean
+    // going back out from ffa_games to ffa_game_players a second time (the
+    // same table this query already starts from) - fetched separately
+    // below instead, once the actual game ids are known, rather than
+    // relying on that riskier self-referencing embed shape.
+    supabaseClient
+      .from('ffa_game_players')
+      .select('score, rank, ffa_game_id, ffa_games(ended_at, abandoned)')
+      .eq('player_id', userId)
+      .limit(20),
+  ]);
 
-  if (error) {
+  if (error && ffaError) {
     container.innerHTML = `<p>Could not load match history: ${escapeHtml(error.message)}</p>`;
     return;
   }
 
-  const rows = (games || []).map((g) => {
+  const validFfaRows = (myFfaRows || []).filter((p) => p.ffa_games && !p.ffa_games.abandoned);
+  const ffaGameIds = validFfaRows.map((p) => p.ffa_game_id);
+  const { data: ffaOtherSeats } = ffaGameIds.length > 0
+    ? await supabaseClient
+        .from('ffa_game_players')
+        .select('ffa_game_id, profiles:player_id(id, username)')
+        .in('ffa_game_id', ffaGameIds)
+    : { data: [] };
+  const ffaSeatsByGame = new Map();
+  for (const s of (ffaOtherSeats || [])) {
+    if (!ffaSeatsByGame.has(s.ffa_game_id)) ffaSeatsByGame.set(s.ffa_game_id, []);
+    ffaSeatsByGame.get(s.ffa_game_id).push(s);
+  }
+
+  const regularRows = (games || []).map((g) => {
     const isP1 = g.player1_id === userId;
     const myScore = isP1 ? g.score1 : g.score2;
     const oppScore = isP1 ? g.score2 : g.score1;
@@ -255,22 +284,53 @@ async function renderProfilePage() {
     const oppLink = playerLink(opp ? opp.id : null, oppName);
     const myPlayerNum = isP1 ? 1 : 2;
     const resultText = g.winner == null ? 'Tie' : (g.winner === myPlayerNum ? 'Win' : 'Loss');
-    const date = new Date(g.ended_at).toLocaleString();
     // A forfeit/timeout win isn't decided by the board tally - show W/FF
     // instead of a territory score that was never actually the deciding
     // factor (and can even make the winner look like they had fewer points).
     const scoreText = g.forfeit
       ? (g.winner === myPlayerNum ? 'W - FF' : 'FF - W')
       : `${myScore} - ${oppScore}`;
-    return `<tr>
-      <td>${date}</td>
-      <td>${escapeHtml(modeLabel(g.mode))}</td>
-      <td>${oppLink}</td>
-      <td>${scoreText}</td>
-      <td class="result-${resultText.toLowerCase()}">${resultText}</td>
-      <td><a href="replay.html?game=${encodeURIComponent(g.id)}">Replay</a></td>
-    </tr>`;
-  }).join('');
+    return {
+      endedAt: g.ended_at,
+      html: `<tr>
+        <td>${new Date(g.ended_at).toLocaleString()}</td>
+        <td>${escapeHtml(modeLabel(g.mode))}</td>
+        <td>${oppLink}</td>
+        <td>${scoreText}</td>
+        <td class="result-${resultText.toLowerCase()}">${resultText}</td>
+        <td><a href="replay.html?game=${encodeURIComponent(g.id)}">Replay</a></td>
+      </tr>`,
+    };
+  });
+
+  const ffaRows = validFfaRows.map((p) => {
+    const others = (ffaSeatsByGame.get(p.ffa_game_id) || [])
+      .filter((s) => s.profiles && s.profiles.id !== userId)
+      .map((s) => playerLink(s.profiles.id, s.profiles.username))
+      .join(', ');
+    // rank = 1 counts as a win (ties for 1st included) - same "ties count
+    // as wins" convention profiles.ffa_wins itself uses (schema.sql
+    // Phase 55) - anything else just shows the actual placement, since
+    // "Loss" alone would lose the "so close" of just missing 1st.
+    const resultText = p.rank === 1 ? 'Win' : `#${p.rank}`;
+    return {
+      endedAt: p.ffa_games.ended_at,
+      html: `<tr>
+        <td>${new Date(p.ffa_games.ended_at).toLocaleString()}</td>
+        <td>Free-For-All</td>
+        <td>${others}</td>
+        <td>${p.score}</td>
+        <td class="result-${p.rank === 1 ? 'win' : 'loss'}">${resultText}</td>
+        <td><a href="replay.html?ffa=${encodeURIComponent(p.ffa_game_id)}">Replay</a></td>
+      </tr>`,
+    };
+  });
+
+  const rows = [...regularRows, ...ffaRows]
+    .sort((a, b) => new Date(b.endedAt) - new Date(a.endedAt))
+    .slice(0, 20)
+    .map((r) => r.html)
+    .join('');
 
   const joinedText = profile.created_at
     ? new Date(profile.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })

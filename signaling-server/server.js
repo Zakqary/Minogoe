@@ -31,6 +31,24 @@ const socketRoom = new Map();  // socket -> roomCode
 
 const casualQueue = [];        // { socket, userId, eloRating }
 const rankedQueue = [];
+const ffaQueue = [];           // { socket, userId, tabId } - matched once 4 distinct users are waiting
+
+// 4-player free-for-all rooms. Deliberately a separate map/protocol from
+// `rooms` above rather than a generalization of it - `rooms` (and
+// pairSockets/tryMatchCasual/tryMatchRanked/removeFromRoom/the "relay to
+// whichever other socket is in the room" fallback at the bottom of the
+// message handler) all hard-assume exactly 2 slots, and FFA's star topology
+// (every non-host connects ONLY to the host, never to each other) needs
+// addressed relay - a message carries an explicit `to` seat - rather than
+// "broadcast to everyone else in the room", which would fan a single
+// offer/ice message meant for one specific peer out to all 3 others.
+// roomCode -> { mode: 'ffa', seats: [seat0 (host), seat1, seat2, seat3] }
+// seat: { socket (null while disconnected), userId, seat (0-3), isHost,
+//         disconnectTimer, eliminated (permanently forfeited after its own
+//         reconnect grace expired - the other seats play on without it),
+//         tabId }
+const ffaRooms = new Map();
+const ffaSocketRoom = new Map(); // socket -> roomCode
 
 // Read-only spectator support. Deliberately built entirely on TOP of the
 // existing room/relay machinery above, never modifying it - a spectator
@@ -106,6 +124,42 @@ function endLiveGame(roomCode) {
   liveGames.delete(roomCode);
 }
 
+// Separate registry from `liveGames` above rather than a generalization of
+// it - `liveGames`'s {host, joiner} shape (and hostPlayerNum/
+// resolvedLivePlayers' remapping) exists specifically to handle a 2-player
+// rematch flipping who's "player 1"; FFA never rematches (a finished match
+// always just returns everyone to the lobby to re-queue), so there's no
+// flip to handle and a plain seat-indexed array is simpler and safer than
+// bending the existing rematch-aware shape to also cover this.
+// roomCode -> { boardSize, initialHand, moveLog: [], startedAt,
+//               players: [seat0info|null, seat1info|null, ...] (fixed for
+//               the life of the match), spectators: Set<socket> }
+const ffaLiveGames = new Map();
+
+function getOrCreateFfaLiveGame(roomCode) {
+  let game = ffaLiveGames.get(roomCode);
+  if (!game) {
+    game = {
+      boardSize: null,
+      initialHand: null,
+      moveLog: [],
+      startedAt: Date.now(),
+      players: [null, null, null, null],
+      spectators: new Set(),
+    };
+    ffaLiveGames.set(roomCode, game);
+  }
+  return game;
+}
+
+function endFfaLiveGame(roomCode) {
+  const game = ffaLiveGames.get(roomCode);
+  if (!game) return;
+  broadcastToSpectators(game, { type: 'spectate-ended' });
+  for (const s of game.spectators) socketSpectating.delete(s);
+  ffaLiveGames.delete(roomCode);
+}
+
 // This server only ever relays small handshake messages (SDP offers/
 // answers, ICE candidates, room codes, chat text) - actual game moves flow
 // peer-to-peer once WebRTC connects (see net.js). Nothing legitimate is
@@ -144,14 +198,12 @@ const httpServer = http.createServer((req, res) => {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
     });
-    res.end(JSON.stringify({ casual: casualQueue.length, ranked: rankedQueue.length }));
+    res.end(JSON.stringify({ casual: casualQueue.length, ranked: rankedQueue.length, ffa: ffaQueue.length }));
     return;
   }
   if (req.method === 'GET' && req.url === '/live-games') {
-    const list = [...liveGames.entries()]
+    const regular = [...liveGames.entries()]
       .filter(([, game]) => game.moveLog.length > 0) // skip games that haven't had a real move yet
-      .sort((a, b) => b[1].startedAt - a[1].startedAt)
-      .slice(0, MAX_LIVE_GAMES_LISTED)
       .map(([matchId, game]) => {
         const players = resolvedLivePlayers(game);
         return {
@@ -163,6 +215,22 @@ const httpServer = http.createServer((req, res) => {
           startedAt: game.startedAt,
         };
       });
+    // FFA entries get a `players` array (seat-indexed) instead of the
+    // player1/player2 fields above - live-games.js branches on whichever
+    // shape a given row actually has rather than this being unified into
+    // one shape server-side (see ffaLiveGames' own comment for why).
+    const ffa = [...ffaLiveGames.entries()]
+      .filter(([, game]) => game.moveLog.length > 0)
+      .map(([matchId, game]) => ({
+        matchId,
+        mode: 'ffa',
+        players: game.players,
+        moveCount: game.moveLog.length,
+        startedAt: game.startedAt,
+      }));
+    const list = [...regular, ...ffa]
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, MAX_LIVE_GAMES_LISTED);
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
@@ -197,10 +265,63 @@ function pairSockets(entryA, entryB, mode) {
 }
 
 function removeFromQueues(socket) {
-  for (const q of [casualQueue, rankedQueue]) {
+  for (const q of [casualQueue, rankedQueue, ffaQueue]) {
     for (let i = q.length - 1; i >= 0; i--) {
       if (q[i].socket === socket) q.splice(i, 1);
     }
+  }
+}
+
+// Seat 0 is host - arbitrary (whichever of the 4 happened to be picked
+// first), not skill-based, matching pairSockets()'s own "queue order
+// decides host" precedent.
+function pairFfaSockets(entries) {
+  const code = generateRoomCode();
+  const seats = entries.map((e, i) => ({
+    socket: e.socket,
+    userId: e.userId,
+    seat: i,
+    isHost: i === 0,
+    disconnectTimer: null,
+    eliminated: false,
+    tabId: e.tabId ?? null,
+  }));
+  ffaRooms.set(code, { mode: 'ffa', seats });
+  for (const s of seats) ffaSocketRoom.set(s.socket, code);
+  for (const s of seats) {
+    s.socket.send(JSON.stringify({ type: 'ffa-joined', seat: s.seat, hostSeat: 0, matchId: code }));
+  }
+  for (const s of seats) {
+    s.socket.send(JSON.stringify({ type: 'ffa-ready' }));
+  }
+}
+
+// Same same-user-skip spirit as tryMatchCasual/tryMatchRanked, extended
+// past a single pair: greedily walks the queue in order collecting up to 4
+// entries with pairwise-distinct userIds (so nobody ever ends up seated
+// twice against their own second tab/device), stopping once 4 are found or
+// the queue runs out. If fewer than 4 distinct users are currently
+// available, nothing is matched yet - everyone just stays queued, exactly
+// like "still waiting" for the 2-player queues.
+function tryMatchFFA() {
+  while (ffaQueue.length >= 4) {
+    const picked = [];
+    const pickedIdx = [];
+    for (let i = 0; i < ffaQueue.length && picked.length < 4; i++) {
+      const entry = ffaQueue[i];
+      if (picked.some((p) => p.userId === entry.userId)) continue;
+      picked.push(entry);
+      pickedIdx.push(i);
+    }
+    if (picked.length < 4) return;
+    for (let k = pickedIdx.length - 1; k >= 0; k--) ffaQueue.splice(pickedIdx[k], 1);
+    // Drop any that died before we got to them rather than requeueing them -
+    // requeueing only the still-open sockets guarantees this loop
+    // eventually terminates (the queue strictly shrinks whenever there's a
+    // dead one) instead of potentially retrying the same dead entry forever.
+    const alive = picked.filter((e) => e.socket.readyState === WebSocket.OPEN);
+    if (alive.length < 4) { ffaQueue.push(...alive); continue; }
+    pairFfaSockets(alive);
   }
 }
 
@@ -314,6 +435,71 @@ function removeFromRoom(socket, roomCode) {
   const slot = room.slots.find((s) => s.socket === socket);
   if (!slot) return;
   startDisconnectGrace(socket, roomCode, room, slot);
+}
+
+// FFA's star topology means the blast radius of a disconnect depends
+// entirely on WHICH seat it is: a non-host seat losing its connection only
+// affects that one seat (the host still relays fine for the other two), so
+// the other 3 just keep playing and the seat is permanently forfeited if
+// its grace expires - same "hold it open, then give up" shape as
+// startDisconnectGrace above, just per-seat instead of ending the whole
+// room. But the HOST is everyone else's only relay - if it never comes
+// back, nobody else has a channel to keep receiving relayed moves through,
+// so the match ends there for everyone (see this project's decision to
+// skip host migration entirely rather than build a much more complex
+// "elect a new host and have the other 2 rebuild fresh connections to
+// them" recovery path for what should be a rare edge case).
+function startFfaDisconnectGrace(socket, roomCode, room, seat) {
+  seat.socket = null;
+  const others = room.seats.filter((s) => s !== seat && s.socket && s.socket.readyState === WebSocket.OPEN);
+  for (const o of others) {
+    o.socket.send(JSON.stringify({ type: 'ffa-seat-disconnected', seat: seat.seat, isHost: seat.isHost, graceMs: RECONNECT_GRACE_MS }));
+  }
+  clearTimeout(seat.disconnectTimer);
+  seat.disconnectTimer = setTimeout(() => {
+    if (seat.isHost) {
+      for (const s of room.seats) {
+        if (s.socket && s.socket.readyState === WebSocket.OPEN) {
+          s.socket.send(JSON.stringify({ type: 'ffa-match-abandoned' }));
+          ffaSocketRoom.delete(s.socket);
+        }
+      }
+      ffaRooms.delete(roomCode);
+      endFfaLiveGame(roomCode);
+    } else {
+      seat.eliminated = true;
+      const stillHere = room.seats.filter((s) => s !== seat && s.socket && s.socket.readyState === WebSocket.OPEN);
+      for (const s of stillHere) {
+        s.socket.send(JSON.stringify({ type: 'ffa-seat-forfeited', seat: seat.seat }));
+      }
+    }
+  }, RECONNECT_GRACE_MS);
+}
+
+function removeFromFfaRoom(socket, roomCode) {
+  const room = ffaRooms.get(roomCode);
+  if (!room) return;
+  const seat = room.seats.find((s) => s.socket === socket);
+  if (!seat) return;
+  startFfaDisconnectGrace(socket, roomCode, room, seat);
+}
+
+// Addressed relay for the FFA WebRTC handshake (ffa-offer/ffa-answer/
+// ffa-ice) - unlike the 2-player fallback at the bottom of the message
+// handler (which broadcasts to "whichever other socket is in the room"
+// because there's only ever one), a star topology has up to 3 other seats
+// in the same room, so the sender must say exactly which one (`to`) this
+// message is for.
+function relayFfaSignal(socket, msg) {
+  const roomCode = ffaSocketRoom.get(socket);
+  if (!roomCode) return;
+  const room = ffaRooms.get(roomCode);
+  if (!room) return;
+  const fromSeat = room.seats.findIndex((s) => s.socket === socket);
+  if (fromSeat === -1) return;
+  const target = room.seats[Number(msg.to)];
+  if (!target || !target.socket || target.socket.readyState !== WebSocket.OPEN) return;
+  target.socket.send(JSON.stringify({ ...msg, from: fromSeat }));
 }
 
 // Hosting platforms (Render included) commonly drop WebSocket connections
@@ -498,6 +684,67 @@ wss.on('connection', (socket) => {
       return;
     }
 
+    if (msg.type === 'ffa-rejoin') {
+      if (pendingSocketRequests.has(socket)) return; // already processing a request for this socket
+      pendingSocketRequests.add(socket);
+      try {
+        const room = ffaRooms.get(msg.matchId);
+        if (!room) {
+          socket.send(JSON.stringify({ type: 'ffa-rejoin-failed', reason: 'That match is no longer available.' }));
+          return;
+        }
+
+        const user = await verifySupabaseUser(msg.accessToken);
+        if (!user || user.id !== msg.userId) {
+          socket.send(JSON.stringify({ type: 'ffa-rejoin-failed', reason: 'Could not verify your account. Please sign in again.' }));
+          return;
+        }
+
+        const seat = room.seats.find((s) => s.userId === user.id);
+        if (!seat) {
+          socket.send(JSON.stringify({ type: 'ffa-rejoin-failed', reason: 'You are not part of that match.' }));
+          return;
+        }
+
+        // Same anti-hijack reasoning as the 2-player 'rejoin' handler above.
+        const sameTab = !seat.tabId || !msg.tabId || seat.tabId === msg.tabId;
+        const existingSocketAlive = seat.socket && seat.socket !== socket
+          && seat.socket.readyState === WebSocket.OPEN && seat.socket.isAlive !== false;
+        if (!sameTab && existingSocketAlive) {
+          socket.send(JSON.stringify({ type: 'ffa-rejoin-failed', reason: 'This match is already open in another tab.' }));
+          return;
+        }
+
+        if (seat.socket && seat.socket !== socket && seat.socket.readyState === WebSocket.OPEN) {
+          seat.socket.close();
+        }
+
+        clearTimeout(seat.disconnectTimer);
+        seat.disconnectTimer = null;
+        seat.socket = socket;
+        seat.tabId = msg.tabId || seat.tabId;
+        ffaSocketRoom.set(socket, msg.matchId);
+
+        socket.send(JSON.stringify({ type: 'ffa-joined', seat: seat.seat, hostSeat: 0, matchId: msg.matchId }));
+
+        // Every still-connected seat needs a brand new WebRTC connection to
+        // whichever of its links touched the rejoining seat - if the HOST
+        // rejoined, all 3 of its connections died with the old tab; if a
+        // non-host rejoined, only its own single link (to the host) needs
+        // rebuilding. Broadcasting to everyone and letting each side's
+        // net-ffa.js work out which connection(s) it's actually responsible
+        // for rebuilding is simpler than the server trying to know that.
+        for (const s of room.seats) {
+          if (s.socket && s.socket.readyState === WebSocket.OPEN) {
+            s.socket.send(JSON.stringify({ type: 'ffa-ready', isRejoin: true }));
+          }
+        }
+      } finally {
+        pendingSocketRequests.delete(socket);
+      }
+      return;
+    }
+
     if (msg.type === 'queue') {
       if (pendingSocketRequests.has(socket)) return; // already processing a request for this socket
       pendingSocketRequests.add(socket);
@@ -524,8 +771,111 @@ wss.on('connection', (socket) => {
       return;
     }
 
+    if (msg.type === 'ffa-queue') {
+      if (pendingSocketRequests.has(socket)) return; // already processing a request for this socket
+      pendingSocketRequests.add(socket);
+      try {
+        const user = await verifySupabaseUser(msg.accessToken);
+        if (!user || user.id !== msg.userId) {
+          socket.send(JSON.stringify({ type: 'ffa-queue-error', message: 'Could not verify your account. Please sign in again.' }));
+          return;
+        }
+
+        removeFromQueues(socket);
+        ffaQueue.push({ socket, userId: user.id, tabId: msg.tabId || null });
+        tryMatchFFA();
+      } finally {
+        pendingSocketRequests.delete(socket);
+      }
+      return;
+    }
+
     if (msg.type === 'unqueue') {
       removeFromQueues(socket);
+      return;
+    }
+
+    // Addressed FFA WebRTC handshake relay - see relayFfaSignal()'s own
+    // comment for why this can't reuse the 2-player broadcast fallback
+    // further down.
+    if (msg.type === 'ffa-offer' || msg.type === 'ffa-answer' || msg.type === 'ffa-ice') {
+      relayFfaSignal(socket, msg);
+      return;
+    }
+
+    // ---- FFA live-game spectate support - mirrors the 2-player block
+    // below almost exactly, just against ffaLiveGames/seat-indexed players
+    // instead of liveGames/{host,joiner} (see ffaLiveGames' own comment for
+    // why they're kept separate rather than unified).
+    if (msg.type === 'ffa-live-game-start') {
+      const roomCode = ffaSocketRoom.get(socket);
+      if (!roomCode) return;
+      const game = getOrCreateFfaLiveGame(roomCode);
+      game.boardSize = Number(msg.boardSize) || null;
+      game.initialHand = Array.isArray(msg.initialHand) ? msg.initialHand : [];
+      game.moveLog = [];
+      broadcastToSpectators(game, {
+        type: 'ffa-spectate-reset',
+        boardSize: game.boardSize,
+        initialHand: game.initialHand,
+        players: game.players,
+      });
+      return;
+    }
+
+    if (msg.type === 'ffa-live-player-info') {
+      const roomCode = ffaSocketRoom.get(socket);
+      const room = roomCode && ffaRooms.get(roomCode);
+      if (!room) return;
+      const seat = room.seats.find((s) => s.socket === socket);
+      if (!seat) return;
+      const game = getOrCreateFfaLiveGame(roomCode);
+      game.players[seat.seat] = {
+        username: typeof msg.username === 'string' ? msg.username.slice(0, 40) : null,
+        avatarId: typeof msg.avatarId === 'string' ? msg.avatarId.slice(0, 40) : null,
+        titleId: typeof msg.titleId === 'string' ? msg.titleId.slice(0, 40) : null,
+      };
+      return;
+    }
+
+    if (msg.type === 'ffa-live-game-move') {
+      const roomCode = ffaSocketRoom.get(socket);
+      const game = roomCode && ffaLiveGames.get(roomCode);
+      if (!game) return;
+      const move = {
+        player: Math.min(4, Math.max(1, Number(msg.player) || 1)),
+        shapeName: String(msg.shapeName || ''),
+        orientationIndex: Number(msg.orientationIndex) || 0,
+        r0: Number(msg.r0) || 0,
+        c0: Number(msg.c0) || 0,
+        t: Number(msg.t) || Date.now(),
+      };
+      game.moveLog.push(move);
+      broadcastToSpectators(game, { type: 'ffa-spectate-move', ...move });
+      return;
+    }
+
+    if (msg.type === 'ffa-spectate-join') {
+      const matchId = String(msg.matchId || '').trim().toUpperCase().slice(0, MAX_ROOM_CODE_LENGTH);
+      const game = ffaLiveGames.get(matchId);
+      if (!game) {
+        socket.send(JSON.stringify({ type: 'spectate-not-found' }));
+        return;
+      }
+      if (game.spectators.size >= MAX_SPECTATORS_PER_GAME) {
+        socket.send(JSON.stringify({ type: 'spectate-full' }));
+        return;
+      }
+      game.spectators.add(socket);
+      socketSpectating.set(socket, matchId);
+      socket.send(JSON.stringify({
+        type: 'ffa-spectate-snapshot',
+        boardSize: game.boardSize,
+        initialHand: game.initialHand,
+        moveLog: game.moveLog,
+        players: game.players,
+        startedAt: game.startedAt,
+      }));
       return;
     }
 
@@ -533,6 +883,13 @@ wss.on('connection', (socket) => {
     // survive a disconnect for the reconnect grace period) don't linger
     // forever if both players just keep browsing instead of closing the tab.
     if (msg.type === 'leave-room') {
+      const ffaRoomCode = ffaSocketRoom.get(socket);
+      if (ffaRoomCode) {
+        ffaRooms.delete(ffaRoomCode);
+        ffaSocketRoom.delete(socket);
+        endFfaLiveGame(ffaRoomCode);
+        return;
+      }
       const roomCode = socketRoom.get(socket);
       if (roomCode) {
         rooms.delete(roomCode);
@@ -656,9 +1013,14 @@ wss.on('connection', (socket) => {
       removeFromRoom(socket, joinedRoom);
       socketRoom.delete(socket);
     }
+    const joinedFfaRoom = ffaSocketRoom.get(socket);
+    if (joinedFfaRoom) {
+      removeFromFfaRoom(socket, joinedFfaRoom);
+      ffaSocketRoom.delete(socket);
+    }
     const spectatingMatch = socketSpectating.get(socket);
     if (spectatingMatch) {
-      const game = liveGames.get(spectatingMatch);
+      const game = liveGames.get(spectatingMatch) || ffaLiveGames.get(spectatingMatch);
       if (game) game.spectators.delete(socket);
       socketSpectating.delete(socket);
     }

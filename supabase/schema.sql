@@ -4622,3 +4622,154 @@ $$;
 -- identical mask from their own copy of BOARD_SHAPES given this id plus
 -- board_size (already a column), so there's nothing else to store.
 alter table public.games add column if not exists board_shape text;
+
+-- ---------- Phase 55: 4-player free-for-all (its own queue/tables, never
+-- touches games/profiles.elo_rating/the ranked leaderboard) ----------
+-- FFA is deliberately NOT stored as a variation of `games` - a pairwise
+-- `winner smallint`/elo_delta_p1/elo_delta_p2 shape and the 1-vs-1 ELO
+-- formula don't generalize to a 4-way ranked outcome, and this mode was
+-- built to never affect ELO/ranked at all (casual-only, its own simple
+-- stats). A join-table shape (one row per seat) rather than
+-- player3_id/player4_id/score3/score4 columns, so a tie for 1st/2nd/etc
+-- is just "two rows share a rank" instead of needing a whole new column
+-- shape to represent.
+
+create table if not exists public.ffa_games (
+  id uuid primary key default gen_random_uuid(),
+  board_size integer not null,
+  started_at timestamptz not null default now(),
+  ended_at timestamptz not null default now(),
+  -- True when the host disconnected and never reconnected within its grace
+  -- window (this project's chosen simplification over full host-migration
+  -- - see net-ffa.js) - the match ends there for everyone. Kept as a real
+  -- row (not just discarded) so it can still be viewed via replay, but
+  -- ffa_game_players.rank is left null for an abandoned match (see below),
+  -- so it never counts toward anyone's games_played/wins.
+  abandoned boolean not null default false,
+  -- The room code - same "whichever of up to 4 near-simultaneous insert
+  -- attempts lands first wins, the rest are harmlessly rejected" dedup as
+  -- games.client_match_id (Phase 15).
+  client_match_id text unique
+);
+
+alter table public.ffa_games enable row level security;
+
+drop policy if exists "FFA games are publicly readable" on public.ffa_games;
+create policy "FFA games are publicly readable"
+  on public.ffa_games for select
+  using (true);
+
+-- No client-facing insert policy - rows only ever get created through
+-- submit_ffa_result() below (security definer, validates the caller was
+-- actually one of the 4 seats itself), avoiding a 4-way "am I one of the
+-- seats" RLS check reimplemented in SQL.
+
+create table if not exists public.ffa_game_players (
+  ffa_game_id uuid not null references public.ffa_games(id) on delete cascade,
+  seat smallint not null check (seat between 0 and 3),
+  player_id uuid not null references public.profiles(id),
+  score numeric not null,
+  -- Null only for an abandoned match (see ffa_games.abandoned) - standard
+  -- competition ranking otherwise (a tie for 1st is rank 1 for both, the
+  -- next distinct score is rank 3, not 2).
+  rank smallint,
+  primary key (ffa_game_id, seat)
+);
+
+alter table public.ffa_game_players enable row level security;
+
+drop policy if exists "FFA game players are publicly readable" on public.ffa_game_players;
+create policy "FFA game players are publicly readable"
+  on public.ffa_game_players for select
+  using (true);
+
+alter table public.profiles add column if not exists ffa_games_played integer not null default 0;
+-- rank = 1 counts as a win (ties for 1st included) - same "ties count as
+-- wins" precedent as pvp_wins (Phase 28).
+alter table public.profiles add column if not exists ffa_wins integer not null default 0;
+
+-- Keeps profiles.ffa_games_played/ffa_wins in sync whenever a real (non-
+-- abandoned) result is recorded - entirely separate from
+-- handle_game_recorded()/the ranked ELO triggers on `games`, neither of
+-- which this ever touches.
+create or replace function public.handle_ffa_game_recorded()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if new.rank is null then
+    return new; -- an abandoned match's seats don't count toward anything
+  end if;
+  update public.profiles
+  set ffa_games_played = ffa_games_played + 1,
+      ffa_wins = ffa_wins + case when new.rank = 1 then 1 else 0 end
+  where id = new.player_id;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_ffa_game_player_recorded on public.ffa_game_players;
+create trigger on_ffa_game_player_recorded
+  after insert on public.ffa_game_players
+  for each row execute function public.handle_ffa_game_recorded();
+
+-- Single RPC that inserts the ffa_games row plus all 4 ffa_game_players
+-- rows in one transaction - avoids any partial-insert race between up to 4
+-- clients each independently attempting to record the same finished match
+-- at nearly the same moment (mirrors how recordGameResult() already lets
+-- both sides of a 2-player game attempt the `games` insert today, Phase
+-- 15). The client_match_id unique constraint makes every call after the
+-- first a harmless no-op that just returns the already-recorded game's id.
+create or replace function public.submit_ffa_result(
+  p_client_match_id text,
+  p_board_size integer,
+  p_started_at timestamptz,
+  p_abandoned boolean,
+  p_seats jsonb -- array of {seat, player_id, score, rank} - rank null for an abandoned match
+)
+returns uuid
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_game_id uuid;
+  v_seat jsonb;
+  v_caller_is_seat boolean := false;
+begin
+  if p_seats is null or jsonb_array_length(p_seats) <> 4 then
+    raise exception 'FFA results must include exactly 4 seats';
+  end if;
+
+  for v_seat in select * from jsonb_array_elements(p_seats) loop
+    if (v_seat->>'player_id')::uuid = auth.uid() then
+      v_caller_is_seat := true;
+    end if;
+  end loop;
+  if not v_caller_is_seat then
+    raise exception 'Not authorized: caller was not a participant in this match';
+  end if;
+
+  insert into public.ffa_games (board_size, started_at, abandoned, client_match_id)
+  values (p_board_size, p_started_at, coalesce(p_abandoned, false), p_client_match_id)
+  on conflict (client_match_id) do nothing
+  returning id into v_game_id;
+
+  if v_game_id is null then
+    return (select id from public.ffa_games where client_match_id = p_client_match_id);
+  end if;
+
+  for v_seat in select * from jsonb_array_elements(p_seats) loop
+    insert into public.ffa_game_players (ffa_game_id, seat, player_id, score, rank)
+    values (
+      v_game_id,
+      (v_seat->>'seat')::smallint,
+      (v_seat->>'player_id')::uuid,
+      (v_seat->>'score')::numeric,
+      (v_seat->>'rank')::smallint -- a JSON null here (abandoned match) casts straight through to SQL NULL
+    );
+  end loop;
+
+  return v_game_id;
+end;
+$$;

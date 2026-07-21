@@ -4816,3 +4816,116 @@ begin
   return new_id;
 end;
 $$;
+
+-- ---------- Phase 57: rare "Opal" Mino color (1/50, coin gifts worth 2) ----------
+-- A second, independent 1-in-50 roll alongside gradient (Phase 56) - this
+-- one overrides the normal uniform 10-color pick with a fixed rare color
+-- instead of altering the existing color's look. The 10 normal colors stay
+-- exactly uniform among themselves (each ~9.8% = 0.98/10), Opal takes the
+-- remaining 2%. Its only mechanical effect is in handle_human_game_played()
+-- below: a successful coin_drop_rate roll grants 2 coins instead of 1.
+create or replace function public.grant_random_seed(p_user_id uuid, p_seen boolean)
+returns uuid
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  new_id uuid;
+  rolled_rarity text := public.random_mino_rarity();
+  rolled_gradient boolean := public.random_mino_gradient();
+  rolled_coin_rate numeric := public.random_mino_coin_rate(rolled_rarity);
+  rolled_color text := case when random() < 0.02 then 'Opal' else public.random_mino_color() end;
+begin
+  if rolled_gradient then
+    rolled_coin_rate := rolled_coin_rate + 2;
+  end if;
+
+  insert into public.minos (user_id, color, rarity, modifier, seen, coin_drop_rate, gradient)
+  values (p_user_id, rolled_color, rolled_rarity, public.random_mino_modifier(), p_seen, rolled_coin_rate, rolled_gradient)
+  returning id into new_id;
+  return new_id;
+end;
+$$;
+
+-- Full body carried forward from Phase 50 (the last redefinition), with
+-- only the coins_granted line changed to check the mino's color.
+create or replace function public.handle_human_game_played()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  p_id uuid;
+  m record;
+  gift_item record;
+  coins_granted integer;
+  wants_title boolean;
+begin
+  foreach p_id in array array[new.player1_id, new.player2_id] loop
+    if p_id is null then
+      continue;
+    end if;
+
+    update public.minos
+    set growth_progress = growth_progress + 1
+    where user_id = p_id and planted and stage <> 'adult';
+
+    update public.minos
+    set stage = case stage
+          when 'seed' then 'sapling'
+          when 'sapling' then 'adolescent'
+          when 'adolescent' then 'adult'
+          else stage
+        end,
+        growth_progress = 0
+    where user_id = p_id and planted and stage <> 'adult' and growth_progress >= 10;
+
+    if random() < 0.1 then
+      update public.profiles
+      set unopened_seed_packs = unopened_seed_packs + 1,
+          pending_pack_notifications = pending_pack_notifications + 1
+      where id = p_id;
+    end if;
+
+    for m in
+      select * from public.minos
+      where user_id = p_id and planted and stage = 'adult'
+    loop
+      if (m.last_gift_at is null or now() - m.last_gift_at >= interval '7 days') and random() < 0.02 then
+        wants_title := random() < 0.25;
+        select * into gift_item from public.shop_items
+        where mino_giftable and type = case when wants_title then 'title' else 'avatar' end
+          and id not in (select item_id from public.user_inventory where user_id = p_id)
+        order by random()
+        limit 1;
+
+        if gift_item.id is null then
+          -- Preferred type had nothing left to give - fall back to
+          -- whichever giftable type actually has an unowned item.
+          select * into gift_item from public.shop_items
+          where mino_giftable
+            and id not in (select item_id from public.user_inventory where user_id = p_id)
+          order by random()
+          limit 1;
+        end if;
+
+        if gift_item.id is not null then
+          insert into public.user_inventory (user_id, item_id) values (p_id, gift_item.id);
+          insert into public.mino_gifts (user_id, mino_id, gift_type, item_id) values (p_id, m.id, 'item', gift_item.id);
+          update public.minos set last_gift_at = now() where id = m.id;
+        end if;
+      end if;
+
+      if random() < m.coin_drop_rate / 100.0 then
+        coins_granted := case when m.color = 'Opal' then 2 else 1 end;
+        update public.profiles
+        set coins = coins + coins_granted, lifetime_coins_earned = lifetime_coins_earned + coins_granted
+        where id = p_id;
+        insert into public.mino_gifts (user_id, mino_id, gift_type, coins_amount) values (p_id, m.id, 'coins', coins_granted);
+      end if;
+    end loop;
+  end loop;
+
+  return new;
+end;
+$$;

@@ -62,8 +62,9 @@ function coinIconHtml(size = 14) {
 // can render a player's companion without loading garden.js's full page logic ----------
 
 // Hex swatches for each seed color - keep in sync with schema.sql's
-// random_mino_color() (Phase 16). Purely a display concern: the DB only
-// ever stores the color name, never a hex value.
+// random_mino_color() (Phase 16) plus the rare 1/50 "Opal" color layered on
+// top of it in grant_random_seed() (Phase 57). Purely a display concern:
+// the DB only ever stores the color name, never a hex value.
 const MINO_COLOR_HEX = {
   Crimson: '#c0392b',
   Amber: '#e6923a',
@@ -75,6 +76,7 @@ const MINO_COLOR_HEX = {
   Magenta: '#c74fb0',
   Umber: '#8a5a3b',
   Slate: '#6b7280',
+  Opal: '#e0cdf0',
 };
 
 function capitalize(word) {

@@ -245,14 +245,15 @@ function timeAgo(isoString) {
   return `${years}y ago`;
 }
 
-const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse' };
-const RECORD_MODE_COLORS = { speedrun: '#5b7fd9', eogonim: 'var(--accent)', blindeogonim: '#8b6fd9', ascension: '#6fbf73', blight: '#c05c5c', godbot: '#d95b8f', curse: '#5bc2d9' };
+const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse', shrink: 'Shrink' };
+const RECORD_MODE_COLORS = { speedrun: '#5b7fd9', eogonim: 'var(--accent)', blindeogonim: '#8b6fd9', ascension: '#6fbf73', blight: '#c05c5c', godbot: '#d95b8f', curse: '#5bc2d9', shrink: '#a8d84a' };
 
 function formatRecordValue(mode, value) {
   if (mode === 'speedrun') return formatTimeMs(value);
   if (mode === 'ascension') return `${value} round${value === 1 ? '' : 's'}`;
   if (mode === 'godbot') return `${value > 0 ? '+' : ''}${value}`;
   if (mode === 'curse') return `${value} open`;
+  if (mode === 'shrink') return `${value} lost`;
   return `${value} captured`;
 }
 

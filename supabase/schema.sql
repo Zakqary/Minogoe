@@ -5010,3 +5010,61 @@ begin
   update public.profiles set piece_color_id = p_item_id where id = uid;
 end;
 $$;
+
+-- ---------- Phase 58: singleplayer "Shrink" mode ----------
+
+-- Same explicit drop-then-add pattern as every earlier mode phase (see
+-- Phase 42's comment for why nothing earlier should ever be edited in place
+-- to re-add a narrower version instead of just adding a new phase).
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension', 'blight', 'godbot', 'curse', 'shrink'));
+
+-- Reuses the existing "score" column exactly like every mode after Speedrun
+-- - shrink's is squares never captured (out of board_size^2), lower is
+-- better, same shape as curse's leftover-open-squares count.
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
+  check (
+    (mode = 'speedrun' and time_ms is not null and score is null)
+    or (mode = 'eogonim' and score is not null and time_ms is null)
+    or (mode = 'blindeogonim' and score is not null and time_ms is null)
+    or (mode = 'ascension' and score is not null and time_ms is null)
+    or (mode = 'blight' and score is not null and time_ms is null)
+    or (mode = 'godbot' and score is not null and time_ms is null)
+    or (mode = 'curse' and score is not null and time_ms is null)
+    or (mode = 'shrink' and score is not null and time_ms is null)
+  );
+
+-- Same discipline as submit_curse_score() - lower is better, same 0-100
+-- range (a 10x10 board, same as curse's leftover-open-squares bound).
+create or replace function public.submit_shrink_score(p_score integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_score integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_score is null or p_score < 0 or p_score > 100 then
+    raise exception 'Invalid score';
+  end if;
+
+  select score into existing_score from public.singleplayer_runs where user_id = uid and mode = 'shrink' for update;
+
+  if existing_score is null then
+    insert into public.singleplayer_runs (user_id, mode, score) values (uid, 'shrink', p_score);
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'shrink', p_score);
+    return p_score;
+  elsif p_score < existing_score then
+    update public.singleplayer_runs set score = p_score, completed_at = now() where user_id = uid and mode = 'shrink';
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'shrink', p_score);
+    return p_score;
+  else
+    return existing_score;
+  end if;
+end;
+$$;

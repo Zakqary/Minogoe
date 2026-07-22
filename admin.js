@@ -118,13 +118,14 @@ function formatTimeMs(ms) {
   return `${m}:${s.toFixed(2).padStart(5, '0')}`;
 }
 
-const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse' };
+const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse', shrink: 'Shrink' };
 
 function formatRecordValue(mode, value) {
   if (mode === 'speedrun') return formatTimeMs(value);
   if (mode === 'ascension') return `${value} round${value === 1 ? '' : 's'}`;
   if (mode === 'godbot') return `${value > 0 ? '+' : ''}${value}`;
   if (mode === 'curse') return `${value} open`;
+  if (mode === 'shrink') return `${value} lost`;
   return `${value} captured`;
 }
 

@@ -36,7 +36,7 @@
 // Board size varies by mode (Speedrun: 9x9, everything else: 10x10) - see
 // BOARD_SIZES and setMode() below - so this is reassigned rather than a const.
 let BOARD_SIZE = 9;
-const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10, blight: 10, godbot: 12, curse: 10 };
+const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10, blight: 10, godbot: 12, curse: 10, shrink: 10 };
 const CELL_PX = 52;
 const MAX_CAPTURE_SIZE = 4; // speedrun only - enclosures bigger than this don't count. Eogonim has no size cap, matching real Minogoe scoring.
 const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, eogonim has no preview
@@ -177,6 +177,12 @@ const state = {
   // Curse-only - the curse rolled for the currently-dealt piece, re-rolled
   // by spawnNextPiece() every time a new piece is drawn.
   curseActive: null,
+  // Shrink-only - see resetBoardState()'s own comment. All-zero/0 for every
+  // other mode, so isValidPlacement()/hasAnyLegalMove()/isBoardComplete()
+  // checking it unconditionally is always a no-op elsewhere.
+  voidMask: new Uint8Array(BOARD_SIZE * BOARD_SIZE),
+  shrinkPieceCount: 0,
+  shrinkRingDepth: 0,
 };
 
 // Used both for a brand new run (startRun()) AND between Ascension rounds
@@ -209,6 +215,13 @@ function resetBoardState() {
   state.godbotScore1 = 0;
   state.godbotScore2 = 0;
   state.curseActive = null;
+  // Shrink only - an all-zero mask is a harmless no-op for every other mode
+  // (isValidPlacement()/hasAnyLegalMove()/isBoardComplete() all check it
+  // unconditionally). shrinkPieceCount/shrinkRingDepth track when the next
+  // ring is due and how deep the border has shrunk so far this run.
+  state.voidMask = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
+  state.shrinkPieceCount = 0;
+  state.shrinkRingDepth = 0;
 }
 
 // ---------- Placement legality ----------
@@ -218,6 +231,9 @@ function isValidPlacement(shapeName, orientationIndex, r0, c0, board) {
     const r = r0 + dr, c = c0 + dc;
     if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return false;
     if (board[idx(r, c)] !== 0) return false;
+    // Shrink only - state.voidMask is all-zero for every other mode, so
+    // this is a no-op everywhere else.
+    if (state.voidMask[idx(r, c)]) return false;
   }
   return true;
 }
@@ -249,7 +265,9 @@ function hasAnyLegalMove(shapeName, board) {
       for (let c0 = 0; c0 <= BOARD_SIZE - 1 - maxDc; c0++) {
         let ok = true;
         for (const [dr, dc] of orientation) {
-          if (board[idx(r0 + dr, c0 + dc)] !== 0) { ok = false; break; }
+          const cellIdx = idx(r0 + dr, c0 + dc);
+          // Shrink only - state.voidMask is all-zero for every other mode.
+          if (board[cellIdx] !== 0 || state.voidMask[cellIdx]) { ok = false; break; }
         }
         if (ok) return true;
       }
@@ -572,6 +590,34 @@ function spawnDeadCell(excludeCells) {
   state.board[pick] = 2;
 }
 
+// ---------- Shrink mode ----------
+// No flood-fill/enclosure concept at all - score is simply how many squares
+// never got a piece on them (open or voided, both count the same way),
+// mirroring countCurseOpenSquares()'s exact "not player-placed" tally.
+// Lower is better; the goal is just to physically pack the board as tight
+// as possible before you get stuck, same as Curse's own framing.
+function countShrinkOpenSquares(board) {
+  return board.reduce((n, v) => n + (v !== 1 ? 1 : 0), 0);
+}
+
+// Every 4th piece placed, the border shrinks by one ring on every side. A
+// placed piece is the only thing ever safe - it's already non-zero, so it
+// was never a candidate here in the first place; every still-empty ring
+// cell (whether it looked "safe" a moment ago or not) is swallowed, which is
+// exactly what makes the walls actually close in. Clamped so it never runs
+// past the board's own center (a no-op safety net - in practice the run
+// always ends via "no legal placement" long before this).
+function applyShrinkRing() {
+  if (state.shrinkRingDepth >= Math.floor(BOARD_SIZE / 2)) return;
+  const depth = state.shrinkRingDepth;
+  const far = BOARD_SIZE - 1 - depth;
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    for (const cellIdx of [idx(depth, i), idx(far, i), idx(i, depth), idx(i, far)]) {
+      if (state.board[cellIdx] === 0) state.voidMask[cellIdx] = 1;
+    }
+  }
+}
+
 // The board is complete once no empty (0) cells remain - NOT once every
 // cell is specifically captured (2). A piece that exactly fills the last
 // remaining gap (leaving nothing empty behind it to enclose) never
@@ -582,7 +628,11 @@ function spawnDeadCell(excludeCells) {
 // unfinished, which then made the next piece unplaceable anywhere and
 // incorrectly failed the run instead of recognizing a win.
 function isBoardComplete() {
-  for (let i = 0; i < state.board.length; i++) if (state.board[i] === 0) return false;
+  // A void cell (shrink only - state.voidMask is all-zero everywhere else)
+  // can never be filled, so it shouldn't block "complete" either.
+  for (let i = 0; i < state.board.length; i++) {
+    if (state.board[i] === 0 && !state.voidMask[i]) return false;
+  }
   return true;
 }
 
@@ -651,6 +701,7 @@ function spawnNextPiece() {
     else if (state.mode === 'blindeogonim') finishBlindEogonimRun(false);
     else if (state.mode === 'blight') finishBlightRun();
     else if (state.mode === 'curse') finishCurseRun(false);
+    else if (state.mode === 'shrink') finishShrinkRun();
     else finishEogonimRun();
     return;
   }
@@ -708,6 +759,20 @@ function commitPlacement(r0, c0) {
     // as Blight mode's own (after this placement, before the board-complete
     // check below, so it can itself end the run by filling the last gap).
     if (state.curseActive === 'blightspot') spawnDeadCell();
+  } else if (state.mode === 'shrink') {
+    // No captured-territory tally needed here either (same reasoning as
+    // Curse above) - score is just leftover open/void squares, read fresh
+    // wherever it's displayed/saved.
+    state.shrinkPieceCount++;
+    state.totalCaptured = countShrinkOpenSquares(state.board);
+    // Every 4th placement, one ring shrinks in - BEFORE the board-complete/
+    // next-piece checks below, same timing Blight's dead-square spawn
+    // already uses, so a ring landing on the last open gap can itself end
+    // the run.
+    if (state.shrinkPieceCount % 4 === 0) {
+      applyShrinkRing();
+      state.shrinkRingDepth++;
+    }
   } else {
     state.totalCaptured = computeCapturedCount(state.board);
   }
@@ -728,6 +793,8 @@ function commitPlacement(r0, c0) {
       finishBlightRun();
     } else if (state.mode === 'curse') {
       finishCurseRun(false);
+    } else if (state.mode === 'shrink') {
+      finishShrinkRun();
     } else {
       // A completely full board is just a special case of "nothing fits
       // anywhere" for ascension too - same round-end evaluation either way.
@@ -792,6 +859,20 @@ function finishBlindEogonimRun(illegal) {
   state.illegalMove = illegal;
   render();
   saveBlindEogonimScoreIfBest(state.totalCaptured);
+}
+
+// Same "no separate failed ending" shape as Eogonim/Blight - running out of
+// legal placements (guaranteed eventually, as the border keeps shrinking)
+// and filling the remaining live board are both just "the run is over."
+// Score is squares never filled by a piece (open or voided, both count) -
+// a perfect 0 is impossible, since the shrink always claims some squares
+// before you can ever cover the whole original board.
+function finishShrinkRun() {
+  state.running = false;
+  state.finished = true;
+  state.failed = false;
+  render();
+  saveShrinkScoreIfBest(state.totalCaptured);
 }
 
 // ---------- GodBot mode ----------
@@ -1393,11 +1474,12 @@ function setMode(mode) {
 // read a lot more clearly than an 7-way nested ternary at this point.
 const MODE_TITLES = {
   speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim',
-  ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse',
+  ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse', shrink: 'Shrink',
 };
 const LEADERBOARD_TITLES = {
   speedrun: 'Top Times', eogonim: 'Lowest Scores', blindeogonim: 'Lowest Scores',
   ascension: 'Deepest Runs', blight: 'Highest Scores', godbot: 'Best Differential', curse: 'Fewest Open Squares',
+  shrink: 'Lowest Losses',
 };
 
 function updateModeUI() {
@@ -1409,6 +1491,7 @@ function updateModeUI() {
   document.getElementById('spTabBlight').classList.toggle('active', mode === 'blight');
   document.getElementById('spTabGodbot').classList.toggle('active', mode === 'godbot');
   document.getElementById('spTabCurse').classList.toggle('active', mode === 'curse');
+  document.getElementById('spTabShrink').classList.toggle('active', mode === 'shrink');
   document.getElementById('spModeTitle').textContent = MODE_TITLES[mode];
   document.getElementById('spModeCredit').style.display = mode === 'eogonim' ? '' : 'none';
   document.getElementById('spUpcomingLabel').style.display = mode === 'speedrun' ? '' : 'none';
@@ -1420,6 +1503,7 @@ function updateModeUI() {
   document.getElementById('spRulesBlight').style.display = mode === 'blight' ? '' : 'none';
   document.getElementById('spRulesGodbot').style.display = mode === 'godbot' ? '' : 'none';
   document.getElementById('spRulesCurse').style.display = mode === 'curse' ? '' : 'none';
+  document.getElementById('spRulesShrink').style.display = mode === 'shrink' ? '' : 'none';
   document.getElementById('spLeaderboardTitle').textContent = LEADERBOARD_TITLES[mode];
   document.getElementById('spSaveStatus').textContent = '';
   document.getElementById('spPieceChoices').style.display = 'none';
@@ -1431,6 +1515,7 @@ function updateModeUI() {
     : mode === 'ascension' ? `Round 1 - 0/${ascensionThreshold(1)}`
     : mode === 'godbot' ? 'You: 0 - Bot: 0'
     : mode === 'curse' ? 'Open squares: 0'
+    : mode === 'shrink' ? 'Lost: 0'
     : formatTime(0);
 }
 
@@ -1483,7 +1568,16 @@ function drawBoard() {
   const myColor = pieceColorHex(Auth.getProfile()?.piece_color_id) || '#5b7fd9';
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
-      const val = hidePieces ? 0 : state.board[idx(r, c)];
+      const cellIdx = idx(r, c);
+      // Shrink only - a void cell is permanently gone, rendered like the
+      // main game's own custom board shapes (an explicit "cut out" color
+      // rather than looking like a normal empty square).
+      if (state.voidMask[cellIdx]) {
+        ctx.fillStyle = '#0b0a0e';
+        ctx.fillRect(c * CELL_PX, r * CELL_PX, CELL_PX, CELL_PX);
+        continue;
+      }
+      const val = hidePieces ? 0 : state.board[cellIdx];
       ctx.fillStyle = val === 1 ? myColor
         : val === 2 ? (state.mode === 'godbot' ? '#d97a52' : (state.mode === 'blight' || state.mode === 'curse') ? deadColor : '#74ae82')
         : val === 3 ? deadColor // GodBot's "blight one of your territories" bonus action only - see pickGodbotBlightTarget()
@@ -1557,6 +1651,7 @@ function render() {
   document.getElementById('spTabBlight').disabled = state.running;
   document.getElementById('spTabGodbot').disabled = state.running;
   document.getElementById('spTabCurse').disabled = state.running;
+  document.getElementById('spTabShrink').disabled = state.running;
 
   if (state.mode === 'eogonim' || state.mode === 'blindeogonim') {
     document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured}`;
@@ -1572,6 +1667,8 @@ function render() {
   } else if (state.mode === 'curse') {
     const openCount = state.running || state.finished ? countCurseOpenSquares(state.board) : BOARD_SIZE * BOARD_SIZE;
     document.getElementById('spTimer').textContent = `Open squares: ${openCount}`;
+  } else if (state.mode === 'shrink') {
+    document.getElementById('spTimer').textContent = `Lost: ${state.totalCaptured}`;
   }
 
   if (!state.running && !state.finished) {
@@ -1588,7 +1685,9 @@ function render() {
               ? "You get a real hand. The bot can place any piece, unlimited supply, and gets a bonus move every turn - it goes again, removes one of your pieces, blights your territory, or rerolls your hand. Beat it anyway."
               : state.mode === 'curse'
                 ? "One random piece at a time, no preview, nothing ever disappears - but every piece comes cursed. Pack the board as tight as you can; an illegal move ends your run instantly."
-                : "You'll get one random piece at a time - place it anywhere it fits.";
+                : state.mode === 'shrink'
+                  ? "One random piece at a time, no preview, nothing ever disappears - but every 4th piece you place, the border shrinks in by one ring on every side. Only a placed piece is ever safe. Pack the board as tight as you can before the walls close in - squares never filled count against you."
+                  : "You'll get one random piece at a time - place it anywhere it fits.";
   } else if (state.mode === 'godbot' && state.finished) {
     const diff = state.godbotScore1 - state.godbotScore2;
     banner.textContent = `Run over. You ${state.godbotScore1} - Bot ${state.godbotScore2} (${diff > 0 ? '+' : ''}${diff})`;
@@ -1621,6 +1720,9 @@ function render() {
   } else if (state.mode === 'blight' && state.finished) {
     banner.textContent = `Run over. Captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
     pieceInfo.textContent = 'Click Restart to try for a higher score.';
+  } else if (state.mode === 'shrink' && state.finished) {
+    banner.textContent = `Run over. Lost ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
+    pieceInfo.textContent = 'Click Restart to try for fewer.';
   } else if (state.mode === 'blindeogonim' && state.finished) {
     banner.textContent = state.illegalMove
       ? `Illegal move. Run over. Captured ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`
@@ -1850,6 +1952,7 @@ document.getElementById('spTabAscension').addEventListener('click', () => setMod
 document.getElementById('spTabBlight').addEventListener('click', () => setMode('blight'));
 document.getElementById('spTabGodbot').addEventListener('click', () => setMode('godbot'));
 document.getElementById('spTabCurse').addEventListener('click', () => setMode('curse'));
+document.getElementById('spTabShrink').addEventListener('click', () => setMode('shrink'));
 
 // Clicking the "How to Play" header collapses/expands the whole rules panel.
 document.querySelector('.rules-panel h3')?.addEventListener('click', () => {
@@ -1989,6 +2092,26 @@ async function saveCurseScoreIfBest(score) {
     return;
   }
   const { data: bestScore, error } = await supabaseClient.rpc('submit_curse_score', { p_score: score });
+  if (error) {
+    document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
+    return;
+  }
+  document.getElementById('spSaveStatus').textContent = bestScore === score
+    ? 'New personal best - saved!'
+    : `Saved. Your best is still ${bestScore}.`;
+  refreshLeaderboard();
+}
+
+// Same discipline again, via submit_shrink_score() - lower is better, same
+// direction as submit_curse_score(), just squares lost to the void instead
+// of leftover open squares.
+async function saveShrinkScoreIfBest(score) {
+  const user = Auth.getUser();
+  if (!user) {
+    document.getElementById('spSaveStatus').textContent = 'Sign in to save your score to the leaderboard.';
+    return;
+  }
+  const { data: bestScore, error } = await supabaseClient.rpc('submit_shrink_score', { p_score: score });
   if (error) {
     document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
     return;

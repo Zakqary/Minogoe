@@ -224,6 +224,13 @@ async function renderProfilePage() {
           .eq('mode', 'curse')
           .lt('score', run.score);
         boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Curse &middot; ${run.score} open</div></div>`);
+      } else if (run.mode === 'shrink') {
+        const { count } = await supabaseClient
+          .from('singleplayer_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('mode', 'shrink')
+          .lt('score', run.score);
+        boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Shrink &middot; ${run.score} lost</div></div>`);
       }
     }
     if (boxes.length > 0) {

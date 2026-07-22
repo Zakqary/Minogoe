@@ -370,7 +370,7 @@ async function renderStatsPage() {
     eloChart = '<p class="stats-chart-empty">Not enough ranked players yet.</p>';
   }
 
-  const recordsByMode = { speedrun: [], eogonim: [], blindeogonim: [], ascension: [], blight: [], godbot: [], curse: [] };
+  const recordsByMode = { speedrun: [], eogonim: [], blindeogonim: [], ascension: [], blight: [], godbot: [], curse: [], shrink: [], mutation: [] };
   for (const row of recordProgression.data || []) {
     if (recordsByMode[row.mode]) recordsByMode[row.mode].push(row);
   }

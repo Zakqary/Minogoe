@@ -231,6 +231,13 @@ async function renderProfilePage() {
           .eq('mode', 'shrink')
           .lt('score', run.score);
         boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Shrink &middot; ${run.score} lost</div></div>`);
+      } else if (run.mode === 'mutation') {
+        const { count } = await supabaseClient
+          .from('singleplayer_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('mode', 'mutation')
+          .lt('score', run.score);
+        boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Mutation &middot; ${run.score} open</div></div>`);
       }
     }
     if (boxes.length > 0) {

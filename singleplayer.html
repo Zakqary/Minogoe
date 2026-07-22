@@ -66,6 +66,7 @@
           <button type="button" id="spTabGodbot" class="sp-mode-tab">GodBot</button>
           <button type="button" id="spTabCurse" class="sp-mode-tab">Curse</button>
           <button type="button" id="spTabShrink" class="sp-mode-tab">Shrink</button>
+          <button type="button" id="spTabMutation" class="sp-mode-tab">Mutation</button>
         </div>
         <h3 id="spModeTitle">Speedrun</h3>
         <div class="sp-mode-credit" id="spModeCredit" style="display:none;">Idea by SgtBird08</div>
@@ -157,6 +158,11 @@
           <li>Every 4th piece you place, the border shrinks in by one ring on every side. Voided cells can never be placed on again.</li>
           <li>Only a placed piece is ever safe - any still-open square caught by the shrink is swallowed along with it.</li>
           <li>Run ends when your piece has no legal spot. Score is squares never filled by a piece (open or voided, out of 100) - lower is better. A perfect 0 is impossible.</li>
+        </ul>
+        <ul id="spRulesMutation" style="display:none;">
+          <li><em>12&times;12</em> board, one random piece at a time, no preview, nothing ever disappears.</li>
+          <li>Pieces range anywhere from a single square (monomino) up to a full 7-block heptomino - every size from 1 to 7 is equally likely, then a random shape of that size is drawn.</li>
+          <li>Run ends when your piece has no legal spot, or the board fills completely. Score is squares never filled by a piece (out of 144) - lower is better. Unlike Shrink, a perfect 0 is possible.</li>
         </ul>
       </div>
 

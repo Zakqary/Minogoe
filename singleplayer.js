@@ -36,7 +36,7 @@
 // Board size varies by mode (Speedrun: 9x9, everything else: 10x10) - see
 // BOARD_SIZES and setMode() below - so this is reassigned rather than a const.
 let BOARD_SIZE = 9;
-const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10, blight: 10, godbot: 12, curse: 10, shrink: 10 };
+const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10, blight: 10, godbot: 12, curse: 10, shrink: 10, mutation: 12 };
 const CELL_PX = 52;
 const MAX_CAPTURE_SIZE = 4; // speedrun only - enclosures bigger than this don't count. Eogonim has no size cap, matching real Minogoe scoring.
 const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, eogonim has no preview
@@ -119,6 +119,74 @@ function generateOrientations(base) {
   }
   return result;
 }
+// Mutation-only: the curated P_*/Q_*/R_* sets above only go up to
+// pentomino, and are hand-picked to exclude mirror-duplicate entries (see
+// the Q_Z/Q_J comment above) - Mutation instead needs the FULL free-
+// polyomino set at every size from monomino through heptomino, which is
+// too large to hand-type accurately (35 hexominoes, 108 heptominoes).
+// enumerateFreePolyominoes(n) generates every one algorithmically: starting
+// from the single monomino, it repeatedly grows each known shape of size
+// size-1 by one cell in every possible adjacent spot, then dedupes against
+// a canonical form (the lexicographically-smallest of its 8 rotate/mirror
+// variants, reusing rotate90()/mirror() above) so physically-identical
+// shapes (including mirrors, same convention as the curated sets) collapse
+// to one entry. Verified against the known free-polyomino counts (1, 1, 2,
+// 5, 12, 35, 108 for n=1..7) before shipping.
+function canonicalKey(shape) {
+  let best = null;
+  let cur = shape;
+  for (const useMirror of [false, true]) {
+    let variant = useMirror ? mirror(shape) : shape;
+    for (let i = 0; i < 4; i++) {
+      const key = JSON.stringify(variant);
+      if (best === null || key < best) best = key;
+      variant = rotate90(variant);
+    }
+  }
+  return best;
+}
+function enumerateFreePolyominoes(n) {
+  let current = [normalize([[0, 0]])];
+  for (let size = 2; size <= n; size++) {
+    const seen = new Map();
+    for (const shape of current) {
+      const cellSet = new Set(shape.map(([r, c]) => `${r},${c}`));
+      for (const [r, c] of shape) {
+        for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+          const nr = r + dr, nc = c + dc;
+          const k = `${nr},${nc}`;
+          if (cellSet.has(k)) continue;
+          const grown = normalize([...shape, [nr, nc]]);
+          const key = canonicalKey(grown);
+          if (!seen.has(key)) seen.set(key, grown);
+        }
+      }
+    }
+    current = [...seen.values()];
+  }
+  return current;
+}
+// Generated sizes are only 1, 2, 6, and 7 - sizes 3/4/5 stay the hand-
+// curated P_*/Q_*/R_* sets above (same physical shapes either way, just
+// named/ordered differently, and those names are already depended on
+// elsewhere - Ascension's unlock system, GodBot's HAND_COMPOSITION).
+const MONOMINO_NAMES = [];
+const DOMINO_NAMES = [];
+const HEXOMINO_NAMES = [];
+const HEPTOMINO_NAMES = [];
+[[1, MONOMINO_NAMES, 'M1'], [2, DOMINO_NAMES, 'M2'], [6, HEXOMINO_NAMES, 'M6'], [7, HEPTOMINO_NAMES, 'M7']].forEach(([size, names, prefix]) => {
+  enumerateFreePolyominoes(size).forEach((shape, i) => {
+    const name = `${prefix}_${String(i).padStart(3, '0')}`;
+    BASE_SHAPES[name] = shape;
+    names.push(name);
+  });
+});
+// size -> pool of shape names, for Mutation's uniform-per-size draw.
+const MUTATION_SIZE_POOLS = {
+  1: MONOMINO_NAMES, 2: DOMINO_NAMES, 3: TROMINO_NAMES, 4: TETROMINO_NAMES,
+  5: PENTOMINO_NAMES, 6: HEXOMINO_NAMES, 7: HEPTOMINO_NAMES,
+};
+
 const ORIENTATIONS = {};
 for (const name of Object.keys(BASE_SHAPES)) ORIENTATIONS[name] = generateOrientations(BASE_SHAPES[name]);
 
@@ -369,6 +437,17 @@ function drawWeightedPiece() {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+// Mutation only: every size from 1 (monomino) to 7 (heptomino) is equally
+// likely (~14.3% each), THEN a random shape is picked within that size -
+// not a uniform draw across all individual shapes, which would have
+// swamped the board in heptominoes almost immediately (108 of them vs. a
+// single monomino).
+function drawMutationPiece() {
+  const size = 1 + Math.floor(Math.random() * 7);
+  const pool = MUTATION_SIZE_POOLS[size];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 // Blind Eogonim only: re-rolls on a repeat of the immediately previous
 // shape. With placed pieces genuinely invisible, drawing the same shape
 // twice in a row looks identical to "my click did nothing" - same outline
@@ -401,9 +480,14 @@ function drawWeightedPieceFrom(available) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// Offers up to 3 distinct shapes the player hasn't already unlocked.
+// Offers up to 3 distinct shapes the player hasn't already unlocked. Scoped
+// to ALL_SHAPE_NAMES (the original 19 curated pentomino/tetromino/tromino
+// shapes), NOT every key in BASE_SHAPES - that object also now holds
+// Mutation mode's full monomino/domino/hexomino/heptomino sets, which
+// Ascension was never designed around and shouldn't suddenly start
+// offering.
 function rollPieceChoices() {
-  const remaining = Object.keys(BASE_SHAPES).filter((n) => !state.unlockedShapes.includes(n));
+  const remaining = ALL_SHAPE_NAMES.filter((n) => !state.unlockedShapes.includes(n));
   const choices = [];
   while (choices.length < 3 && remaining.length > 0) {
     const pick = drawWeightedPieceFrom(remaining);
@@ -618,6 +702,17 @@ function applyShrinkRing() {
   }
 }
 
+// ---------- Mutation mode ----------
+// Same "no flood-fill/enclosure" scoring as Shrink/Curse - board only ever
+// holds 0 (empty) or 1 (placed), no voidMask/dead-square wrinkle here, so
+// this is just the plain open-cell tally. Lower is better; unlike Shrink, a
+// perfect 0 IS possible here (nothing ever permanently closes off a
+// square), since a monomino can always plug a lone 1-cell gap - it just
+// takes the right piece showing up at the right time.
+function countMutationOpenSquares(board) {
+  return board.reduce((n, v) => n + (v === 0 ? 1 : 0), 0);
+}
+
 // The board is complete once no empty (0) cells remain - NOT once every
 // cell is specifically captured (2). A piece that exactly fills the last
 // remaining gap (leaving nothing empty behind it to enclose) never
@@ -691,6 +786,7 @@ function spawnNextPiece() {
 
   const shapeName = state.mode === 'speedrun' ? state.pieceQueue.shift()
     : state.mode === 'blindeogonim' ? drawWeightedPieceExcluding(state.lastDrawnShape)
+    : state.mode === 'mutation' ? drawMutationPiece()
     : drawWeightedPiece();
   if (state.mode === 'speedrun') state.pieceQueue.push(drawWeightedPiece());
   state.lastDrawnShape = shapeName;
@@ -702,6 +798,7 @@ function spawnNextPiece() {
     else if (state.mode === 'blight') finishBlightRun();
     else if (state.mode === 'curse') finishCurseRun(false);
     else if (state.mode === 'shrink') finishShrinkRun();
+    else if (state.mode === 'mutation') finishMutationRun();
     else finishEogonimRun();
     return;
   }
@@ -773,6 +870,11 @@ function commitPlacement(r0, c0) {
       applyShrinkRing();
       state.shrinkRingDepth++;
     }
+  } else if (state.mode === 'mutation') {
+    // No captured-territory tally here either - same reasoning as Curse/
+    // Shrink above, just without either mode's extra wrinkle (no voidMask,
+    // no dead squares).
+    state.totalCaptured = countMutationOpenSquares(state.board);
   } else {
     state.totalCaptured = computeCapturedCount(state.board);
   }
@@ -795,6 +897,8 @@ function commitPlacement(r0, c0) {
       finishCurseRun(false);
     } else if (state.mode === 'shrink') {
       finishShrinkRun();
+    } else if (state.mode === 'mutation') {
+      finishMutationRun();
     } else {
       // A completely full board is just a special case of "nothing fits
       // anywhere" for ascension too - same round-end evaluation either way.
@@ -873,6 +977,17 @@ function finishShrinkRun() {
   state.failed = false;
   render();
   saveShrinkScoreIfBest(state.totalCaptured);
+}
+
+// Same "no separate failed ending" shape as Shrink/Curse - running out of
+// legal placements and filling the board completely (a genuine 0-score
+// win) are both just "the run is over," scored the same way either way.
+function finishMutationRun() {
+  state.running = false;
+  state.finished = true;
+  state.failed = false;
+  render();
+  saveMutationScoreIfBest(state.totalCaptured);
 }
 
 // ---------- GodBot mode ----------
@@ -1475,11 +1590,12 @@ function setMode(mode) {
 const MODE_TITLES = {
   speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim',
   ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse', shrink: 'Shrink',
+  mutation: 'Mutation',
 };
 const LEADERBOARD_TITLES = {
   speedrun: 'Top Times', eogonim: 'Lowest Scores', blindeogonim: 'Lowest Scores',
   ascension: 'Deepest Runs', blight: 'Highest Scores', godbot: 'Best Differential', curse: 'Fewest Open Squares',
-  shrink: 'Lowest Losses',
+  shrink: 'Lowest Losses', mutation: 'Fewest Open Squares',
 };
 
 function updateModeUI() {
@@ -1492,6 +1608,7 @@ function updateModeUI() {
   document.getElementById('spTabGodbot').classList.toggle('active', mode === 'godbot');
   document.getElementById('spTabCurse').classList.toggle('active', mode === 'curse');
   document.getElementById('spTabShrink').classList.toggle('active', mode === 'shrink');
+  document.getElementById('spTabMutation').classList.toggle('active', mode === 'mutation');
   document.getElementById('spModeTitle').textContent = MODE_TITLES[mode];
   document.getElementById('spModeCredit').style.display = mode === 'eogonim' ? '' : 'none';
   document.getElementById('spUpcomingLabel').style.display = mode === 'speedrun' ? '' : 'none';
@@ -1504,6 +1621,7 @@ function updateModeUI() {
   document.getElementById('spRulesGodbot').style.display = mode === 'godbot' ? '' : 'none';
   document.getElementById('spRulesCurse').style.display = mode === 'curse' ? '' : 'none';
   document.getElementById('spRulesShrink').style.display = mode === 'shrink' ? '' : 'none';
+  document.getElementById('spRulesMutation').style.display = mode === 'mutation' ? '' : 'none';
   document.getElementById('spLeaderboardTitle').textContent = LEADERBOARD_TITLES[mode];
   document.getElementById('spSaveStatus').textContent = '';
   document.getElementById('spPieceChoices').style.display = 'none';
@@ -1516,6 +1634,7 @@ function updateModeUI() {
     : mode === 'godbot' ? 'You: 0 - Bot: 0'
     : mode === 'curse' ? 'Open squares: 0'
     : mode === 'shrink' ? 'Lost: 0'
+    : mode === 'mutation' ? 'Open squares: 0'
     : formatTime(0);
 }
 
@@ -1652,6 +1771,7 @@ function render() {
   document.getElementById('spTabGodbot').disabled = state.running;
   document.getElementById('spTabCurse').disabled = state.running;
   document.getElementById('spTabShrink').disabled = state.running;
+  document.getElementById('spTabMutation').disabled = state.running;
 
   if (state.mode === 'eogonim' || state.mode === 'blindeogonim') {
     document.getElementById('spTimer').textContent = `Captured: ${state.totalCaptured}`;
@@ -1669,6 +1789,9 @@ function render() {
     document.getElementById('spTimer').textContent = `Open squares: ${openCount}`;
   } else if (state.mode === 'shrink') {
     document.getElementById('spTimer').textContent = `Lost: ${state.totalCaptured}`;
+  } else if (state.mode === 'mutation') {
+    const openCount = state.running || state.finished ? countMutationOpenSquares(state.board) : BOARD_SIZE * BOARD_SIZE;
+    document.getElementById('spTimer').textContent = `Open squares: ${openCount}`;
   }
 
   if (!state.running && !state.finished) {
@@ -1687,7 +1810,9 @@ function render() {
                 ? "One random piece at a time, no preview, nothing ever disappears - but every piece comes cursed. Pack the board as tight as you can; an illegal move ends your run instantly."
                 : state.mode === 'shrink'
                   ? "One random piece at a time, no preview, nothing ever disappears - but every 4th piece you place, the border shrinks in by one ring on every side. Only a placed piece is ever safe. Pack the board as tight as you can before the walls close in - squares never filled count against you."
-                  : "You'll get one random piece at a time - place it anywhere it fits.";
+                  : state.mode === 'mutation'
+                    ? "One random piece at a time, no preview, nothing ever disappears - but pieces range anywhere from a single square up to a full 7-block heptomino, all equally likely. Pack the 12x12 board as tight as you can; a perfect 0 is possible, but only if the right piece shows up at the right time."
+                    : "You'll get one random piece at a time - place it anywhere it fits.";
   } else if (state.mode === 'godbot' && state.finished) {
     const diff = state.godbotScore1 - state.godbotScore2;
     banner.textContent = `Run over. You ${state.godbotScore1} - Bot ${state.godbotScore2} (${diff > 0 ? '+' : ''}${diff})`;
@@ -1722,6 +1847,12 @@ function render() {
     pieceInfo.textContent = 'Click Restart to try for a higher score.';
   } else if (state.mode === 'shrink' && state.finished) {
     banner.textContent = `Run over. Lost ${state.totalCaptured} square${state.totalCaptured === 1 ? '' : 's'}`;
+    pieceInfo.textContent = 'Click Restart to try for fewer.';
+  } else if (state.mode === 'mutation' && state.finished) {
+    const openCount = countMutationOpenSquares(state.board);
+    banner.textContent = openCount === 0
+      ? 'Perfect run! Every square filled'
+      : `Run over. ${openCount} open square${openCount === 1 ? '' : 's'} left`;
     pieceInfo.textContent = 'Click Restart to try for fewer.';
   } else if (state.mode === 'blindeogonim' && state.finished) {
     banner.textContent = state.illegalMove
@@ -1953,6 +2084,7 @@ document.getElementById('spTabBlight').addEventListener('click', () => setMode('
 document.getElementById('spTabGodbot').addEventListener('click', () => setMode('godbot'));
 document.getElementById('spTabCurse').addEventListener('click', () => setMode('curse'));
 document.getElementById('spTabShrink').addEventListener('click', () => setMode('shrink'));
+document.getElementById('spTabMutation').addEventListener('click', () => setMode('mutation'));
 
 // Clicking the "How to Play" header collapses/expands the whole rules panel.
 document.querySelector('.rules-panel h3')?.addEventListener('click', () => {
@@ -2112,6 +2244,26 @@ async function saveShrinkScoreIfBest(score) {
     return;
   }
   const { data: bestScore, error } = await supabaseClient.rpc('submit_shrink_score', { p_score: score });
+  if (error) {
+    document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
+    return;
+  }
+  document.getElementById('spSaveStatus').textContent = bestScore === score
+    ? 'New personal best - saved!'
+    : `Saved. Your best is still ${bestScore}.`;
+  refreshLeaderboard();
+}
+
+// Same discipline again, via submit_mutation_score() - lower is better,
+// same direction as submit_curse_score()/submit_shrink_score(), just plain
+// leftover open squares with no void/dead-square wrinkle.
+async function saveMutationScoreIfBest(score) {
+  const user = Auth.getUser();
+  if (!user) {
+    document.getElementById('spSaveStatus').textContent = 'Sign in to save your score to the leaderboard.';
+    return;
+  }
+  const { data: bestScore, error } = await supabaseClient.rpc('submit_mutation_score', { p_score: score });
   if (error) {
     document.getElementById('spSaveStatus').textContent = 'Could not save your score: ' + error.message;
     return;

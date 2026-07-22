@@ -437,13 +437,23 @@ function drawWeightedPiece() {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// Mutation only: every size from 1 (monomino) to 7 (heptomino) is equally
-// likely (~14.3% each), THEN a random shape is picked within that size -
-// not a uniform draw across all individual shapes, which would have
-// swamped the board in heptominoes almost immediately (108 of them vs. a
-// single monomino).
+// Mutation only: size is picked with weight proportional to the size
+// itself (weight 1 for monomino, 2 for domino, ... 7 for heptomino, out of
+// a 28 total) - larger pieces are proportionally more common, a monomino
+// is the single rarest draw at 1/28 (~3.6%) while a heptomino is the most
+// common at 7/28 (25%), about 7x as likely. A random shape is then picked
+// within that size - not a uniform draw across all individual shapes,
+// which would have swamped the board in heptominoes even harder (108 of
+// them vs. a single monomino).
+const MUTATION_SIZE_WEIGHTS = [1, 2, 3, 4, 5, 6, 7];
+const MUTATION_SIZE_WEIGHT_TOTAL = MUTATION_SIZE_WEIGHTS.reduce((a, b) => a + b, 0);
 function drawMutationPiece() {
-  const size = 1 + Math.floor(Math.random() * 7);
+  let roll = Math.random() * MUTATION_SIZE_WEIGHT_TOTAL;
+  let size = MUTATION_SIZE_WEIGHTS.length;
+  for (let i = 0; i < MUTATION_SIZE_WEIGHTS.length; i++) {
+    if (roll < MUTATION_SIZE_WEIGHTS[i]) { size = i + 1; break; }
+    roll -= MUTATION_SIZE_WEIGHTS[i];
+  }
   const pool = MUTATION_SIZE_POOLS[size];
   return pool[Math.floor(Math.random() * pool.length)];
 }
@@ -1811,7 +1821,7 @@ function render() {
                 : state.mode === 'shrink'
                   ? "One random piece at a time, no preview, nothing ever disappears - but every 4th piece you place, the border shrinks in by one ring on every side. Only a placed piece is ever safe. Pack the board as tight as you can before the walls close in - squares never filled count against you."
                   : state.mode === 'mutation'
-                    ? "One random piece at a time, no preview, nothing ever disappears - but pieces range anywhere from a single square up to a full 7-block heptomino, all equally likely. Pack the 12x12 board as tight as you can; a perfect 0 is possible, but only if the right piece shows up at the right time."
+                    ? "One random piece at a time, no preview, nothing ever disappears - but pieces range anywhere from a single square up to a full 7-block heptomino, with bigger pieces showing up far more often than small ones. Pack the 12x12 board as tight as you can; a perfect 0 is possible, but only if the right piece shows up at the right time."
                     : "You'll get one random piece at a time - place it anywhere it fits.";
   } else if (state.mode === 'godbot' && state.finished) {
     const diff = state.godbotScore1 - state.godbotScore2;

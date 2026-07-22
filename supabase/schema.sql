@@ -3970,26 +3970,21 @@ $$;
 
 -- ---------- Phase 49: singleplayer "GodBot" and "Curse" modes ----------
 
--- Same explicit drop-then-add pattern as every earlier mode phase (see
--- Phase 42's comment for why nothing earlier should ever be edited in place
--- to re-add a narrower version instead of just adding a new phase).
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension', 'blight', 'godbot', 'curse'));
-
--- Both new modes reuse the existing "score" column exactly like every mode
--- after Speedrun - godbot's is a real-match territory differential (can be
--- negative), curse's is a count of leftover empty squares.
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
-  check (
-    (mode = 'speedrun' and time_ms is not null and score is null)
-    or (mode = 'eogonim' and score is not null and time_ms is null)
-    or (mode = 'blindeogonim' and score is not null and time_ms is null)
-    or (mode = 'ascension' and score is not null and time_ms is null)
-    or (mode = 'blight' and score is not null and time_ms is null)
-    or (mode = 'godbot' and score is not null and time_ms is null)
-    or (mode = 'curse' and score is not null and time_ms is null)
-  );
+-- This phase originally dropped-then-re-added both constraints here too,
+-- widened to include 'godbot'/'curse' (on top of the 5 values that existed
+-- at the time). That was the exact landmine this file's other comments
+-- (Phase 41/42/48) warn about, and it went uncaught here for real: Phase
+-- 58 later widened this same constraint again to add 'shrink', and Phase
+-- 59 again for 'mutation' - but neither of those phases' authors realized
+-- THIS phase's real add-constraint statements were still active, so once
+-- real 'shrink' rows existed in the table, a full top-to-bottom re-run hit
+-- THIS narrower 7-value version first (it runs earlier in the file than
+-- Phase 58/59) and failed outright - the exact
+-- "check constraint ... is violated by some row" error this comment style
+-- exists to prevent. Neutralized the same way Phase 41/42/48 already were:
+-- the constraint is correctly left owned by whichever phase touches it
+-- LAST (Phase 59 today) - do not add a narrower version of either
+-- constraint here again.
 
 -- Same "server decides if it's actually an improvement" discipline as
 -- submit_blight_score(), and the same higher-is-better comparison
@@ -5013,27 +5008,15 @@ $$;
 
 -- ---------- Phase 58: singleplayer "Shrink" mode ----------
 
--- Same explicit drop-then-add pattern as every earlier mode phase (see
--- Phase 42's comment for why nothing earlier should ever be edited in place
--- to re-add a narrower version instead of just adding a new phase).
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension', 'blight', 'godbot', 'curse', 'shrink'));
-
--- Reuses the existing "score" column exactly like every mode after Speedrun
--- - shrink's is squares never captured (out of board_size^2), lower is
--- better, same shape as curse's leftover-open-squares count.
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
-  check (
-    (mode = 'speedrun' and time_ms is not null and score is null)
-    or (mode = 'eogonim' and score is not null and time_ms is null)
-    or (mode = 'blindeogonim' and score is not null and time_ms is null)
-    or (mode = 'ascension' and score is not null and time_ms is null)
-    or (mode = 'blight' and score is not null and time_ms is null)
-    or (mode = 'godbot' and score is not null and time_ms is null)
-    or (mode = 'curse' and score is not null and time_ms is null)
-    or (mode = 'shrink' and score is not null and time_ms is null)
-  );
+-- This phase originally dropped-then-re-added both constraints here too,
+-- widened to include 'shrink' (on top of the 7 values that existed at the
+-- time) - without realizing Phase 49 above still had its OWN real
+-- add-constraint statements active, which is what actually caused the
+-- failure this comment now documents (see Phase 49's own comment for the
+-- full story). Neutralized the same way, for the same reason: the
+-- constraint is correctly left owned by whichever phase touches it LAST
+-- (Phase 59 today) - do not add a narrower version of either constraint
+-- here again.
 
 -- Same discipline as submit_curse_score() - lower is better, same 0-100
 -- range (a 10x10 board, same as curse's leftover-open-squares bound).

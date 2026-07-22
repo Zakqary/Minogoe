@@ -465,6 +465,9 @@ async function loadReplay() {
     pieceColorHex(data.player1 ? data.player1.piece_color_id : null) || PLAYER_COLORS[0],
     pieceColorHex(data.player2 ? data.player2.piece_color_id : null) || PLAYER_COLORS[1],
   ];
+  // Same collision rule as game.js's playerPieceColorHex() - player 1 wins
+  // a tie, player 2 falls back to their positional default.
+  if (resolvedColors[1] === resolvedColors[0]) resolvedColors[1] = PLAYER_COLORS[1];
   const resultText = data.winner == null
     ? 'Tie'
     : `${data.winner === 1 ? p1Name : p2Name} won${data.forfeit ? ' by forfeit' : ''}`;

@@ -383,6 +383,9 @@ function resetGameState(msg) {
       pieceColorHex(player1 ? player1.pieceColorId : null) || PLAYER_COLORS[0],
       pieceColorHex(player2 ? player2.pieceColorId : null) || PLAYER_COLORS[1],
     ];
+    // Same collision rule as game.js's playerPieceColorHex() - player 1
+    // wins a tie, player 2 falls back to their positional default.
+    if (resolvedColors[1] === resolvedColors[0]) resolvedColors[1] = PLAYER_COLORS[1];
     mode = msg.mode || null;
   }
   initialHand = msg.initialHand || [];

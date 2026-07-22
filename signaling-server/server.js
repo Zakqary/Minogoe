@@ -249,6 +249,11 @@ function generateRoomCode() {
 }
 
 function pairSockets(entryA, entryB, mode) {
+  // Multi-queueing: either (or both) of these users may still have a
+  // separate connection waiting in another queue - see removeUserFromQueues().
+  removeUserFromQueues(entryA.userId);
+  removeUserFromQueues(entryB.userId);
+
   const code = generateRoomCode();
   const slots = [
     { socket: entryA.socket, userId: entryA.userId ?? null, isHost: true, disconnectTimer: null, tabId: entryA.tabId ?? null },
@@ -272,10 +277,29 @@ function removeFromQueues(socket) {
   }
 }
 
+// Purges every OTHER queue entry for this same logged-in user (not just
+// this socket) - closes the multi-queue race where the same user has a
+// separate connection (each queue type now uses its own WebSocket - see
+// net.js's Net/Net2 client-side split) still waiting in another queue at
+// the exact moment they're matched via this one, faster/more reliably than
+// depending on the client's own cancellation message to arrive in time.
+function removeUserFromQueues(userId) {
+  if (!userId) return;
+  for (const q of [casualQueue, rankedQueue, ffaQueue]) {
+    for (let i = q.length - 1; i >= 0; i--) {
+      if (q[i].userId === userId) q.splice(i, 1);
+    }
+  }
+}
+
 // Seat 0 is host - arbitrary (whichever of the 4 happened to be picked
 // first), not skill-based, matching pairSockets()'s own "queue order
 // decides host" precedent.
 function pairFfaSockets(entries) {
+  // Multi-queueing: any of these users may still have a separate
+  // connection waiting in casual/ranked - see removeUserFromQueues().
+  for (const e of entries) removeUserFromQueues(e.userId);
+
   const code = generateRoomCode();
   const seats = entries.map((e, i) => ({
     socket: e.socket,

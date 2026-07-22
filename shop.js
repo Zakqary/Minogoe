@@ -63,7 +63,9 @@ function itemCardHtml(item, profile) {
   // only an unowned item shows coinIconHtml() + its price.
   let action;
   if (equipped) {
-    action = `<button class="shop-equipped-btn" disabled>Equipped</button>`;
+    // A status chip, not a button - reads as "this is the state of the
+    // item," not a greyed-out disabled control.
+    action = `<span class="shop-equipped-chip">&check; Equipped</span>`;
   } else if (owned) {
     action = `<button class="shop-equip-btn" data-id="${escapeHtml(item.id)}" data-type="${item.type}">Equip</button>`;
   } else {
@@ -191,23 +193,23 @@ async function renderShopPage() {
 
     <div class="shop-categories">
       <div class="shop-category">
-        <h3>Profile Pictures</h3>
-        <div class="shop-grid shop-grid-compact">${avatars.map((i) => itemCardHtml(i, profile)).join('') || '<p>No avatars in the shop yet.</p>'}</div>
+        <h3>Profile Pictures <span class="shop-category-count">${avatars.length}</span></h3>
+        <div class="shop-item-grid">${avatars.map((i) => itemCardHtml(i, profile)).join('') || '<p>No avatars in the shop yet.</p>'}</div>
       </div>
 
       <div class="shop-category">
-        <h3>Titles</h3>
-        <div class="shop-grid shop-grid-compact">${titles.map((i) => itemCardHtml(i, profile)).join('') || '<p>No titles in the shop yet.</p>'}</div>
+        <h3>Titles <span class="shop-category-count">${titles.length}</span></h3>
+        <div class="shop-item-grid">${titles.map((i) => itemCardHtml(i, profile)).join('') || '<p>No titles in the shop yet.</p>'}</div>
       </div>
 
       <div class="shop-category">
-        <h3>Piece Colors</h3>
-        <div class="shop-grid shop-grid-compact">${pieceColors.map((i) => itemCardHtml(i, profile)).join('') || '<p>No piece colors in the shop yet.</p>'}</div>
+        <h3>Piece Colors <span class="shop-category-count">${pieceColors.length}</span></h3>
+        <div class="shop-item-grid">${pieceColors.map((i) => itemCardHtml(i, profile)).join('') || '<p>No piece colors in the shop yet.</p>'}</div>
       </div>
 
       <div class="shop-category">
         <h3>Garden Supplies</h3>
-        <div class="shop-grid">
+        <div class="shop-supply-list">
           <div class="shop-item-card">
             <div class="shop-item-row">
               <div class="pot-icon shop-item-preview"></div>

@@ -223,12 +223,17 @@ const state = {
   connecting: false,  // true from the moment Connect is clicked until paired (or given up)
   // True only while waiting in the casual/ranked queue for an opponent, as
   // opposed to state.connecting (which also covers reconnecting to an
-  // ALREADY-existing match). Deliberately a separate flag: unlike
+  // ALREADY-existing match). Deliberately separate from that: unlike
   // reconnecting, there's no live match's board to freeze yet while
   // merely searching, so a local hotseat/vs-bot game is free to keep
   // running underneath the search - none of the board-interaction guards
-  // below check this flag, only state.connecting.
-  queueSearching: false,
+  // below check this, only state.connecting. A Set (not a single boolean)
+  // since casual/ranked/ffa can now all be searched simultaneously - see
+  // startQueue()/startFfaQueue()/promoteToNet().
+  activeQueues: new Set(),
+  // Which connection (Net or Net2) casual/ranked is currently using, while
+  // multi-queued - see startQueue(). ffa always uses NetFfa, never entered here.
+  queueConnections: { casual: null, ranked: null },
   opponentUserId: null,   // the connected peer's Supabase user id, if they're logged in
   opponentUsername: null, // the connected peer's username, if they're logged in
   opponentAvatarId: null, // the connected peer's equipped avatar item id, if any
@@ -634,7 +639,18 @@ function playerPieceColorId(playerNum) {
 // positional color (PLAYER_COLORS) for bot/guest slots and anyone who
 // hasn't bought/equipped a custom color.
 function playerPieceColorHex(playerNum) {
-  return pieceColorHex(playerPieceColorId(playerNum)) || PLAYER_COLORS[playerNum - 1];
+  const resolved = pieceColorHex(playerPieceColorId(playerNum)) || PLAYER_COLORS[playerNum - 1];
+  // 2-player only (ffa's 4-seat collision handling is a separate, out-of-
+  // scope concern) - if player 2 would render in the exact same color as
+  // player 1, player 2 falls back to their own positional default instead
+  // so pieces stay visually distinguishable. Recomputed live every call
+  // (nothing here is cached), so this naturally tracks whichever side is
+  // currently "player 1" - which flips across rematches via
+  // computeMyPlayerForCurrentGame() - with no extra reset logic needed.
+  if (state.gameMode !== 'ffa' && playerNum === 2 && resolved === playerPieceColorHex(1)) {
+    return PLAYER_COLORS[1];
+  }
+  return resolved;
 }
 
 // The chosen companion Mino ({ color, rarity, modifier, stage }) for whoever's
@@ -2695,7 +2711,7 @@ function drawBoard() {
 // the same element IDs regardless of which container currently holds them,
 // so none of them needed any changes for this). Moving #queueControls in
 // particular is what lets a hotseat/vs-bot game stay queued for a
-// ranked/casual match in the background (state.queueSearching already ran
+// ranked/casual match in the background (state.activeQueues already ran
 // fine independently of any local game - see startQueue()'s comment) without
 // losing the Find Match/Cancel/status controls needed to manage that queue.
 function updateLobbyGameVisibility() {
@@ -2855,16 +2871,29 @@ function render() {
   document.getElementById('hotseatBtn').disabled = state.online || state.connecting;
   document.getElementById('vsBotBtn').disabled = state.online || state.connecting;
 
-  document.getElementById('casualQueueBtn').disabled = state.online || state.connecting || state.queueSearching;
-  document.getElementById('rankedQueueBtn').disabled = state.online || state.connecting || state.queueSearching;
-  document.getElementById('ffaQueueBtn').disabled = state.online || state.connecting || state.queueSearching;
-  // Only show Cancel while genuinely establishing a first connection - not
-  // while state.connecting is true because we're mid-game waiting for a
-  // disconnected opponent to reconnect (state.online is already true then).
-  // Also shown for a queue search in progress, even though that doesn't
-  // set state.connecting (see queueSearching's own comment) - it's still
-  // a "first connection being established" from the queue's perspective.
-  document.getElementById('cancelConnectBtn').style.display = ((state.connecting || state.queueSearching) && !state.online) ? '' : 'none';
+  // Each queue button is independently togglable now (casual/ranked/ffa can
+  // all be searched at once, see startQueue()) - only state.online/
+  // state.connecting disable a button entirely; whether THIS SPECIFIC
+  // queue is active just relabels it Find Match <-> Cancel, without
+  // affecting the other two.
+  for (const [type, btnId, statusId] of [
+    ['casual', 'casualQueueBtn', 'casualQueueStatus'],
+    ['ranked', 'rankedQueueBtn', 'rankedQueueStatus'],
+    ['ffa', 'ffaQueueBtn', 'ffaQueueStatus'],
+  ]) {
+    const searching = state.activeQueues.has(type);
+    const btn = document.getElementById(btnId);
+    btn.disabled = state.online || state.connecting;
+    btn.textContent = searching ? 'Cancel' : 'Find Match';
+    btn.classList.toggle('searching', searching);
+    const statusEl = document.getElementById(statusId);
+    if (statusEl) statusEl.textContent = searching ? 'Searching...' : '';
+  }
+  // Shared "Cancel All" - shown whenever ANY queue is active, or while
+  // genuinely establishing a first private-room connection (not while
+  // state.connecting is true because we're mid-game waiting for a
+  // disconnected opponent to reconnect - state.online is already true then).
+  document.getElementById('cancelConnectBtn').style.display = ((state.connecting || state.activeQueues.size > 0) && !state.online) ? '' : 'none';
 
   document.getElementById('chatInput').disabled = !state.online;
   document.getElementById('chatSendBtn').disabled = !state.online;
@@ -3487,7 +3516,7 @@ function tryResumeActiveMatch(retriesLeft = 10, isManual = false) {
 function updateResumeMatchBanner() {
   const banner = document.getElementById('resumeMatchBanner');
   if (!banner) return;
-  banner.style.display = (!state.online && !state.connecting && !state.queueSearching && hasActiveMatchRecord()) ? 'flex' : 'none';
+  banner.style.display = (!state.online && !state.connecting && state.activeQueues.size === 0 && hasActiveMatchRecord()) ? 'flex' : 'none';
 }
 
 function handleNetReady() {
@@ -3502,9 +3531,13 @@ function handleNetReady() {
   state.connecting = false;
   // If this arrived while a local hotseat/vs-bot game was running in the
   // background during a queue search, it's abandoned here with no
-  // forfeit recorded - by design, see queueSearching's own comment.
+  // forfeit recorded - by design, see activeQueues' own comment.
   state.vsBot = false;
-  state.queueSearching = false;
+  // Any other queue(s) still active (multi-queueing) are no longer
+  // relevant now that a match has actually been found - cancel them
+  // before clearing our own entry too.
+  cancelOtherQueues(Net.matchedMode);
+  state.activeQueues.delete(Net.matchedMode);
   state.gameMode = Net.matchedMode;
   state.myPlayer = Net.isHost ? 1 : 2;
   state.opponentUserId = null;
@@ -4056,6 +4089,55 @@ document.getElementById('startPrivateGameBtn').addEventListener('click', () => {
   newGame(undefined, undefined, undefined, handOverride);
 });
 
+// Swaps Net/Net2 so the well-known `Net` binding always refers to whichever
+// connection actually won a multi-queue race - see net.js's factory
+// comment. A true swap (not a one-way assignment) so both names stay bound
+// to two DISTINCT instances afterward: the queue buttons only re-enable
+// once this match ends, and the NEXT multi-queue attempt still needs two
+// genuinely independent connections, not two names aliasing the same one.
+// A no-op if Net (the default/primary slot) is already the one that won -
+// the common case, since Net2 is only ever recruited as the SECOND of
+// casual/ranked when the first is still searching (see startQueue()).
+function promoteToNet(instance) {
+  if (instance === Net) return;
+  const other = Net;
+  Net = instance;
+  Net2 = other;
+}
+
+// Cancels every OTHER still-active queue search (not exceptType) the
+// instant one queue matches - called from handleNetReady()/handleFfaReady().
+// Client-side half of the multi-queue race guard (server.js's
+// removeUserFromQueues() is the authoritative half).
+function cancelOtherQueues(exceptType) {
+  for (const type of [...state.activeQueues]) {
+    if (type === exceptType) continue;
+    if (type === 'ffa') {
+      NetFfa.cancelQueue();
+    } else {
+      const conn = state.queueConnections[type];
+      if (conn) conn.cancelQueue();
+      state.queueConnections[type] = null;
+    }
+    state.activeQueues.delete(type);
+  }
+}
+
+// Cancels just ONE specific queue search, leaving any others untouched -
+// what a single queue button's own "Cancel" click does while multi-queued.
+function cancelSpecificQueue(queueType) {
+  if (queueType === 'ffa') {
+    NetFfa.cancelQueue();
+  } else {
+    const conn = state.queueConnections[queueType];
+    if (conn) conn.cancelQueue();
+    state.queueConnections[queueType] = null;
+  }
+  state.activeQueues.delete(queueType);
+  setLobbyStatus('Cancelled.');
+  render();
+}
+
 function startQueue(queueType) {
   const user = Auth.getUser();
   if (!user) {
@@ -4066,18 +4148,35 @@ function startQueue(queueType) {
   const eloRating = profile ? profile.elo_rating : 1200;
   const accessToken = Auth.getAccessToken();
 
-  // Deliberately state.queueSearching, not state.connecting - there's no
+  // Deliberately state.activeQueues, not state.connecting - there's no
   // live match yet to freeze the board for, so a local hotseat/vs-bot game
   // already in progress (or started after this point) keeps running
-  // normally while the search happens in the background.
-  state.queueSearching = true;
+  // normally while the search happens in the background. Net2 is only
+  // recruited when the OTHER of casual/ranked is already active (a genuine
+  // simultaneous second search) - the common case (this is the only queue
+  // active) always uses Net, exactly as before multi-queueing existed.
+  const otherType = queueType === 'casual' ? 'ranked' : 'casual';
+  const instance = state.activeQueues.has(otherType) ? Net2 : Net;
+  state.queueConnections[queueType] = instance;
+  state.activeQueues.add(queueType);
   render();
   setLobbyStatus(`Searching for a ${queueType} opponent...`);
-  Net.connect({
+  instance.connect({
     serverUrl: SIGNALING_SERVER_URL,
     joinMessage: { type: 'queue', queueType, userId: user.id, eloRating, accessToken },
     onStatus: setLobbyStatus,
-    onReady: handleNetReady,
+    onReady: () => {
+      // Already matched via a different queue in the meantime (rare
+      // multi-queue race) - this connection lost, cancel it and don't
+      // touch Net/state at all.
+      if (state.online) {
+        instance.cancelQueue();
+        state.activeQueues.delete(queueType);
+        return;
+      }
+      promoteToNet(instance);
+      handleNetReady();
+    },
     onData: handleNetData,
     onPeerLeft: handleNetPeerLeft,
     onOpponentDisconnected: handleOpponentDisconnected,
@@ -4086,8 +4185,14 @@ function startQueue(queueType) {
   });
 }
 
-document.getElementById('casualQueueBtn').addEventListener('click', () => startQueue('casual'));
-document.getElementById('rankedQueueBtn').addEventListener('click', () => startQueue('ranked'));
+document.getElementById('casualQueueBtn').addEventListener('click', () => {
+  if (state.activeQueues.has('casual')) cancelSpecificQueue('casual');
+  else startQueue('casual');
+});
+document.getElementById('rankedQueueBtn').addEventListener('click', () => {
+  if (state.activeQueues.has('ranked')) cancelSpecificQueue('ranked');
+  else startQueue('ranked');
+});
 
 // ---------- 4-player free-for-all queue ----------
 // Deliberately its own connect/ready/data flow rather than a branch inside
@@ -4105,7 +4210,7 @@ function startFfaQueue() {
   }
   const accessToken = Auth.getAccessToken();
 
-  state.queueSearching = true;
+  state.activeQueues.add('ffa');
   render();
   setLobbyStatus('Searching for 3 other free-for-all players...');
   NetFfa.connect({
@@ -4113,7 +4218,16 @@ function startFfaQueue() {
     userId: user.id,
     accessToken,
     onStatus: setLobbyStatus,
-    onReady: handleFfaReady,
+    onReady: () => {
+      // Already matched via a different queue in the meantime (rare
+      // multi-queue race) - this connection lost, cancel it.
+      if (state.online) {
+        NetFfa.cancelQueue();
+        state.activeQueues.delete('ffa');
+        return;
+      }
+      handleFfaReady();
+    },
     onData: handleNetData, // (msg, fromSeat) - the same dispatcher the 2-player path uses, generalized to accept fromSeat
     onPeerLeft: handleFfaPeerLeft,
     onSeatDisconnected: handleFfaSeatDisconnected,
@@ -4123,7 +4237,10 @@ function startFfaQueue() {
   });
 }
 
-document.getElementById('ffaQueueBtn').addEventListener('click', () => startFfaQueue());
+document.getElementById('ffaQueueBtn').addEventListener('click', () => {
+  if (state.activeQueues.has('ffa')) cancelSpecificQueue('ffa');
+  else startFfaQueue();
+});
 
 function handleFfaReady() {
   if (NetFfa.isRejoin) {
@@ -4134,7 +4251,8 @@ function handleFfaReady() {
   state.online = true;
   state.connecting = false;
   state.vsBot = false;
-  state.queueSearching = false;
+  cancelOtherQueues('ffa');
+  state.activeQueues.delete('ffa');
   state.gameMode = 'ffa';
   state.playerCount = 4;
   state.ffaSeat = NetFfa.mySeat;
@@ -4349,10 +4467,15 @@ function handleFfaMatchAbandoned() {
 }
 
 document.getElementById('cancelConnectBtn').addEventListener('click', () => {
+  // "Cancel All" - every one of these is a harmless no-op for whichever of
+  // Net/Net2/NetFfa wasn't actually in use.
   Net.cancelQueue();
-  NetFfa.cancelQueue(); // harmless no-op if the FFA queue was never the active one
+  Net2.cancelQueue();
+  NetFfa.cancelQueue();
+  state.activeQueues.clear();
+  state.queueConnections.casual = null;
+  state.queueConnections.ranked = null;
   state.connecting = false;
-  state.queueSearching = false;
   // connectToPrivateRoom() disables one of createRoomBtn/connectBtn+roomInput
   // for the duration of a Create Room or Join Room attempt (whichever path
   // wasn't taken) - every other way that attempt can end (onRoomFull, the

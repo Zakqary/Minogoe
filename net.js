@@ -2,7 +2,15 @@
 // to exchange the WebRTC handshake (offer/answer/ICE candidates). Once the
 // RTCPeerConnection's data channel opens, all game moves flow directly
 // between the two browsers - the signaling server never sees them.
-const Net = (() => {
+//
+// A factory, not a singleton IIFE - instantiated twice below (Net/Net2) so
+// casual and ranked can each hold their own independent connection when
+// multi-queueing (see game.js's promoteToNet()). Purely mechanical: this
+// used to be `const Net = (() => { ... })();` with identical body - no
+// logic changed, only the wrapper and the debug-global names (label
+// distinguishes them so two live instances don't stomp each other's
+// window.__pentomino* debug hooks).
+function createNet(label) {
   // STUN alone only works when at least one side has an easily-traversable NAT.
   // Behind stricter firewalls (corporate networks, some mobile carriers) a TURN
   // relay is required as a fallback. These are the Open Relay Project's public
@@ -128,15 +136,15 @@ const Net = (() => {
     remoteDescSet = false;
     pendingCandidates = [];
     pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    window.__pentominoPC = pc;
-    window.__pentominoDebug = () => ({
+    window[`__pentominoPC_${label}`] = pc;
+    window[`__pentominoDebug_${label}`] = () => ({
       connectionState: pc.connectionState,
       iceConnectionState: pc.iceConnectionState,
       iceGatheringState: pc.iceGatheringState,
       signalingState: pc.signalingState,
     });
-    console.log('Pentomino Net: peer connection created. isHost =', isHost,
-      '- run __pentominoDebug() anytime to see live state.');
+    console.log(`Pentomino Net (${label}): peer connection created. isHost =`, isHost,
+      `- run __pentominoDebug_${label}() anytime to see live state.`);
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
@@ -480,4 +488,13 @@ const Net = (() => {
     get isRejoin() { return isRejoin; },
     get selfInitiatedRejoin() { return selfInitiatedRejoin; },
   };
-})();
+}
+
+// `let`, not `const` - game.js's promoteToNet() swaps these two bindings
+// when Net2 (the second simultaneous casual/ranked search) is the one that
+// actually matches, so the rest of the codebase's pervasive `Net.xxx` call
+// sites always transparently refer to whichever connection is the live one.
+// Private rooms/rejoin/resync only ever use Net; Net2 only comes into play
+// during multi-queueing (see startQueue() in game.js).
+let Net = createNet('primary');
+let Net2 = createNet('secondary');

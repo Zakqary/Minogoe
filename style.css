@@ -1153,10 +1153,32 @@ h2, h3 {
   color: var(--text-faint);
 }
 
+/* Shown in place of .queue-count while THIS SPECIFIC queue is searching -
+   casual/ranked/ffa can all be active independently now, so each option
+   tracks and displays its own state rather than sharing one status line. */
+.online-option-status {
+  font-size: 11px;
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
 #connectBtn:disabled, #casualQueueBtn:disabled, #rankedQueueBtn:disabled, #ffaQueueBtn:disabled, #newGameBtn:disabled {
   background: var(--surface-2);
   border-color: var(--border);
   color: var(--text-faint) !important;
+}
+
+/* A queue button toggles to "Cancel" while its own search is active -
+   outlined/accent rather than the filled default, so it reads as "this is
+   now a different action" at a glance, distinct from the other two queue
+   buttons that might still say "Find Match". */
+#casualQueueBtn.searching, #rankedQueueBtn.searching, #ffaQueueBtn.searching {
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+#casualQueueBtn.searching:hover, #rankedQueueBtn.searching:hover, #ffaQueueBtn.searching:hover {
+  background: var(--accent-soft);
 }
 
 .online-status {
@@ -2405,30 +2427,42 @@ h2, h3 {
   padding: 8px 14px;
 }
 
-.shop-theme .shop-item-card {
+/* Category panels (not individual item cards) carry the gold framing now -
+   a boxed section per category reads more clearly than every single card
+   having its own tinted border. */
+.shop-theme .shop-category {
   border-color: rgba(230, 193, 74, 0.16);
-  background: linear-gradient(160deg, var(--surface), rgba(230, 193, 74, 0.05));
-  transition: border-color 0.15s, box-shadow 0.15s;
+  background: linear-gradient(160deg, var(--surface), rgba(230, 193, 74, 0.04));
 }
 
 .shop-theme .shop-item-card:hover {
   border-color: rgba(230, 193, 74, 0.5);
-  box-shadow: 0 0 16px rgba(230, 193, 74, 0.15);
 }
 
 .shop-theme .shop-item-card.equipped {
   border-color: #e6c14a;
+  background: rgba(230, 193, 74, 0.07);
 }
 
-.shop-theme .shop-item-card button:hover:not(:disabled) {
+.shop-theme .shop-equip-btn:hover:not(:disabled) {
   border-color: #e6c14a;
   color: #f0d060;
 }
 
-/* Wider than the base .profile-page cap (640px) - three categories side by
-   side need more horizontal room than a single-column profile/garden page. */
+.shop-theme .shop-buy-btn {
+  background: #e6c14a;
+  border-color: #e6c14a;
+}
+
+.shop-theme .shop-buy-btn:hover:not(:disabled) {
+  background: #f0d060;
+  border-color: #f0d060;
+}
+
+/* Wider than the base .profile-page cap (640px) - a category's item grid
+   wants real room to lay out several roomy cards per row. */
 .shop-page {
-  max-width: 900px;
+  max-width: 960px;
 }
 
 /* Wider still - the garden page's main column and life-cycle sidebar sit
@@ -2545,91 +2579,67 @@ h2, h3 {
   color: #d8b354;
 }
 
-/* All three categories sit side by side so every choice is visible at
-   once, with each category's items listed vertically underneath its own
-   heading instead of the previous single wide wrapping grid. */
+/* Full-width stacked sections, not squeezed side-by-side columns - each
+   category is its own boxed panel (clearer separation than a thin divider
+   line) with a responsive item grid inside, so cards get real room to
+   breathe regardless of how many categories/items there are. */
 .shop-categories {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
   gap: 20px;
-  flex-wrap: wrap;
   margin-top: 18px;
 }
 
 .shop-category {
-  flex: 1 1 240px;
-  min-width: 220px;
-}
-
-/* Shop-yellow divider between categories - a left border (not the flex
-   gap alone) so it reads as a deliberate section break rather than just
-   whitespace. Switches to a top border once flex-wrap actually stacks
-   the categories (same breakpoint the rest of the site uses), where a
-   left border would just be an odd vertical stub on an otherwise
-   full-width block. */
-.shop-category:not(:first-child) {
-  border-left: 2px solid rgba(230, 193, 74, 0.35);
-  padding-left: 20px;
-}
-
-@media (max-width: 900px) {
-  .shop-category:not(:first-child) {
-    border-left: none;
-    border-top: 2px solid rgba(230, 193, 74, 0.35);
-    padding-left: 0;
-    padding-top: 18px;
-  }
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  padding: 20px 22px;
 }
 
 .shop-category h3 {
   margin-top: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
-.shop-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.shop-category-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+/* The cosmetics grid (Profile Pictures/Titles/Piece Colors) - one
+   consistent tile size across all three, roomy enough that a name/price/
+   button never feel squeezed. Garden Supplies keeps its own row-list
+   layout below instead (fundamentally different content: owned
+   quantities, not an equip state - two items would look sparse as tiles). */
+.shop-item-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
 }
 
 .shop-item-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  width: 100%;
-  background: var(--surface);
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  background: var(--surface-2);
   border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  padding: 8px 10px;
-  text-align: left;
+  border-radius: 12px;
+  padding: 16px 14px;
 }
 
 .shop-item-card.equipped {
   border-color: var(--accent);
 }
 
-.shop-item-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  /* If the icon (fixed width) and button (fixed width, its text never
-     shrinks) together don't leave enough room for .shop-item-info's text
-     to render normally, the button - last in source order - wraps to its
-     own line below instead of squeezing .shop-item-info down to an
-     ellipsis-truncated sliver (its only other flexible sibling). Never
-     triggers at any width/device this was actually tested at, but is a
-     free safety net against ones that weren't (larger system font sizes,
-     browser zoom, accessibility text scaling). */
-  flex-wrap: wrap;
-}
-
-.shop-item-info {
-  flex: 1;
-  min-width: 0;
-}
-
 .shop-item-preview {
-  width: 38px;
-  height: 38px;
+  width: 56px;
+  height: 56px;
   flex-shrink: 0;
   border-radius: 50%;
   object-fit: cover;
@@ -2637,19 +2647,23 @@ h2, h3 {
   align-items: center;
   justify-content: center;
   font-weight: 700;
+  font-size: 20px;
 }
 
 .shop-item-preview.title-preview {
   width: auto;
   height: auto;
-  min-width: 38px;
-  min-height: 38px;
-  border-radius: 10px;
+  min-width: 56px;
+  min-height: 56px;
+  max-width: 100%;
+  border-radius: 12px;
   background: var(--accent-soft);
   color: var(--accent-hover);
   border: 1px solid transparent;
-  font-size: 12px;
-  padding: 5px 8px;
+  font-size: 13px;
+  padding: 8px 10px;
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* Real colors get their hex as an inline background (see shop.js's
@@ -2674,87 +2688,13 @@ h2, h3 {
   line-height: 1.3;
 }
 
+/* Wraps up to 2 lines rather than truncating - a 160px tile has room for
+   most names in full, but a handful of longer ones ("Lover AND a
+   Fighter") still need the second line. */
 .shop-item-name {
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.shop-item-card button {
-  flex-shrink: 0;
-  white-space: nowrap;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface-2);
-  color: var(--text);
-  cursor: pointer;
-  font-size: 12px;
-  font-family: var(--font-body);
-}
-
-.shop-item-card button:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent-hover);
-}
-
-.shop-item-card .shop-equipped-btn {
-  color: var(--success);
-  border-color: var(--success);
-  cursor: default;
-}
-
-/* Dense tile grid for Profile Pictures/Titles - these two categories can
-   run to 15-20+ items each, and the original one-row-per-item list (still
-   used by Garden Supplies below, which needs the full row width for its
-   "You have N" subtext) meant scrolling through most of the shop just to
-   see everything. Small square-ish tiles instead, several per row, so
-   most of a category fits on screen at once. */
-.shop-grid-compact {
-  display: grid;
-  /* 80px rather than 72px - a handful of one-word titles ("Strategist",
-     "Aggressive") have no space to wrap at, so too narrow a tile forces
-     an awkward mid-word break instead of just wrapping across two lines. */
-  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-  gap: 8px;
-}
-
-.shop-grid-compact .shop-item-card {
-  align-items: center;
-  text-align: center;
-  padding: 8px 6px;
-}
-
-.shop-grid-compact .shop-item-preview {
-  width: 44px;
-  height: 44px;
-}
-
-.shop-grid-compact .shop-item-preview.title-preview {
-  /* Re-overrides the fixed 44x44 box above (same specificity, source order
-     would otherwise let it win over the base .title-preview rule's own
-     width:auto/height:auto) - without this every pill was clamped to
-     44x44 regardless of its text, so anything longer than a couple of
-     characters spilled out past its own background. */
-  width: auto;
-  height: auto;
-  min-width: 0;
-  min-height: 0;
-  max-width: 100%;
-  font-size: 11px;
-  padding: 5px 7px;
-  white-space: normal;
-  word-break: break-word;
-}
-
-/* Wraps up to 2 lines instead of the base .shop-item-name's single-line
-   ellipsis - a 72px-wide tile would otherwise truncate almost every name
-   ("Pool D...", "Girl in..."). */
-.shop-grid-compact .shop-item-name {
   width: 100%;
-  font-size: 11px;
+  font-size: 14px;
+  font-weight: 600;
   white-space: normal;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -2766,16 +2706,106 @@ h2, h3 {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  font-size: 11px;
+  gap: 4px;
+  font-size: 12px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
 
-.shop-grid-compact .shop-item-card button {
+.shop-item-card button, .shop-equipped-chip {
   width: 100%;
-  padding: 3px 6px;
-  font-size: 10.5px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-family: var(--font-body);
+}
+
+.shop-item-card button {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.shop-item-card button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+/* Buy is the primary/enticing action - filled accent, same treatment the
+   queue "Find Match" buttons use. Equip (the plain rule above) stays a
+   neutral outlined secondary action. */
+.shop-buy-btn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #211505;
+  font-weight: 700;
+}
+
+.shop-buy-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #211505;
+}
+
+/* A status chip, not a button - an owned/equipped item reads as a state,
+   not a greyed-out disabled control. */
+.shop-equipped-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--success);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+/* Garden Supplies - restyled to match the new spacing/typography scale,
+   but keeps its horizontal row format. */
+.shop-supply-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.shop-supply-list .shop-item-card {
+  flex-direction: row;
+  align-items: center;
+  text-align: left;
+  width: 100%;
+}
+
+.shop-item-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  /* If the icon (fixed width) and button (fixed width, its text never
+     shrinks) together don't leave enough room for .shop-item-info's text
+     to render normally, the button - last in source order - wraps to its
+     own line below instead of squeezing .shop-item-info down to an
+     ellipsis-truncated sliver (its only other flexible sibling). Never
+     triggers at any width/device this was actually tested at, but is a
+     free safety net against ones that weren't (larger system font sizes,
+     browser zoom, accessibility text scaling). */
+  flex-wrap: wrap;
+}
+
+.shop-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.shop-supply-list .shop-item-name {
+  display: block;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shop-supply-list button {
+  width: auto;
+  flex-shrink: 0;
 }
 
 .leaderboard-player-cell {

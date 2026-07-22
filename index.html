@@ -58,11 +58,17 @@
              underway - see game.js's updateLobbyGameVisibility() - so a
              hotseat/vs-bot game can still be queued for ranked/casual (and
              cancelled, or checked on) without leaving the board view. -->
+        <!-- Casual/Ranked/FFA can all be searched at once now (see game.js's
+             startQueue()/startFfaQueue()) - each option's own button/status
+             is fully independent, only the shared Cancel All + connecting
+             status below covers the post-match "establishing connection"
+             phase, where only one connection is ever relevant again. -->
         <div class="queue-controls" id="queueControls">
           <div class="online-option">
             <div class="online-option-info">
               <div class="online-option-label">Casual Queue</div>
               <span id="casualQueueCount" class="queue-count"></span>
+              <span id="casualQueueStatus" class="online-option-status"></span>
             </div>
             <button id="casualQueueBtn">Find Match</button>
           </div>
@@ -71,6 +77,7 @@
             <div class="online-option-info">
               <div class="online-option-label">Ranked Queue</div>
               <span id="rankedQueueCount" class="queue-count"></span>
+              <span id="rankedQueueStatus" class="online-option-status"></span>
             </div>
             <button id="rankedQueueBtn">Find Match</button>
           </div>
@@ -79,11 +86,12 @@
             <div class="online-option-info">
               <div class="online-option-label">Free-For-All (4p)</div>
               <span id="ffaQueueCount" class="queue-count"></span>
+              <span id="ffaQueueStatus" class="online-option-status"></span>
             </div>
             <button id="ffaQueueBtn">Find Match</button>
           </div>
 
-          <button id="cancelConnectBtn" style="display:none;">Cancel</button>
+          <button id="cancelConnectBtn" style="display:none;">Cancel All</button>
           <div class="online-status" id="onlineStatus">Not connected.</div>
         </div>
 

@@ -122,8 +122,8 @@ function generateOrientations(base) {
 // Mutation-only: the curated P_*/Q_*/R_* sets above only go up to
 // pentomino, and are hand-picked to exclude mirror-duplicate entries (see
 // the Q_Z/Q_J comment above) - Mutation instead needs the FULL free-
-// polyomino set at every size from monomino through heptomino, which is
-// too large to hand-type accurately (35 hexominoes, 108 heptominoes).
+// polyomino set at hexomino/heptomino sizes, which is too large to hand-
+// type accurately (35 hexominoes, 108 heptominoes).
 // enumerateFreePolyominoes(n) generates every one algorithmically: starting
 // from the single monomino, it repeatedly grows each known shape of size
 // size-1 by one cell in every possible adjacent spot, then dedupes against
@@ -166,24 +166,27 @@ function enumerateFreePolyominoes(n) {
   }
   return current;
 }
-// Generated sizes are only 1, 2, 6, and 7 - sizes 3/4/5 stay the hand-
-// curated P_*/Q_*/R_* sets above (same physical shapes either way, just
-// named/ordered differently, and those names are already depended on
-// elsewhere - Ascension's unlock system, GodBot's HAND_COMPOSITION).
-const MONOMINO_NAMES = [];
-const DOMINO_NAMES = [];
+// Generated sizes are only 6 and 7 - sizes 3/4/5 stay the hand-curated
+// P_*/Q_*/R_* sets above (same physical shapes either way, just named/
+// ordered differently, and those names are already depended on elsewhere -
+// Ascension's unlock system, GodBot's HAND_COMPOSITION). Monomino/domino
+// are deliberately NOT generated at all - Mutation only ever draws
+// tromino-through-heptomino (see MUTATION_SIZE_POOLS below); 1x1/1x2
+// pieces made the board trivially easy to pack tight, so they were pulled
+// from the pool entirely rather than just downweighted.
 const HEXOMINO_NAMES = [];
 const HEPTOMINO_NAMES = [];
-[[1, MONOMINO_NAMES, 'M1'], [2, DOMINO_NAMES, 'M2'], [6, HEXOMINO_NAMES, 'M6'], [7, HEPTOMINO_NAMES, 'M7']].forEach(([size, names, prefix]) => {
+[[6, HEXOMINO_NAMES, 'M6'], [7, HEPTOMINO_NAMES, 'M7']].forEach(([size, names, prefix]) => {
   enumerateFreePolyominoes(size).forEach((shape, i) => {
     const name = `${prefix}_${String(i).padStart(3, '0')}`;
     BASE_SHAPES[name] = shape;
     names.push(name);
   });
 });
-// size -> pool of shape names, for Mutation's uniform-per-size draw.
+// size -> pool of shape names, for Mutation's weighted-by-size draw.
+// Tromino (3) through heptomino (7) only - see the comment above.
 const MUTATION_SIZE_POOLS = {
-  1: MONOMINO_NAMES, 2: DOMINO_NAMES, 3: TROMINO_NAMES, 4: TETROMINO_NAMES,
+  3: TROMINO_NAMES, 4: TETROMINO_NAMES,
   5: PENTOMINO_NAMES, 6: HEXOMINO_NAMES, 7: HEPTOMINO_NAMES,
 };
 
@@ -437,22 +440,25 @@ function drawWeightedPiece() {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// Mutation only: size is picked with weight proportional to the size
-// itself (weight 1 for monomino, 2 for domino, ... 7 for heptomino, out of
-// a 28 total) - larger pieces are proportionally more common, a monomino
-// is the single rarest draw at 1/28 (~3.6%) while a heptomino is the most
-// common at 7/28 (25%), about 7x as likely. A random shape is then picked
-// within that size - not a uniform draw across all individual shapes,
-// which would have swamped the board in heptominoes even harder (108 of
-// them vs. a single monomino).
-const MUTATION_SIZE_WEIGHTS = [1, 2, 3, 4, 5, 6, 7];
-const MUTATION_SIZE_WEIGHT_TOTAL = MUTATION_SIZE_WEIGHTS.reduce((a, b) => a + b, 0);
+// Mutation only: tromino (3) through heptomino (7) - monomino/domino are
+// excluded from the pool entirely (see MUTATION_SIZE_POOLS's own comment),
+// not just downweighted, since a 1x1/1x2 piece could always plug almost
+// any gap and made packing the board trivially easy. Size is picked with
+// weight proportional to the size itself (weight 3 for tromino, ... 7 for
+// heptomino, out of a 25 total) - larger pieces are still proportionally
+// more common, a tromino is the rarest draw at 3/25 (12%) while a
+// heptomino is the most common at 7/25 (28%). A random shape is then
+// picked within that size - not a uniform draw across all individual
+// shapes, which would have swamped the board in heptominoes even harder
+// (108 of them vs. only 2 trominoes).
+const MUTATION_SIZE_WEIGHTS = [[3, 3], [4, 4], [5, 5], [6, 6], [7, 7]]; // [size, weight]
+const MUTATION_SIZE_WEIGHT_TOTAL = MUTATION_SIZE_WEIGHTS.reduce((sum, [, w]) => sum + w, 0);
 function drawMutationPiece() {
   let roll = Math.random() * MUTATION_SIZE_WEIGHT_TOTAL;
-  let size = MUTATION_SIZE_WEIGHTS.length;
-  for (let i = 0; i < MUTATION_SIZE_WEIGHTS.length; i++) {
-    if (roll < MUTATION_SIZE_WEIGHTS[i]) { size = i + 1; break; }
-    roll -= MUTATION_SIZE_WEIGHTS[i];
+  let size = MUTATION_SIZE_WEIGHTS[MUTATION_SIZE_WEIGHTS.length - 1][0];
+  for (const [candidateSize, weight] of MUTATION_SIZE_WEIGHTS) {
+    if (roll < weight) { size = candidateSize; break; }
+    roll -= weight;
   }
   const pool = MUTATION_SIZE_POOLS[size];
   return pool[Math.floor(Math.random() * pool.length)];
@@ -1821,7 +1827,7 @@ function render() {
                 : state.mode === 'shrink'
                   ? "One random piece at a time, no preview, nothing ever disappears - but every 4th piece you place, the border shrinks in by one ring on every side. Only a placed piece is ever safe. Pack the board as tight as you can before the walls close in - squares never filled count against you."
                   : state.mode === 'mutation'
-                    ? "One random piece at a time, no preview, nothing ever disappears - but pieces range anywhere from a single square up to a full 7-block heptomino, with bigger pieces showing up far more often than small ones. Pack the 12x12 board as tight as you can; a perfect 0 is possible, but only if the right piece shows up at the right time."
+                    ? "One random piece at a time, no preview, nothing ever disappears - but pieces range from a 3-block tromino up to a full 7-block heptomino, with bigger pieces showing up far more often than small ones. Pack the 12x12 board as tight as you can; a perfect 0 is possible, but only if the right piece shows up at the right time."
                     : "You'll get one random piece at a time - place it anywhere it fits.";
   } else if (state.mode === 'godbot' && state.finished) {
     const diff = state.godbotScore1 - state.godbotScore2;

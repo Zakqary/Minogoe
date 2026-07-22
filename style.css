@@ -2449,12 +2449,16 @@ h2, h3 {
   color: #f0d060;
 }
 
-.shop-theme .shop-buy-btn {
+/* .shop-item-card qualifier here too - matches the specificity bump on the
+   base .shop-buy-btn rule below (2 classes), so this shop-gold variant
+   reliably wins over the generic default regardless of source order,
+   instead of the two competing on equal specificity. */
+.shop-theme .shop-item-card .shop-buy-btn {
   background: #e6c14a;
   border-color: #e6c14a;
 }
 
-.shop-theme .shop-buy-btn:hover:not(:disabled) {
+.shop-theme .shop-item-card .shop-buy-btn:hover:not(:disabled) {
   background: #f0d060;
   border-color: #f0d060;
 }
@@ -2734,15 +2738,19 @@ h2, h3 {
 
 /* Buy is the primary/enticing action - filled accent, same treatment the
    queue "Find Match" buttons use. Equip (the plain rule above) stays a
-   neutral outlined secondary action. */
-.shop-buy-btn {
+   neutral outlined secondary action. Qualified with .shop-item-card (not
+   just .shop-buy-btn alone) so its dark text wins over the generic
+   ".shop-item-card button"/":hover" rules above, which are otherwise
+   MORE specific (class+element beats a lone class) and were winning,
+   leaving near-white text on the bright gold fill. */
+.shop-item-card .shop-buy-btn {
   background: var(--accent);
   border-color: var(--accent);
   color: #211505;
   font-weight: 700;
 }
 
-.shop-buy-btn:hover:not(:disabled) {
+.shop-item-card .shop-buy-btn:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   color: #211505;

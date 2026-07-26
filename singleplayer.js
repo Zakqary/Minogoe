@@ -1750,10 +1750,13 @@ function removePuzzlePiece(pieceId) {
 }
 
 // Returns true (and performs the pickup) if (row, col) lands on an already-
-// placed piece while running Puzzle mode - the shared click/touchstart
-// handlers check this FIRST, before their normal "is something selected"
-// placement logic, so clicking a placed piece always tries to pick it up
-// first regardless of what's currently selected.
+// placed piece while running Puzzle mode - only ever called by the shared
+// click/touchstart handlers when NOTHING is currently selected. While
+// holding a piece, a click always means "try to place it here" (or a
+// harmless no-op if that spot isn't valid), even if the hover happens to
+// overlap an already-placed piece - otherwise a placement attempt that
+// simply doesn't fit would surprise-pick-up whatever was underneath it
+// instead of just failing quietly like every other mode's invalid click.
 function tryPuzzlePickup(row, col) {
   if (state.mode !== 'puzzle' || !state.running) return false;
   if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return false;
@@ -2329,10 +2332,11 @@ canvas.addEventListener('mouseleave', () => {
 
 canvas.addEventListener('click', () => {
   if (!state.running) return;
-  // Puzzle only - clicking directly on an already-placed piece always
-  // tries to pick it up first, regardless of what's currently selected
-  // (see tryPuzzlePickup()'s own comment). A no-op for every other mode.
-  if (state.mode === 'puzzle' && state.mouseRC && tryPuzzlePickup(state.mouseRC.row, state.mouseRC.col)) return;
+  // Puzzle only - clicking an already-placed piece picks it up, but ONLY
+  // when nothing is currently selected. Holding a piece always means "try
+  // to place it here" instead - see tryPuzzlePickup()'s own comment for
+  // why. A no-op for every other mode either way.
+  if (state.mode === 'puzzle' && !state.selected && state.mouseRC && tryPuzzlePickup(state.mouseRC.row, state.mouseRC.col)) return;
   if (!state.selected || !state.hover) return;
   if (state.hover.valid) {
     commitPlacement(state.hover.r0, state.hover.c0);
@@ -2360,10 +2364,10 @@ canvas.addEventListener('touchstart', (e) => {
   state.lastTapCell = cell;
 
   // Puzzle only - a second tap on an already-placed piece picks it back up
-  // into the hand, regardless of whether anything is currently selected -
-  // the one mode where placements aren't final (see tryPuzzlePickup()'s
-  // own comment).
-  if (state.mode === 'puzzle' && wasSameCell && tryPuzzlePickup(cell.row, cell.col)) {
+  // into the hand, but ONLY when nothing is currently selected - holding a
+  // piece always means "try to place it here" instead (see
+  // tryPuzzlePickup()'s own comment).
+  if (state.mode === 'puzzle' && !state.selected && wasSameCell && tryPuzzlePickup(cell.row, cell.col)) {
     state.lastTapCell = null;
     return;
   }

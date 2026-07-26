@@ -1687,8 +1687,19 @@ function startPuzzleRound(round) {
 // Called by clicking a hand piece (see renderPuzzleHand()) - selects it the
 // same way selectGodbotHandPiece() does, just with no turn/bot gating,
 // since every piece is available to the player at once from round start.
+// Clicking the ALREADY-selected piece again instead lets go of it (clears
+// state.selected with no placement) - without this, a piece that doesn't
+// fit anywhere among the cells you have left would be stuck attached to
+// your cursor forever, since placing it is otherwise the only way to stop
+// holding it.
 function selectPuzzleHandPiece(shapeName) {
   if (state.mode !== 'puzzle' || !state.running) return;
+  if (state.selected && state.selected.shapeName === shapeName) {
+    state.selected = null;
+    state.hover = null;
+    render();
+    return;
+  }
   state.selected = { shapeName, orientationIndex: 0 };
   recomputeHover();
   render();
@@ -2152,7 +2163,7 @@ function render() {
   } else if (state.mode === 'puzzle') {
     banner.textContent = `Board ${state.puzzleRound} of 3`;
     pieceInfo.textContent = state.selected
-      ? `Placing ${state.selected.shapeName}. Click the board to place, or press Q/E / scroll to rotate. Click a placed piece to send it back to your hand.`
+      ? `Placing ${state.selected.shapeName}. Click the board to place, or press Q/E / scroll to rotate. Click it again in your hand to let go of it, or click a placed piece to send it back to your hand.`
       : 'Pick a piece from your hand below, or click a placed piece to take it back.';
   } else if (state.mode === 'blindeogonim' && state.finished) {
     banner.textContent = state.illegalMove

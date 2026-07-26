@@ -67,6 +67,7 @@
           <button type="button" id="spTabCurse" class="sp-mode-tab">Curse</button>
           <button type="button" id="spTabShrink" class="sp-mode-tab">Shrink</button>
           <button type="button" id="spTabMutation" class="sp-mode-tab">Mutation</button>
+          <button type="button" id="spTabPuzzle" class="sp-mode-tab">Puzzle</button>
         </div>
         <h3 id="spModeTitle">Speedrun</h3>
         <div class="sp-mode-credit" id="spModeCredit" style="display:none;">Idea by SgtBird08</div>
@@ -104,6 +105,13 @@
           <div class="sp-power-line" data-curse="invisible">Invisible while placing</div>
           <div class="sp-power-line" data-curse="blightspot">Blight spot after placing</div>
         </div>
+
+        <!-- Puzzle only - same hand-of-many picker as GodBot's (reuses its
+             CSS classes), but every piece stays clickable the whole time -
+             there's no turn/bot gating, since the player holds the whole
+             hand from round start. See renderPuzzleHand()/
+             selectPuzzleHandPiece() in singleplayer.js. -->
+        <div id="spPuzzleHand" class="sp-godbot-hand" style="display:none;"></div>
 
         <div class="online-status" id="spSaveStatus"></div>
       </div>
@@ -163,6 +171,12 @@
           <li><em>12&times;12</em> board, one random piece at a time, no preview, nothing ever disappears.</li>
           <li>Pieces range from a 3-block tromino up to a full 7-block heptomino (no monominoes or dominoes) - bigger sizes are drawn far more often than small ones (weighted by size, so a heptomino is more than 2x as likely as a tromino), then a random shape of that size is drawn.</li>
           <li>Run ends when your piece has no legal spot, or the board fills completely. Score is squares never filled by a piece (out of 144) - lower is better. Unlike Shrink, a perfect 0 is possible.</li>
+        </ul>
+        <ul id="spRulesPuzzle" style="display:none;">
+          <li><em>12&times;12</em> board, a real hand (7 pentominoes, 2 tetrominoes, 1 tromino) dealt all at once, same as GodBot's.</li>
+          <li>Instead of a plain empty board, a custom shape is generated that exactly fits your hand - every non-void square can be filled, with nothing left over. The shape can be one connected blob or several separate pockets.</li>
+          <li>Placements aren't final - click a piece you've already placed to send it back to your hand and try a different spot or orientation.</li>
+          <li>Clear 3 boards in a row (a fresh hand and shape each time) as fast as you can - your total time across all 3 is what gets saved to the leaderboard. Lower is better.</li>
         </ul>
       </div>
 

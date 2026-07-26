@@ -245,11 +245,11 @@ function timeAgo(isoString) {
   return `${years}y ago`;
 }
 
-const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse', shrink: 'Shrink', mutation: 'Mutation' };
-const RECORD_MODE_COLORS = { speedrun: '#5b7fd9', eogonim: 'var(--accent)', blindeogonim: '#8b6fd9', ascension: '#6fbf73', blight: '#c05c5c', godbot: '#d95b8f', curse: '#5bc2d9', shrink: '#a8d84a', mutation: '#d9895b' };
+const RECORD_MODE_LABELS = { speedrun: 'Speedrun', eogonim: 'Eogonim', blindeogonim: 'Blind Eogonim', ascension: 'Ascension', blight: 'Blight', godbot: 'GodBot', curse: 'Curse', shrink: 'Shrink', mutation: 'Mutation', puzzle: 'Puzzle' };
+const RECORD_MODE_COLORS = { speedrun: '#5b7fd9', eogonim: 'var(--accent)', blindeogonim: '#8b6fd9', ascension: '#6fbf73', blight: '#c05c5c', godbot: '#d95b8f', curse: '#5bc2d9', shrink: '#a8d84a', mutation: '#d9895b', puzzle: '#6fa8d9' };
 
 function formatRecordValue(mode, value) {
-  if (mode === 'speedrun') return formatTimeMs(value);
+  if (mode === 'speedrun' || mode === 'puzzle') return formatTimeMs(value);
   if (mode === 'ascension') return `${value} round${value === 1 ? '' : 's'}`;
   if (mode === 'godbot') return `${value > 0 ? '+' : ''}${value}`;
   if (mode === 'curse') return `${value} open`;
@@ -370,7 +370,7 @@ async function renderStatsPage() {
     eloChart = '<p class="stats-chart-empty">Not enough ranked players yet.</p>';
   }
 
-  const recordsByMode = { speedrun: [], eogonim: [], blindeogonim: [], ascension: [], blight: [], godbot: [], curse: [], shrink: [], mutation: [] };
+  const recordsByMode = { speedrun: [], eogonim: [], blindeogonim: [], ascension: [], blight: [], godbot: [], curse: [], shrink: [], mutation: [], puzzle: [] };
   for (const row of recordProgression.data || []) {
     if (recordsByMode[row.mode]) recordsByMode[row.mode].push(row);
   }

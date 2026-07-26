@@ -5054,29 +5054,20 @@ $$;
 
 -- ---------- Phase 59: singleplayer "Mutation" mode ----------
 
--- Same explicit drop-then-add pattern as every earlier mode phase (see
--- Phase 42's comment for why nothing earlier should ever be edited in place
--- to re-add a narrower version instead of just adding a new phase).
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension', 'blight', 'godbot', 'curse', 'shrink', 'mutation'));
+-- Phase 60 below widens this same constraint again to add 'puzzle' -
+-- neutralized here up front (rather than waiting to discover the failure
+-- on a future re-run the way Phase 49/58 did) so this phase's real
+-- add-constraint statements are never left active alongside a later,
+-- wider version. See Phase 49's own comment above for the full story of
+-- how that landmine pattern actually broke a re-run in practice; the
+-- constraint is correctly left owned by whichever phase touches it LAST
+-- (Phase 60 today) - do not add a narrower version of either constraint
+-- here again.
 
 -- Reuses the existing "score" column exactly like every mode after Speedrun
 -- - mutation's is squares never filled (out of board_size^2, a 12x12 board
 -- here so up to 144), lower is better, same shape as curse/shrink's
 -- leftover-open-squares count.
-alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
-alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
-  check (
-    (mode = 'speedrun' and time_ms is not null and score is null)
-    or (mode = 'eogonim' and score is not null and time_ms is null)
-    or (mode = 'blindeogonim' and score is not null and time_ms is null)
-    or (mode = 'ascension' and score is not null and time_ms is null)
-    or (mode = 'blight' and score is not null and time_ms is null)
-    or (mode = 'godbot' and score is not null and time_ms is null)
-    or (mode = 'curse' and score is not null and time_ms is null)
-    or (mode = 'shrink' and score is not null and time_ms is null)
-    or (mode = 'mutation' and score is not null and time_ms is null)
-  );
 
 -- Same discipline as submit_shrink_score() - lower is better, just a wider
 -- 0-144 range (12x12 board instead of 10x10).
@@ -5110,4 +5101,110 @@ begin
     return existing_score;
   end if;
 end;
+$$;
+
+-- ---------- Phase 60: singleplayer "Puzzle" mode ----------
+
+-- Same explicit drop-then-add pattern as every earlier mode phase (see
+-- Phase 42's comment for why nothing earlier should ever be edited in place
+-- to re-add a narrower version instead of just adding a new phase) - and,
+-- per Phase 59's own comment just above, THIS phase is the one that
+-- actually owns both constraints now; neither should be touched again by
+-- any earlier phase in this file.
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_check check (mode in ('speedrun', 'eogonim', 'blindeogonim', 'ascension', 'blight', 'godbot', 'curse', 'shrink', 'mutation', 'puzzle'));
+
+-- Puzzle reuses the existing "time_ms" column instead of "score" - it's
+-- the second (after Speedrun) time-based mode, a total elapsed time across
+-- 3 boards, lower is better, same shape/direction as Speedrun's own.
+alter table public.singleplayer_runs drop constraint if exists singleplayer_runs_mode_fields_check;
+alter table public.singleplayer_runs add constraint singleplayer_runs_mode_fields_check
+  check (
+    (mode = 'speedrun' and time_ms is not null and score is null)
+    or (mode = 'eogonim' and score is not null and time_ms is null)
+    or (mode = 'blindeogonim' and score is not null and time_ms is null)
+    or (mode = 'ascension' and score is not null and time_ms is null)
+    or (mode = 'blight' and score is not null and time_ms is null)
+    or (mode = 'godbot' and score is not null and time_ms is null)
+    or (mode = 'curse' and score is not null and time_ms is null)
+    or (mode = 'shrink' and score is not null and time_ms is null)
+    or (mode = 'mutation' and score is not null and time_ms is null)
+    or (mode = 'puzzle' and time_ms is not null and score is null)
+  );
+
+-- Same discipline as submit_singleplayer_time() - lower is better, same
+-- shape, just no upper bound assumed (a full 3-board time has no natural
+-- cap the way a single board's captured-square count does).
+create or replace function public.submit_puzzle_time(p_time_ms integer)
+returns integer
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  existing_time integer;
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_time_ms is null or p_time_ms <= 0 then
+    raise exception 'Invalid time';
+  end if;
+
+  select time_ms into existing_time from public.singleplayer_runs where user_id = uid and mode = 'puzzle' for update;
+
+  if existing_time is null then
+    insert into public.singleplayer_runs (user_id, mode, time_ms) values (uid, 'puzzle', p_time_ms);
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'puzzle', p_time_ms);
+    return p_time_ms;
+  elsif p_time_ms < existing_time then
+    update public.singleplayer_runs set time_ms = p_time_ms, completed_at = now() where user_id = uid and mode = 'puzzle';
+    insert into public.personal_best_events (user_id, mode, value) values (uid, 'puzzle', p_time_ms);
+    return p_time_ms;
+  else
+    return existing_time;
+  end if;
+end;
+$$;
+
+-- Redefines get_record_progression() (Phase 45, last redefined Phase 49)
+-- one more time - puzzle joins speedrun as a time_ms-sourced mode (raw_value
+-- reads from time_ms, not score); it falls into the existing lower-is-
+-- better default direction alongside curse/shrink/mutation/eogonim/
+-- blindeogonim, no change needed there.
+create or replace function public.get_record_progression()
+returns table (
+  mode text,
+  achieved_at timestamptz,
+  value numeric
+)
+language sql
+stable
+as $$
+  with runs as (
+    select
+      mode,
+      completed_at,
+      case when mode in ('speedrun', 'puzzle') then time_ms::numeric else score::numeric end as raw_value
+    from public.singleplayer_runs
+  ),
+  running as (
+    select
+      mode,
+      completed_at,
+      case
+        when mode in ('ascension', 'blight', 'godbot') then max(raw_value) over (partition by mode order by completed_at rows between unbounded preceding and current row)
+        else min(raw_value) over (partition by mode order by completed_at rows between unbounded preceding and current row)
+      end as running_best
+    from runs
+  ),
+  with_prev as (
+    select mode, completed_at, running_best,
+      lag(running_best) over (partition by mode order by completed_at) as prev_best
+    from running
+  )
+  select mode, completed_at as achieved_at, running_best as value
+  from with_prev
+  where prev_best is distinct from running_best
+  order by mode, achieved_at;
 $$;

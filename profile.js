@@ -238,6 +238,13 @@ async function renderProfilePage() {
           .eq('mode', 'mutation')
           .lt('score', run.score);
         boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Mutation &middot; ${run.score} open</div></div>`);
+      } else if (run.mode === 'puzzle') {
+        const { count } = await supabaseClient
+          .from('singleplayer_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('mode', 'puzzle')
+          .lt('time_ms', run.time_ms);
+        boxes.push(`<div class="stat"><div class="stat-value">#${(count ?? 0) + 1}</div><div class="stat-label">Puzzle &middot; ${formatSpTime(run.time_ms)}</div></div>`);
       }
     }
     if (boxes.length > 0) {

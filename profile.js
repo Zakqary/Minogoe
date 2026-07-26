@@ -281,7 +281,7 @@ async function renderProfilePage() {
       })
       .join('');
     duelStatsHtml = `
-      <h3>Ranked Duel Stats</h3>
+      <h3>Minigame Duel Stats</h3>
       <div class="profile-stats">
         <div class="stat"><div class="stat-value">${profile.duel_elo_rating}</div><div class="stat-label">Duel ELO</div></div>
         <div class="stat"><div class="stat-value">${profile.highest_duel_elo}</div><div class="stat-label">Peak Duel ELO</div></div>

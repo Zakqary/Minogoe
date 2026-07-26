@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Minogoe - Ranked Duels</title>
+<link rel="icon" href="favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-stats">
+      <span id="onlineCount" class="online-count">&nbsp;</span>
+      <span id="gamesPlayedCount" class="online-count">&nbsp;</span>
+    </div>
+    <a href="index.html"><img src="Minogoe.png" alt="Minogoe" class="logo"></a>
+    <div id="authWidget" class="auth-widget"></div>
+  </header>
+  <div id="registerBanner" class="register-banner" style="display:none;">
+    <span>Register for an account to play with others, save your replays, earn coins, and collect pets!</span>
+    <button type="button" id="registerBannerBtn" class="register-banner-btn">Sign Up</button>
+  </div>
+  <nav class="site-nav">
+    <div class="site-nav-row">
+      <a href="index.html">Play</a>
+      <a href="shop.html">Shop</a>
+      <a href="garden.html">Garden</a>
+      <a href="singleplayer.html">Minigames</a>
+      <a href="duel.html">Duels</a>
+    </div>
+    <div class="site-nav-row">
+      <a href="profile.html">Profile</a>
+      <a href="leaderboard.html">Leaderboard</a>
+      <a href="recent.html">Recent Games</a>
+      <a href="stats.html">Stats</a>
+      <a href="admin.html" id="adminNavLink" style="display:none;">Admin</a>
+    </div>
+  </nav>
+  <div class="app singleplayer-app">
+    <div class="board-panel">
+      <div class="duel-match-header" id="duelMatchHeader" style="display:none;">
+        <div class="duel-score">
+          <span id="duelMyScore">0</span>
+          <span class="duel-score-sep">-</span>
+          <span id="duelOppScore">0</span>
+        </div>
+        <div class="duel-round-info" id="duelRoundInfo">Round 1 of 3</div>
+      </div>
+      <div class="board-wrapper">
+        <canvas id="board"></canvas>
+        <div class="mobile-rotate-btns">
+          <button id="mobileRotateCcwBtn" class="mobile-rotate-btn" aria-label="Rotate piece counter-clockwise" type="button">&#8634;</button>
+          <button id="mobileRotateBtn" class="mobile-rotate-btn" aria-label="Rotate piece clockwise" type="button">&#8635;</button>
+        </div>
+      </div>
+      <div class="turn-banner-row">
+        <div class="turn-banner" id="spBanner">Queue up to find an opponent</div>
+        <div class="turn-timer" id="spTimer">0:00.00</div>
+      </div>
+      <div class="selection-info" id="spPieceInfo">Ranked minigame duels: best of 3 (plus sudden death if needed), same pieces, same everything - may the better player win.</div>
+      <div class="rotate-hint">Press <strong>Q</strong>/<strong>E</strong> or scroll to rotate, <strong>F</strong> to flip, or use the rotate buttons. Tap the board once to preview, tap again to place.</div>
+    </div>
+
+    <div class="side-panel">
+      <div class="online-panel">
+        <h3>Ranked Minigame Duel</h3>
+        <div id="duelQueuePanel">
+          <p class="duel-blurb">Queue up for a best-of-3 series across randomly-picked minigames. Both players get identical pieces/curses/GodBot decisions every round - no RNG excuses.</p>
+          <button type="button" id="duelQueueBtn">Find Match</button>
+          <div class="online-status" id="duelQueueStatus"></div>
+        </div>
+        <div id="duelMatchPanel" style="display:none;">
+          <div class="duel-vs-row">
+            <div class="duel-vs-side">
+              <div id="duelMyName">You</div>
+              <div class="duel-elo" id="duelMyElo">-</div>
+            </div>
+            <div class="duel-vs-sep">vs</div>
+            <div class="duel-vs-side">
+              <div id="duelOppName">Opponent</div>
+              <div class="duel-elo" id="duelOppElo">-</div>
+            </div>
+          </div>
+          <div class="duel-history" id="duelHistory"></div>
+        </div>
+
+        <!-- Every mode tab/rules block/hand panel below is reused verbatim
+             from singleplayer.js/singleplayer.html - duel.js drives setMode()/
+             startRun() programmatically instead of via clicks, but every DOM
+             id singleplayer.js's render()/updateModeUI()/init code touches
+             still needs to exist, since this page loads that exact same
+             script unmodified. duel.js hides the tab bar and Start button
+             (mode/round start are never player-driven here). -->
+        <div class="sp-mode-tabs">
+          <button type="button" id="spTabSpeedrun" class="sp-mode-tab active">Speedrun</button>
+          <button type="button" id="spTabEogonim" class="sp-mode-tab">Eogonim</button>
+          <button type="button" id="spTabBlindEogonim" class="sp-mode-tab">Blind Eogonim</button>
+          <button type="button" id="spTabAscension" class="sp-mode-tab">Ascension</button>
+          <button type="button" id="spTabBlight" class="sp-mode-tab">Blight</button>
+          <button type="button" id="spTabGodbot" class="sp-mode-tab">GodBot</button>
+          <button type="button" id="spTabCurse" class="sp-mode-tab">Curse</button>
+          <button type="button" id="spTabShrink" class="sp-mode-tab">Shrink</button>
+          <button type="button" id="spTabMutation" class="sp-mode-tab">Mutation</button>
+          <button type="button" id="spTabPuzzle" class="sp-mode-tab">Puzzle</button>
+        </div>
+        <h3 id="spModeTitle">Speedrun</h3>
+        <div class="sp-mode-credit" id="spModeCredit" style="display:none;">Idea by SgtBird08</div>
+        <button id="spStartBtn">Start</button>
+        <div class="sp-current-piece">
+          <canvas id="spCurrentPieceIcon" style="display:none;"></canvas>
+          <span id="spCurrentPieceLabel">-</span>
+        </div>
+        <div class="sp-upcoming-label" id="spUpcomingLabel">Up next:</div>
+        <div class="sp-upcoming-pieces" id="spUpcomingPieces"></div>
+        <div class="sp-upcoming-label" id="spUnlockedLabel" style="display:none;">Your shapes:</div>
+        <div class="sp-upcoming-pieces" id="spUnlockedShapes" style="display:none;"></div>
+        <div id="spPieceChoices" class="sp-piece-choices" style="display:none;"></div>
+
+        <div id="spGodbotHand" class="sp-godbot-hand" style="display:none;"></div>
+        <div id="spGodbotPowerups" class="sp-power-panel" style="display:none;">
+          <div class="sp-power-label">Bot's bonus action</div>
+          <div class="sp-power-line" data-power="again">Goes again</div>
+          <div class="sp-power-line" data-power="remove">Removes one of your pieces</div>
+          <div class="sp-power-line" data-power="blight">Blights one of your territories</div>
+          <div class="sp-power-line" data-power="reroll">Rerolls your hand</div>
+        </div>
+
+        <div id="spCursePanel" class="sp-power-panel" style="display:none;">
+          <div class="sp-power-label">This piece's curse</div>
+          <div class="sp-power-line" data-curse="norotate">Can't rotate or flip</div>
+          <div class="sp-power-line" data-curse="noborder">Can't touch the border</div>
+          <div class="sp-power-line" data-curse="invisible">Invisible while placing</div>
+          <div class="sp-power-line" data-curse="blightspot">Blight spot after placing</div>
+        </div>
+
+        <div id="spPuzzleHand" class="sp-godbot-hand" style="display:none;"></div>
+
+        <div class="online-status" id="spSaveStatus"></div>
+
+        <!-- singleplayer.js's updateModeUI() unconditionally toggles
+             .style.display on every one of these 10 ids regardless of what
+             page loaded it - never shown here (this whole block stays
+             display:none), just present so that call never throws on a
+             null element. -->
+        <div style="display:none;">
+          <ul id="spRulesSpeedrun"></ul>
+          <ul id="spRulesEogonim"></ul>
+          <ul id="spRulesBlindEogonim"></ul>
+          <ul id="spRulesAscension"></ul>
+          <ul id="spRulesBlight"></ul>
+          <ul id="spRulesGodbot"></ul>
+          <ul id="spRulesCurse"></ul>
+          <ul id="spRulesShrink"></ul>
+          <ul id="spRulesMutation"></ul>
+          <ul id="spRulesPuzzle"></ul>
+          <span id="spCasualQueueCount"></span>
+          <span id="spRankedQueueCount"></span>
+        </div>
+      </div>
+
+      <div class="rules-panel">
+        <h3>How Duels Work</h3>
+        <ul>
+          <li>Queue up and get matched against an opponent close to your Duel ELO.</li>
+          <li>Play a best-of-3 series across randomly-picked minigames (Speedrun, Eogonim, Blight, GodBot, Curse, Shrink, Mutation, Puzzle).</li>
+          <li>Every round, both players get the exact same pieces/curses/GodBot decisions - only skill decides the winner.</li>
+          <li>A tied round doesn't count either way. If the series is still tied after 3 rounds, one sudden-death round decides it.</li>
+          <li>Disconnecting forfeits only the current round if you don't reconnect in time - the match continues.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="right-panel">
+      <div class="log-panel sp-leaderboard-panel">
+        <h3 id="spLeaderboardTitle">Top Times</h3>
+        <div id="spLeaderboard">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <a href="https://discord.gg/y26Gm4wddj" target="_blank" rel="noopener noreferrer">Join the Minogoe Discord!</a>
+    <span class="footer-credit">Made by Zakqary Roy</span>
+  </footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="catalog.js"></script>
+<script src="auth-ui.js"></script>
+<script src="presence.js"></script><script src="checkin.js"></script>
+<script src="mino-notify.js"></script>
+<script src="net.js"></script>
+<script src="singleplayer.js"></script>
+<script src="duel.js"></script>
+</body>
+</html>

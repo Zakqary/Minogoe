@@ -27,6 +27,13 @@ let players = null;
 let rankedOnly = false;
 let sortKey = 'elo_rating';
 let sortDescending = true;
+// 'overall' | 'duels' - the Duels tab is a fully separate ladder
+// (duel_elo_rating), not just another FIELD_MAP source, so it gets its own
+// query/sort state/render function rather than reusing fieldFor()'s
+// all/ranked switch.
+let viewMode = 'overall';
+let duelSortKey = 'duel_elo_rating';
+let duelSortDescending = true;
 
 function fieldFor(key) {
   return FIELD_MAP[rankedOnly ? 'ranked' : 'all'][key] || key; // username/elo_rating pass through unchanged
@@ -35,7 +42,7 @@ function fieldFor(key) {
 async function loadLeaderboard() {
   const { data, error } = await supabaseClient
     .from('profiles')
-    .select('id, username, elo_rating, pvp_games_played, pvp_wins, pvp_losses, ranked_games_played, ranked_wins, ranked_losses, avatar_id, title_id');
+    .select('id, username, elo_rating, pvp_games_played, pvp_wins, pvp_losses, ranked_games_played, ranked_wins, ranked_losses, duel_elo_rating, duel_games_played, duel_wins, duel_losses, avatar_id, title_id');
 
   if (error) {
     document.getElementById('leaderboardContent').innerHTML = `<p>Could not load leaderboard: ${escapeHtml(error.message)}</p>`;
@@ -43,7 +50,104 @@ async function loadLeaderboard() {
   }
   players = data || [];
   await Catalog.ready();
-  renderLeaderboard();
+  renderActiveTab();
+}
+
+function renderActiveTab() {
+  document.getElementById('rankedOnlyLabel').style.display = viewMode === 'overall' ? '' : 'none';
+  if (viewMode === 'duels') renderDuelLeaderboard();
+  else renderLeaderboard();
+}
+
+document.getElementById('lbTabOverall').addEventListener('click', () => {
+  if (viewMode === 'overall') return;
+  viewMode = 'overall';
+  document.getElementById('lbTabOverall').classList.add('active');
+  document.getElementById('lbTabDuels').classList.remove('active');
+  renderActiveTab();
+});
+document.getElementById('lbTabDuels').addEventListener('click', () => {
+  if (viewMode === 'duels') return;
+  viewMode = 'duels';
+  document.getElementById('lbTabDuels').classList.add('active');
+  document.getElementById('lbTabOverall').classList.remove('active');
+  renderActiveTab();
+});
+
+const DUEL_COLUMNS = [
+  { key: 'username', label: 'Player' },
+  { key: 'duel_elo_rating', label: 'ELO' },
+  { key: 'duel_games_played', label: 'Games' },
+  { key: 'duel_wins', label: 'W' },
+  { key: 'duel_losses', label: 'L' },
+];
+
+// Same shape as renderLeaderboard() below (1224 competition ranking,
+// unranked players sink to the bottom and show "Unranked" on ELO sort) just
+// sourced from duel_* columns instead of elo_rating/pvp_*/ranked_*.
+function renderDuelLeaderboard() {
+  const container = document.getElementById('leaderboardContent');
+  if (!players) return;
+
+  const sorted = duelSortKey === 'duel_elo_rating'
+    ? [
+        ...players.filter((p) => p.duel_games_played > 0).sort((a, b) => {
+          if (a.duel_elo_rating !== b.duel_elo_rating) return duelSortDescending ? b.duel_elo_rating - a.duel_elo_rating : a.duel_elo_rating - b.duel_elo_rating;
+          return 0;
+        }),
+        ...players.filter((p) => p.duel_games_played === 0).sort((a, b) => a.username.toLowerCase().localeCompare(b.username.toLowerCase())),
+      ]
+    : [...players].sort((a, b) => {
+        let av = a[duelSortKey], bv = b[duelSortKey];
+        if (typeof av === 'string') { av = av.toLowerCase(); bv = bv.toLowerCase(); }
+        if (av < bv) return duelSortDescending ? 1 : -1;
+        if (av > bv) return duelSortDescending ? -1 : 1;
+        return 0;
+      });
+
+  const headerCells = DUEL_COLUMNS.map((col) => {
+    const active = col.key === duelSortKey;
+    const arrow = active ? (duelSortDescending ? ' ▼' : ' ▲') : '';
+    return `<th class="sortable-col${active ? ' sorted' : ''}" data-key="${col.key}">${escapeHtml(col.label)}${arrow}</th>`;
+  }).join('');
+
+  const rankLabels = [];
+  {
+    let lastValue = null, lastRank = 0;
+    sorted.forEach((p, i) => {
+      if (duelSortKey === 'duel_elo_rating' && p.duel_games_played === 0) { rankLabels.push('-'); return; }
+      const value = p[duelSortKey];
+      if (lastValue === null || value !== lastValue) { lastRank = i + 1; lastValue = value; }
+      rankLabels.push(lastRank);
+    });
+  }
+
+  const rows = sorted.map((p, i) => `
+    <tr class="${rankRowClass(rankLabels[i])}">
+      <td>${rankLabels[i]}</td>
+      <td class="leaderboard-player-cell">${avatarHtml(p.avatar_id, 20)} <a href="profile.html?user=${encodeURIComponent(p.id)}">${escapeHtml(p.username)}</a> ${titleBadgeHtml(p.title_id)}</td>
+      <td>${p.duel_games_played > 0 ? p.duel_elo_rating : 'Unranked'}</td>
+      <td>${p.duel_games_played}</td>
+      <td>${p.duel_wins}</td>
+      <td>${p.duel_losses}</td>
+    </tr>
+  `).join('');
+
+  container.innerHTML = `
+    <table class="games-table">
+      <thead><tr><th>#</th>${headerCells}</tr></thead>
+      <tbody>${rows || `<tr><td colspan="${DUEL_COLUMNS.length + 1}">No duels played yet.</td></tr>`}</tbody>
+    </table>
+  `;
+
+  for (const th of container.querySelectorAll('th.sortable-col')) {
+    th.addEventListener('click', () => {
+      const key = th.dataset.key;
+      if (duelSortKey === key) duelSortDescending = !duelSortDescending;
+      else { duelSortKey = key; duelSortDescending = true; }
+      renderDuelLeaderboard();
+    });
+  }
 }
 
 // Takes the actual rank NUMBER (1224 competition ranking - see
@@ -167,7 +271,7 @@ function renderLeaderboard() {
 
 document.getElementById('rankedOnlyCheckbox').addEventListener('change', (e) => {
   rankedOnly = e.target.checked;
-  renderLeaderboard();
+  renderActiveTab();
 });
 
 loadLeaderboard();

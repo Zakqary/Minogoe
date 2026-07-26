@@ -32,6 +32,7 @@ const socketRoom = new Map();  // socket -> roomCode
 const casualQueue = [];        // { socket, userId, eloRating }
 const rankedQueue = [];
 const ffaQueue = [];           // { socket, userId, tabId } - matched once 4 distinct users are waiting
+const duelQueue = [];          // { socket, userId, duelEloRating } - ranked minigame duels, its own separate ELO ladder
 
 // 4-player free-for-all rooms. Deliberately a separate map/protocol from
 // `rooms` above rather than a generalization of it - `rooms` (and
@@ -198,7 +199,7 @@ const httpServer = http.createServer((req, res) => {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
     });
-    res.end(JSON.stringify({ casual: casualQueue.length, ranked: rankedQueue.length, ffa: ffaQueue.length }));
+    res.end(JSON.stringify({ casual: casualQueue.length, ranked: rankedQueue.length, ffa: ffaQueue.length, duel: duelQueue.length }));
     return;
   }
   if (req.method === 'GET' && req.url === '/live-games') {
@@ -270,7 +271,7 @@ function pairSockets(entryA, entryB, mode) {
 }
 
 function removeFromQueues(socket) {
-  for (const q of [casualQueue, rankedQueue, ffaQueue]) {
+  for (const q of [casualQueue, rankedQueue, ffaQueue, duelQueue]) {
     for (let i = q.length - 1; i >= 0; i--) {
       if (q[i].socket === socket) q.splice(i, 1);
     }
@@ -285,7 +286,7 @@ function removeFromQueues(socket) {
 // depending on the client's own cancellation message to arrive in time.
 function removeUserFromQueues(userId) {
   if (!userId) return;
-  for (const q of [casualQueue, rankedQueue, ffaQueue]) {
+  for (const q of [casualQueue, rankedQueue, ffaQueue, duelQueue]) {
     for (let i = q.length - 1; i >= 0; i--) {
       if (q[i].userId === userId) q.splice(i, 1);
     }
@@ -395,6 +396,31 @@ function tryMatchRanked() {
     if (a.socket.readyState !== WebSocket.OPEN) { rankedQueue.push(b); continue; }
     if (b.socket.readyState !== WebSocket.OPEN) { rankedQueue.push(a); continue; }
     pairSockets(a, b, 'ranked');
+  }
+}
+
+// Ranked minigame duels - a direct copy of tryMatchRanked()'s closest-ELO
+// search, just against duelQueue's own separate duelEloRating field (a
+// fully independent ladder from regular ranked ELO). Room/relay handling
+// past this point is identical either way - pairSockets()/removeFromRoom()/
+// the disconnect-grace machinery are all already mode-agnostic.
+function tryMatchDuel() {
+  while (true) {
+    let bestI = -1, bestJ = -1, bestDiff = Infinity;
+    for (let i = 0; i < duelQueue.length; i++) {
+      for (let j = i + 1; j < duelQueue.length; j++) {
+        if (duelQueue[i].userId === duelQueue[j].userId) continue;
+        const diff = Math.abs(duelQueue[i].duelEloRating - duelQueue[j].duelEloRating);
+        if (diff < bestDiff) { bestDiff = diff; bestI = i; bestJ = j; }
+      }
+    }
+    if (bestI === -1) return;
+    const b = duelQueue.splice(bestJ, 1)[0];
+    const a = duelQueue.splice(bestI, 1)[0];
+    if (a.socket.readyState !== WebSocket.OPEN && b.socket.readyState !== WebSocket.OPEN) continue;
+    if (a.socket.readyState !== WebSocket.OPEN) { duelQueue.push(b); continue; }
+    if (b.socket.readyState !== WebSocket.OPEN) { duelQueue.push(a); continue; }
+    pairSockets(a, b, 'duel');
   }
 }
 
@@ -773,7 +799,7 @@ wss.on('connection', (socket) => {
       if (pendingSocketRequests.has(socket)) return; // already processing a request for this socket
       pendingSocketRequests.add(socket);
       try {
-        const queueType = msg.queueType === 'ranked' ? 'ranked' : 'casual';
+        const queueType = msg.queueType === 'ranked' ? 'ranked' : msg.queueType === 'duel' ? 'duel' : 'casual';
         const user = await verifySupabaseUser(msg.accessToken);
         if (!user || user.id !== msg.userId) {
           socket.send(JSON.stringify({ type: 'queue-error', message: 'Could not verify your account. Please sign in again.' }));
@@ -781,13 +807,18 @@ wss.on('connection', (socket) => {
         }
 
         removeFromQueues(socket);
-        const entry = { socket, userId: user.id, eloRating: Number(msg.eloRating) || 1200, tabId: msg.tabId || null };
-        if (queueType === 'ranked') {
-          rankedQueue.push(entry);
-          tryMatchRanked();
+        if (queueType === 'duel') {
+          duelQueue.push({ socket, userId: user.id, duelEloRating: Number(msg.duelEloRating) || 1200, tabId: msg.tabId || null });
+          tryMatchDuel();
         } else {
-          casualQueue.push(entry);
-          tryMatchCasual();
+          const entry = { socket, userId: user.id, eloRating: Number(msg.eloRating) || 1200, tabId: msg.tabId || null };
+          if (queueType === 'ranked') {
+            rankedQueue.push(entry);
+            tryMatchRanked();
+          } else {
+            casualQueue.push(entry);
+            tryMatchCasual();
+          }
         }
       } finally {
         pendingSocketRequests.delete(socket);

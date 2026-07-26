@@ -16,6 +16,11 @@ function modeLabel(mode) {
   return mode === 'private' ? 'direct connect' : mode;
 }
 
+const DUEL_MODE_LABELS = {
+  speedrun: 'Speedrun', eogonim: 'Eogonim', blight: 'Blight', godbot: 'GodBot',
+  curse: 'Curse', shrink: 'Shrink', mutation: 'Mutation', puzzle: 'Puzzle',
+};
+
 // Achievement badges - purely derived from stats already present on the
 // profile row, so there's no separate "earned" table or grant trigger to
 // maintain: every requirement here is just a threshold on a column this
@@ -255,6 +260,38 @@ async function renderProfilePage() {
     }
   }
 
+  // Duel Stats - a separate shape from the personal-best boxes above
+  // (win/loss/tie counts, not a score/time), one box per minigame the
+  // player has actually played at least one duel round in, plus an overall
+  // Duel ELO/record summary. duel_mode_stats has no row at all for a mode
+  // never played, so this naturally only ever shows modes with real data.
+  const { data: duelModeStats } = await supabaseClient
+    .from('duel_mode_stats')
+    .select('mode, wins, losses, ties')
+    .eq('user_id', userId);
+
+  let duelStatsHtml = '';
+  if (profile.duel_games_played > 0) {
+    const modeBoxes = (duelModeStats || [])
+      .filter((row) => row.wins + row.losses + row.ties > 0)
+      .map((row) => {
+        const total = row.wins + row.losses + row.ties;
+        const winrate = total > 0 ? Math.round((row.wins / total) * 100) : 0;
+        return `<div class="stat"><div class="stat-value">${row.wins}-${row.losses}-${row.ties}</div><div class="stat-label">${escapeHtml(DUEL_MODE_LABELS[row.mode] || row.mode)} &middot; ${winrate}% W</div></div>`;
+      })
+      .join('');
+    duelStatsHtml = `
+      <h3>Ranked Duel Stats</h3>
+      <div class="profile-stats">
+        <div class="stat"><div class="stat-value">${profile.duel_elo_rating}</div><div class="stat-label">Duel ELO</div></div>
+        <div class="stat"><div class="stat-value">${profile.highest_duel_elo}</div><div class="stat-label">Peak Duel ELO</div></div>
+        <div class="stat"><div class="stat-value">${profile.duel_wins}-${profile.duel_losses}</div><div class="stat-label">Duel Record</div></div>
+        <div class="stat"><div class="stat-value">${profile.highest_duel_win_streak}</div><div class="stat-label">Best Duel Streak</div></div>
+        ${modeBoxes}
+      </div>
+    `;
+  }
+
   const [{ data: games, error }, { data: myFfaRows, error: ffaError }] = await Promise.all([
     supabaseClient
       .from('games')
@@ -393,6 +430,7 @@ async function renderProfilePage() {
       <div class="stat"><div class="stat-value">${formatPoints(pointsAgainst)}</div><div class="stat-label">Points Against</div></div>
     </div>
     ${singleplayerHtml}
+    ${duelStatsHtml}
     ${headToHeadHtml}
     <h3>Recent Games</h3>
     <table class="games-table">

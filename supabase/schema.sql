@@ -5168,10 +5168,10 @@ end;
 $$;
 
 -- Redefines get_record_progression() (Phase 45, last redefined Phase 49)
--- one more time - puzzle joins speedrun as a time_ms-sourced mode (raw_value
--- reads from time_ms, not score); it falls into the existing lower-is-
--- better default direction alongside curse/shrink/mutation/eogonim/
--- blindeogonim, no change needed there.
+-- one more time - puzzle joins speedrun as a time_ms-sourced mode
+-- (raw_value reads from time_ms, not score); it falls into the existing
+-- lower-is-better default direction alongside curse/shrink/mutation/
+-- eogonim/blindeogonim, no change needed there.
 create or replace function public.get_record_progression()
 returns table (
   mode text,
@@ -5207,4 +5207,234 @@ as $$
   from with_prev
   where prev_best is distinct from running_best
   order by mode, achieved_at;
+$$;
+
+-- ---------- Phase 61: ranked minigame duels ----------
+-- Two players queue up and play a best-of-3 (plus sudden death if the
+-- series is still tied after 3 rounds) series across randomly-picked
+-- singleplayer minigames (Speedrun/Eogonim/Blight/GodBot/Curse/Shrink/
+-- Mutation/Puzzle - Blind Eogonim and Ascension are excluded), with both
+-- players getting an identical seeded piece/curse/GodBot-decision sequence
+-- each round (see singleplayer.js's setRng()/setSecondaryRng()) so the
+-- outcome is decided by skill, not RNG luck. Kept as a FULLY SEPARATE
+-- rating ladder from regular 1v1 ranked ELO (elo_rating) - duel skill and
+-- full-board 2-player skill are different things, and the user wants its
+-- own leaderboard tab.
+alter table public.profiles add column if not exists duel_elo_rating integer not null default 1200;
+alter table public.profiles add column if not exists highest_duel_elo integer not null default 1200;
+alter table public.profiles add column if not exists duel_games_played integer not null default 0;
+alter table public.profiles add column if not exists duel_wins integer not null default 0;
+alter table public.profiles add column if not exists duel_losses integer not null default 0;
+alter table public.profiles add column if not exists duel_win_streak integer not null default 0;
+alter table public.profiles add column if not exists highest_duel_win_streak integer not null default 0;
+
+-- One row per completed duel match - mirrors ffa_games' jsonb-log +
+-- client_match_id dedupe shape (Phase 55) rather than games' older two-
+-- independent-inserts approach, since that's this schema's more recently-
+-- established convention for "both clients submit the same match, whichever
+-- lands first wins." `rounds` holds one entry per round actually played
+-- (3, or 4+ if sudden death was needed): {mode, round_winner} - round_winner
+-- is 1, 2, or null for a tied round.
+create table if not exists public.duel_matches (
+  id uuid primary key default gen_random_uuid(),
+  player1_id uuid not null references public.profiles(id),
+  player2_id uuid not null references public.profiles(id),
+  winner smallint not null check (winner in (1, 2)), -- sudden death guarantees a decision, never a tied match
+  rounds jsonb not null,
+  elo_delta_p1 integer not null,
+  elo_delta_p2 integer not null,
+  started_at timestamptz not null default now(),
+  ended_at timestamptz not null default now(),
+  client_match_id text unique
+);
+
+alter table public.duel_matches enable row level security;
+
+drop policy if exists "Duel matches are publicly readable" on public.duel_matches;
+create policy "Duel matches are publicly readable"
+  on public.duel_matches for select
+  using (true);
+
+-- No client insert policy - rows only ever get created through
+-- submit_duel_result() below (security definer, validates the caller was
+-- actually one of the two players).
+
+-- Per-player, per-minigame win/loss/tie record across every duel ROUND ever
+-- played (not per match) - new ground, nothing else in this schema tracks a
+-- win/loss record for a minigame (singleplayer_runs only ever holds a solo
+-- personal-best score/time, never a result against an opponent).
+--
+-- NOTE for future maintainers: if a later phase ever widens the set of
+-- duel-eligible modes, this check constraint must be neutralized into a
+-- comment at that time (drop-then-real-add moves to the new phase) - same
+-- discipline singleplayer_runs_mode_check has followed since Phase 49 (see
+-- Phase 60's own comment). It's a brand-new constraint as of this phase, so
+-- there's nothing to neutralize yet.
+create table if not exists public.duel_mode_stats (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  mode text not null check (mode in ('speedrun', 'eogonim', 'blight', 'godbot', 'curse', 'shrink', 'mutation', 'puzzle')),
+  wins integer not null default 0,
+  losses integer not null default 0,
+  ties integer not null default 0,
+  primary key (user_id, mode)
+);
+
+alter table public.duel_mode_stats enable row level security;
+
+drop policy if exists "Duel mode stats are publicly readable" on public.duel_mode_stats;
+create policy "Duel mode stats are publicly readable"
+  on public.duel_mode_stats for select
+  using (true);
+
+-- Records a completed duel match: independent-ladder ELO (same logistic
+-- formula/K-factor as handle_ranked_game(), just against duel_elo_rating
+-- instead of elo_rating, and including the same anti win-trading halving
+-- rule - a colluding pair is exactly as exploitable here as in real ranked),
+-- plus per-round duel_mode_stats increments for both players. Same
+-- client_match_id dedupe idiom as submit_ffa_result() - both clients call
+-- this with the identical id (the signaling server's room code), whichever
+-- lands first wins, the other is a harmless no-op returning the same row.
+create or replace function public.submit_duel_result(
+  p_client_match_id text,
+  p_player1_id uuid,
+  p_player2_id uuid,
+  p_winner smallint,
+  p_rounds jsonb -- array of {mode, round_winner} - round_winner is 1, 2, or null (tie)
+)
+returns uuid
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_match_id uuid;
+  v_p1_elo integer;
+  v_p2_elo integer;
+  v_expected_p1 numeric;
+  v_delta_p1 integer;
+  v_delta_p2 integer;
+  v_round jsonb;
+  v_this_winner_id uuid;
+  v_p1_recent_opps uuid[];
+  v_p1_recent_winners uuid[];
+  v_p2_recent_opps uuid[];
+  v_is_halved boolean := false;
+  v_p1_won boolean;
+  v_p2_won boolean;
+begin
+  if auth.uid() is distinct from p_player1_id and auth.uid() is distinct from p_player2_id then
+    raise exception 'Not authorized: caller was not a participant in this match';
+  end if;
+  if p_winner not in (1, 2) then
+    raise exception 'Invalid winner';
+  end if;
+  if p_rounds is null or jsonb_array_length(p_rounds) = 0 then
+    raise exception 'Duel results must include at least one round';
+  end if;
+
+  select duel_elo_rating into v_p1_elo from public.profiles where id = p_player1_id;
+  select duel_elo_rating into v_p2_elo from public.profiles where id = p_player2_id;
+
+  v_expected_p1 := 1.0 / (1.0 + power(10, (v_p2_elo - v_p1_elo) / 400.0));
+  v_delta_p1 := round(32 * ((case when p_winner = 1 then 1 else 0 end) - v_expected_p1));
+
+  -- Same anti win-trading check as handle_ranked_game() (Phase 30): halve
+  -- the ELO swing if this exact pair's last 2 duels both had the same winner.
+  v_this_winner_id := case when p_winner = 1 then p_player1_id else p_player2_id end;
+
+  select array_agg(opp_id order by ended_at desc), array_agg(winner_id order by ended_at desc)
+  into v_p1_recent_opps, v_p1_recent_winners
+  from (
+    select
+      case when player1_id = p_player1_id then player2_id else player1_id end as opp_id,
+      case when winner = 1 then player1_id else player2_id end as winner_id,
+      ended_at
+    from public.duel_matches
+    where player1_id = p_player1_id or player2_id = p_player1_id
+    order by ended_at desc
+    limit 2
+  ) sub;
+
+  select array_agg(opp_id order by ended_at desc)
+  into v_p2_recent_opps
+  from (
+    select
+      case when player1_id = p_player2_id then player2_id else player1_id end as opp_id,
+      ended_at
+    from public.duel_matches
+    where player1_id = p_player2_id or player2_id = p_player2_id
+    order by ended_at desc
+    limit 2
+  ) sub;
+
+  if array_length(v_p1_recent_opps, 1) = 2 and array_length(v_p2_recent_opps, 1) = 2
+     and v_p1_recent_opps[1] = p_player2_id and v_p1_recent_opps[2] = p_player2_id
+     and v_p2_recent_opps[1] = p_player1_id and v_p2_recent_opps[2] = p_player1_id
+     and v_p1_recent_winners[1] = v_this_winner_id and v_p1_recent_winners[2] = v_this_winner_id then
+    v_is_halved := true;
+    v_delta_p1 := round(v_delta_p1 / 2.0);
+  end if;
+
+  v_delta_p2 := -v_delta_p1;
+  v_p1_won := p_winner = 1;
+  v_p2_won := p_winner = 2;
+
+  insert into public.duel_matches (player1_id, player2_id, winner, rounds, elo_delta_p1, elo_delta_p2, client_match_id)
+  values (p_player1_id, p_player2_id, p_winner, p_rounds, v_delta_p1, v_delta_p2, p_client_match_id)
+  on conflict (client_match_id) do nothing
+  returning id into v_match_id;
+
+  if v_match_id is null then
+    return (select id from public.duel_matches where client_match_id = p_client_match_id);
+  end if;
+
+  update public.profiles set
+    duel_elo_rating = duel_elo_rating + v_delta_p1,
+    highest_duel_elo = greatest(highest_duel_elo, duel_elo_rating + v_delta_p1),
+    duel_games_played = duel_games_played + 1,
+    duel_wins = duel_wins + case when v_p1_won then 1 else 0 end,
+    duel_losses = duel_losses + case when v_p2_won then 1 else 0 end,
+    duel_win_streak = case when v_p1_won then duel_win_streak + 1 else 0 end,
+    highest_duel_win_streak = case
+      when v_p1_won then greatest(highest_duel_win_streak, duel_win_streak + 1)
+      else highest_duel_win_streak
+    end
+  where id = p_player1_id;
+
+  update public.profiles set
+    duel_elo_rating = duel_elo_rating + v_delta_p2,
+    highest_duel_elo = greatest(highest_duel_elo, duel_elo_rating + v_delta_p2),
+    duel_games_played = duel_games_played + 1,
+    duel_wins = duel_wins + case when v_p2_won then 1 else 0 end,
+    duel_losses = duel_losses + case when v_p1_won then 1 else 0 end,
+    duel_win_streak = case when v_p2_won then duel_win_streak + 1 else 0 end,
+    highest_duel_win_streak = case
+      when v_p2_won then greatest(highest_duel_win_streak, duel_win_streak + 1)
+      else highest_duel_win_streak
+    end
+  where id = p_player2_id;
+
+  for v_round in select * from jsonb_array_elements(p_rounds) loop
+    insert into public.duel_mode_stats (user_id, mode, wins, losses, ties) values
+      (p_player1_id, v_round->>'mode',
+        case when (v_round->>'round_winner')::smallint = 1 then 1 else 0 end,
+        case when (v_round->>'round_winner')::smallint = 2 then 1 else 0 end,
+        case when v_round->>'round_winner' is null then 1 else 0 end)
+    on conflict (user_id, mode) do update set
+      wins = public.duel_mode_stats.wins + excluded.wins,
+      losses = public.duel_mode_stats.losses + excluded.losses,
+      ties = public.duel_mode_stats.ties + excluded.ties;
+
+    insert into public.duel_mode_stats (user_id, mode, wins, losses, ties) values
+      (p_player2_id, v_round->>'mode',
+        case when (v_round->>'round_winner')::smallint = 2 then 1 else 0 end,
+        case when (v_round->>'round_winner')::smallint = 1 then 1 else 0 end,
+        case when v_round->>'round_winner' is null then 1 else 0 end)
+    on conflict (user_id, mode) do update set
+      wins = public.duel_mode_stats.wins + excluded.wins,
+      losses = public.duel_mode_stats.losses + excluded.losses,
+      ties = public.duel_mode_stats.ties + excluded.ties;
+  end loop;
+
+  return v_match_id;
+end;
 $$;

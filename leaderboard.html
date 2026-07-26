@@ -29,6 +29,7 @@
       <a href="shop.html">Shop</a>
       <a href="garden.html">Garden</a>
       <a href="singleplayer.html">Minigames</a>
+      <a href="duel.html">Duels</a>
     </div>
     <div class="site-nav-row">
       <a href="profile.html">Profile</a>
@@ -41,7 +42,11 @@
 
   <div class="profile-page">
     <h2>Leaderboard</h2>
-    <label class="leaderboard-toggle">
+    <div class="sp-mode-tabs" id="leaderboardTabs">
+      <button type="button" id="lbTabOverall" class="sp-mode-tab active">Overall</button>
+      <button type="button" id="lbTabDuels" class="sp-mode-tab">Duels</button>
+    </div>
+    <label class="leaderboard-toggle" id="rankedOnlyLabel">
       <input type="checkbox" id="rankedOnlyCheckbox">
       Show ranked matches only
     </label>

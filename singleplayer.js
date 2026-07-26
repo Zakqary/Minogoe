@@ -38,6 +38,40 @@
 let BOARD_SIZE = 9;
 const BOARD_SIZES = { speedrun: 9, eogonim: 10, blindeogonim: 10, ascension: 10, blight: 10, godbot: 12, curse: 10, shrink: 10, mutation: 12, puzzle: 12 };
 const CELL_PX = 52;
+
+// ---------- Seeded RNG (Duel mode only) ----------
+// Every RNG call site in this file defaults to real randomness (rng/
+// rngSecondary both start out as plain Math.random) - solo play is
+// completely unaffected. duel.js (a separate page) calls setRng()/
+// setSecondaryRng() with a seeded mulberry32 generator before startRun(), so
+// both players in a duel get an identical sequence from a shared seed.
+// Two separate streams, not one: `rng` only ever backs calls that are pure
+// functions of draw-index (piece/shape draws, puzzle hand+layout
+// generation) - safe to share losslessly since two duelling clients will
+// call these in lockstep regardless of how their boards later diverge.
+// `rngSecondary` backs calls that read state.board (curse-type filtering,
+// blight's dead-cell target, GodBot's tie-breaks) - these can only be
+// PARTIALLY synced once boards diverge, see rollCurse()/godbotRunBotTurn()'s
+// own comments for how each handles that.
+let rng = Math.random;
+let rngSecondary = Math.random;
+function setRng(fn) { rng = fn; }
+function setSecondaryRng(fn) { rngSecondary = fn; }
+// Duel-only: fired at the end of every finish*Run()/failRun() for a duel-
+// eligible mode, right after that run's own render()/save-guard, so duel.js
+// can react to "my round just ended" without polling state.finished on a
+// timer. A no-op (null) for solo play.
+let onRoundFinished = null;
+function setOnRoundFinished(fn) { onRoundFinished = fn; }
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 const MAX_CAPTURE_SIZE = 4; // speedrun only - enclosures bigger than this don't count. Eogonim has no size cap, matching real Minogoe scoring.
 const LOOKAHEAD_COUNT = 3; // how many upcoming pieces are shown ahead of the current one - speedrun only, eogonim has no preview
 
@@ -87,7 +121,7 @@ const HAND_COMPOSITION = { pentomino: 7, tetromino: 2, tromino: 1 };
 const ALL_SHAPE_NAMES = [...PENTOMINO_NAMES, ...TETROMINO_NAMES, ...TROMINO_NAMES];
 function pickRandom(names, count) {
   const picks = [];
-  for (let i = 0; i < count; i++) picks.push(names[Math.floor(Math.random() * names.length)]);
+  for (let i = 0; i < count; i++) picks.push(names[Math.floor(rng() * names.length)]);
   return picks;
 }
 function drawGodbotHand() {
@@ -266,6 +300,19 @@ const state = {
   puzzleHand: [],
   puzzlePieceShapes: new Map(),
   puzzleRound: 1,
+  // Duel-only (duel.js, a separate page, sets these before startRun()).
+  // duelMode gates every duel-only branch above (rollCurse's unfiltered-
+  // pool fix, godbotRunBotTurn's synced bonus-action draw) and every
+  // saveXScoreIfBest() call site (guarded so a duel round's score never
+  // pollutes the solo personal-best leaderboards). puzzlePrecomputed, when
+  // set, holds all 3 rounds' {hand, voidMask} generated as one synchronous
+  // block right after the seeded rng is installed (see
+  // precomputeAllPuzzleRounds()) - both duelling clients run that
+  // generation from the identical seed before either player can place a
+  // single piece, so all 3 boards are guaranteed identical without any
+  // per-round network round-trip.
+  duelMode: false,
+  puzzlePrecomputed: null,
 };
 
 // Used both for a brand new run (startRun()) AND between Ascension rounds
@@ -413,7 +460,25 @@ function hasLegalPlacementForOrientation(shapeName, orientationIndex, board, req
 // orientation) - norotate/noborder just narrow that down further, and
 // invisible/blightspot never restrict legality at all, so the candidate
 // pool can never end up empty.
+//
+// Duel mode takes a different path here, deliberately: filtering the
+// candidate pool by THIS client's own board (as solo play does below)
+// would make the curse-index draw see a different-sized pool on each
+// duelling client the instant their boards diverge, corrupting the shared
+// rngSecondary sequence for every piece after it. Instead, duel mode always
+// draws from the full, unfiltered pool (so both clients consume identical
+// draws regardless of board state), then substitutes a fixed, always-legal
+// fallback ('invisible' - see the comment above, it never restricts
+// legality) if the shared pick happens to be illegal on this client's own
+// board. The substitution consumes zero extra draws, so it never perturbs
+// the index for later pieces.
 function rollCurse(shapeName, board) {
+  if (state.duelMode) {
+    const pick = CURSE_TYPES[Math.floor(rngSecondary() * CURSE_TYPES.length)];
+    if (pick === 'norotate' && !hasLegalPlacementForOrientation(shapeName, 0, board, false)) return 'invisible';
+    if (pick === 'noborder' && !hasLegalPlacementForOrientation(shapeName, 0, board, true)) return 'invisible';
+    return pick;
+  }
   let candidates = CURSE_TYPES.slice();
   if (!hasLegalPlacementForOrientation(shapeName, 0, board, false)) {
     candidates = candidates.filter((c) => c !== 'norotate');
@@ -450,14 +515,15 @@ function finishCurseRun(illegal) {
   state.failed = false;
   state.illegalMove = illegal;
   render();
-  saveCurseScoreIfBest(countCurseOpenSquares(state.board));
+  if (!state.duelMode) saveCurseScoreIfBest(countCurseOpenSquares(state.board));
+  if (onRoundFinished) onRoundFinished();
 }
 
 // ---------- Piece supply ----------
 function drawWeightedPiece() {
-  const roll = Math.random();
+  const roll = rng();
   const pool = roll < 0.70 ? PENTOMINO_NAMES : roll < 0.90 ? TETROMINO_NAMES : TROMINO_NAMES;
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pool[Math.floor(rng() * pool.length)];
 }
 
 // Mutation only: tromino (3) through heptomino (7) - monomino/domino are
@@ -474,14 +540,14 @@ function drawWeightedPiece() {
 const MUTATION_SIZE_WEIGHTS = [[3, 3], [4, 4], [5, 5], [6, 6], [7, 7]]; // [size, weight]
 const MUTATION_SIZE_WEIGHT_TOTAL = MUTATION_SIZE_WEIGHTS.reduce((sum, [, w]) => sum + w, 0);
 function drawMutationPiece() {
-  let roll = Math.random() * MUTATION_SIZE_WEIGHT_TOTAL;
+  let roll = rng() * MUTATION_SIZE_WEIGHT_TOTAL;
   let size = MUTATION_SIZE_WEIGHTS[MUTATION_SIZE_WEIGHTS.length - 1][0];
   for (const [candidateSize, weight] of MUTATION_SIZE_WEIGHTS) {
     if (roll < weight) { size = candidateSize; break; }
     roll -= weight;
   }
   const pool = MUTATION_SIZE_POOLS[size];
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pool[Math.floor(rng() * pool.length)];
 }
 
 // Blind Eogonim only: re-rolls on a repeat of the immediately previous
@@ -706,7 +772,7 @@ function spawnDeadCell(excludeCells) {
     if (state.board[i] === 0 && !(excludeCells && excludeCells.has(i))) emptyCells.push(i);
   }
   if (emptyCells.length === 0) return;
-  const pick = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+  const pick = emptyCells[Math.floor(rngSecondary() * emptyCells.length)];
   state.board[pick] = 2;
 }
 
@@ -809,11 +875,11 @@ function gridTouchesFilled(grid, cells) {
 // requirement entirely, used only as a last-resort fallback.
 function tryBuildPuzzleLayout(hand, connectChance) {
   const grid = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
-  const shuffled = [...hand].sort(() => Math.random() - 0.5);
+  const shuffled = [...hand].sort(() => rng() - 0.5);
 
   for (let i = 0; i < shuffled.length; i++) {
     const shapeName = shuffled[i];
-    const requireTouch = i > 0 && Math.random() < connectChance;
+    const requireTouch = i > 0 && rng() < connectChance;
     const collectCandidates = (needTouch) => {
       const found = [];
       for (let oi = 0; oi < ORIENTATIONS[shapeName].length; oi++) {
@@ -837,7 +903,7 @@ function tryBuildPuzzleLayout(hand, connectChance) {
     if (candidates.length === 0 && requireTouch) candidates = collectCandidates(false);
     if (candidates.length === 0) return null;
 
-    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    const chosen = candidates[Math.floor(rng() * candidates.length)];
     for (const cellIdx of chosen) grid[cellIdx] = 1;
   }
   return grid;
@@ -1080,6 +1146,7 @@ function failRun() {
   state.failed = true;
   stopTimerTick();
   render();
+  if (onRoundFinished) onRoundFinished();
 }
 
 function finishRun() {
@@ -1089,7 +1156,8 @@ function finishRun() {
   state.finalTimeMs = Date.now() - state.startTime;
   stopTimerTick();
   render();
-  saveScoreIfBest(state.finalTimeMs);
+  if (!state.duelMode) saveScoreIfBest(state.finalTimeMs);
+  if (onRoundFinished) onRoundFinished();
 }
 
 // Eogonim has no separate "failed" ending - running out of legal placements
@@ -1101,7 +1169,8 @@ function finishEogonimRun() {
   state.finished = true;
   state.failed = false;
   render();
-  saveEogonimScoreIfBest(state.totalCaptured);
+  if (!state.duelMode) saveEogonimScoreIfBest(state.totalCaptured);
+  if (onRoundFinished) onRoundFinished();
 }
 
 // Same "no separate failed ending" shape as Eogonim - running out of legal
@@ -1112,7 +1181,8 @@ function finishBlightRun() {
   state.finished = true;
   state.failed = false;
   render();
-  saveBlightScoreIfBest(state.totalCaptured);
+  if (!state.duelMode) saveBlightScoreIfBest(state.totalCaptured);
+  if (onRoundFinished) onRoundFinished();
 }
 
 // Blind Eogonim's run always ends one of two ways: the normal Eogonim
@@ -1127,7 +1197,7 @@ function finishBlindEogonimRun(illegal) {
   state.failed = false;
   state.illegalMove = illegal;
   render();
-  saveBlindEogonimScoreIfBest(state.totalCaptured);
+  if (!state.duelMode) saveBlindEogonimScoreIfBest(state.totalCaptured);
 }
 
 // Same "no separate failed ending" shape as Eogonim/Blight - running out of
@@ -1141,7 +1211,8 @@ function finishShrinkRun() {
   state.finished = true;
   state.failed = false;
   render();
-  saveShrinkScoreIfBest(state.totalCaptured);
+  if (!state.duelMode) saveShrinkScoreIfBest(state.totalCaptured);
+  if (onRoundFinished) onRoundFinished();
 }
 
 // Same "no separate failed ending" shape as Shrink/Curse - running out of
@@ -1152,7 +1223,8 @@ function finishMutationRun() {
   state.finished = true;
   state.failed = false;
   render();
-  saveMutationScoreIfBest(state.totalCaptured);
+  if (!state.duelMode) saveMutationScoreIfBest(state.totalCaptured);
+  if (onRoundFinished) onRoundFinished();
 }
 
 // ---------- GodBot mode ----------
@@ -1364,7 +1436,7 @@ function godbotScoreCandidate(candidate, board, player) {
     }
   }
 
-  return territoryDelta * 1000 + sealProgress + cornerTouches * 3 + edgeTouches * 0.5 + ownAdj * 2 - oppAdj * 1.5 + Math.random() * 0.5;
+  return territoryDelta * 1000 + sealProgress + cornerTouches * 3 + edgeTouches * 0.5 + ownAdj * 2 - oppAdj * 1.5 + rngSecondary() * 0.5;
 }
 
 function pickGodbotPlacement(hand, board, player) {
@@ -1441,7 +1513,7 @@ function pickGodbotRemovalTarget() {
     else if (damage === bestDamage && damage > 0) { tied.push(id); }
   }
   if (bestDamage <= 0) return null;
-  return { id: tied[Math.floor(Math.random() * tied.length)], damage: bestDamage };
+  return { id: tied[Math.floor(rngSecondary() * tied.length)], damage: bestDamage };
 }
 
 function godbotRemovePiece(pieceId) {
@@ -1495,7 +1567,7 @@ function pickGodbotBlightTarget() {
       }
       if (borderOwners.size === 1 && [...borderOwners][0] === 1 && regionCells.length > bestDamage) {
         bestDamage = regionCells.length;
-        bestCell = regionCells[Math.floor(Math.random() * regionCells.length)];
+        bestCell = regionCells[Math.floor(rngSecondary() * regionCells.length)];
       }
     }
   }
@@ -1576,10 +1648,28 @@ function godbotRunBotTurn() {
     const removalTarget = pickGodbotRemovalTarget();
     const blightTarget = pickGodbotBlightTarget();
 
-    const options = ['again', 'reroll'];
-    if (removalTarget) options.push('remove');
-    if (blightTarget) options.push('blight');
-    const choice = options[Math.floor(Math.random() * options.length)];
+    // Duel mode: each duelling client plays GodBot on its OWN independent
+    // board (not a shared one), so which of the 4 bonus actions are even
+    // eligible ('remove'/'blight' only apply once something's actually
+    // worth targeting) can differ client to client the moment the two
+    // boards diverge - exactly the same problem rollCurse() solves above.
+    // Draw from the full, always-4-option list at a shared position so
+    // both clients land on the same NAMED action on the same turn (per the
+    // user's "GodBot selects the same powerups on the same turns" spec),
+    // then fall back to 'again' (always legal) if that action doesn't
+    // currently apply on this client's own board - a substitution that
+    // consumes zero extra draws.
+    let choice;
+    if (state.duelMode) {
+      choice = GODBOT_POWERUPS[Math.floor(rngSecondary() * GODBOT_POWERUPS.length)];
+      if (choice === 'remove' && !removalTarget) choice = 'again';
+      if (choice === 'blight' && !blightTarget) choice = 'again';
+    } else {
+      const options = ['again', 'reroll'];
+      if (removalTarget) options.push('remove');
+      if (blightTarget) options.push('blight');
+      choice = options[Math.floor(Math.random() * options.length)];
+    }
 
     if (choice === 'remove') {
       godbotRemovePiece(removalTarget.id);
@@ -1615,7 +1705,8 @@ function godbotFinishRun() {
   state.godbotScore1 = score1;
   state.godbotScore2 = score2;
   render();
-  saveGodbotScoreIfBest(score1 - score2);
+  if (!state.duelMode) saveGodbotScoreIfBest(score1 - score2);
+  if (onRoundFinished) onRoundFinished();
 }
 
 // ---------- Ascension run flow ----------
@@ -1659,7 +1750,7 @@ function finishAscensionRun() {
   state.finished = true;
   state.failed = false; // no separate visual "failed" state - the dedicated ascension render() branch covers this
   render();
-  saveAscensionScoreIfBest(state.round - 1); // rounds successfully CLEARED, not the round that was failed
+  if (!state.duelMode) saveAscensionScoreIfBest(state.round - 1); // rounds successfully CLEARED, not the round that was failed
 }
 
 // ---------- Puzzle run flow ----------
@@ -1677,11 +1768,41 @@ function startPuzzleRound(round) {
   state.pieceIdAt = new Int32Array(BOARD_SIZE * BOARD_SIZE);
   state.pieceCells = new Map();
   state.puzzlePieceShapes = new Map();
-  state.puzzleHand = drawGodbotHand(); // same real-match hand composition, reused as-is
-  state.voidMask = generatePuzzleVoidMask(state.puzzleHand);
+  // Duel mode: all 3 rounds' hand+voidMask were already generated together
+  // as one synchronous block (precomputeAllPuzzleRounds(), called by
+  // duel.js right after the seeded rng is installed) - reuse round `round`'s
+  // precomputed data instead of generating fresh here, so both duelling
+  // clients see the identical board 2/3 boards even though they each reach
+  // them at different real-world times.
+  if (state.duelMode && state.puzzlePrecomputed) {
+    const precomputed = state.puzzlePrecomputed[round - 1];
+    state.puzzleHand = precomputed.hand.slice();
+    state.voidMask = precomputed.voidMask.slice();
+  } else {
+    state.puzzleHand = drawGodbotHand(); // same real-match hand composition, reused as-is
+    state.voidMask = generatePuzzleVoidMask(state.puzzleHand);
+  }
   state.selected = null;
   state.hover = null;
   render();
+}
+
+// Duel-only: generates all 3 Puzzle rounds' hand+voidMask up front, as one
+// synchronous block, immediately after duel.js installs the round's seeded
+// rng and before either player can place a single piece. Neither
+// drawGodbotHand() nor generatePuzzleVoidMask() ever reads state.board, so
+// this is a pure function of the rng stream alone - running it identically
+// on both clients guarantees all 3 boards match exactly, with no need to
+// track how many draws generatePuzzleVoidMask()'s internal retry loop
+// happened to consume.
+function precomputeAllPuzzleRounds() {
+  const rounds = [];
+  for (let i = 0; i < 3; i++) {
+    const hand = drawGodbotHand();
+    const voidMask = generatePuzzleVoidMask(hand);
+    rounds.push({ hand, voidMask });
+  }
+  state.puzzlePrecomputed = rounds;
 }
 
 // Called by clicking a hand piece (see renderPuzzleHand()) - selects it the
@@ -1784,7 +1905,8 @@ function finishPuzzleRun() {
   state.finalTimeMs = Date.now() - state.startTime;
   stopTimerTick();
   render();
-  savePuzzleTimeIfBest(state.finalTimeMs);
+  if (!state.duelMode) savePuzzleTimeIfBest(state.finalTimeMs);
+  if (onRoundFinished) onRoundFinished();
 }
 
 // ---------- Rotation / hover ----------
@@ -2748,3 +2870,26 @@ render();
 refreshLeaderboard();
 refreshQueueCounts();
 setInterval(refreshQueueCounts, QUEUE_COUNT_POLL_MS);
+
+// ---------- Duel mode engine exposure ----------
+// duel.js (a separate page, minogoe.html-style shell reusing this file's
+// canvas/hand-panel markup) drives this file's game loop programmatically
+// instead of via the tab/Start-button UI singleplayer.html uses - this is
+// the one seam it needs. Nothing here changes solo behavior; every function
+// below already exists above, this just names them for an outside caller.
+window.SingleplayerEngine = {
+  state,
+  startRun,
+  setMode,
+  setRng,
+  setSecondaryRng,
+  mulberry32,
+  precomputeAllPuzzleRounds,
+  setOnRoundFinished,
+  // Duel-only: lets duel.js force Eogonim/Blight rounds to end early at
+  // their 90-second cap (the user's spec calls for), reusing these modes'
+  // own normal ending path (render()/duelMode-guarded save/onRoundFinished)
+  // rather than a separate ad hoc "time's up" code path.
+  finishEogonimRun,
+  finishBlightRun,
+};

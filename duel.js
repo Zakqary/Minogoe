@@ -43,23 +43,29 @@ let queueing = false;
 let countdownTimer = null;
 let roundTimeLimitTimer = null;
 
-function setQueueStatus(msg) { document.getElementById('duelQueueStatus').textContent = msg || ''; }
+// This page is always embedded in an iframe on index.html (see game.js's
+// startDuelQueue()) - there's no queue button/status of its own here
+// anymore, the parent page owns that UI and drives this document entirely
+// via postMessage. setQueueStatus() relays status text back up to it
+// instead of writing to a local element.
+const PARENT_ORIGIN = location.origin;
+function setQueueStatus(msg) {
+  window.parent.postMessage({ type: 'duel-queue-status', message: msg || '' }, PARENT_ORIGIN);
+}
 function setBanner(msg) { document.getElementById('spBanner').textContent = msg; }
 
-// ---------- Queueing ----------
-const queueBtn = document.getElementById('duelQueueBtn');
-queueBtn.addEventListener('click', () => {
-  if (queueing) cancelDuelQueue();
-  else startDuelQueue();
+window.addEventListener('message', (e) => {
+  if (e.origin !== PARENT_ORIGIN || !e.data || typeof e.data !== 'object') return;
+  if (e.data.type === 'start-duel-queue') startDuelQueue();
 });
 
+// ---------- Queueing ----------
 function startDuelQueue() {
   const user = Auth.getUser();
   if (!user) { setQueueStatus('Sign in (top right) first to queue for duels.'); return; }
   const profile = Auth.getProfile();
   const duelEloRating = profile ? (profile.duel_elo_rating ?? 1200) : 1200;
   queueing = true;
-  queueBtn.textContent = 'Cancel';
   setQueueStatus('Searching for an opponent...');
   Net3.connect({
     serverUrl: DUEL_SIGNALING_SERVER_URL,
@@ -74,17 +80,9 @@ function startDuelQueue() {
   });
 }
 
-function cancelDuelQueue() {
-  Net3.cancelQueue();
-  queueing = false;
-  queueBtn.textContent = 'Find Match';
-  setQueueStatus('');
-}
-
 // ---------- Match start ----------
 function handleReady() {
   queueing = false;
-  queueBtn.textContent = 'Find Match';
   setQueueStatus('');
 
   if (duelState.active) {
@@ -105,12 +103,15 @@ function handleReady() {
 
   duelState.active = true;
   duelState.isHost = Net3.isHost;
-  document.getElementById('duelQueuePanel').style.display = 'none';
   document.getElementById('duelMatchPanel').style.display = '';
   document.getElementById('duelMatchHeader').style.display = '';
   document.querySelector('.sp-mode-tabs').style.display = 'none';
   document.getElementById('spStartBtn').style.display = 'none';
   document.getElementById('spModeTitle').style.display = 'none';
+
+  // Tells the parent (index.html) to reveal this iframe in place of the
+  // lobby/game view - see game.js's showDuelView().
+  window.parent.postMessage({ type: 'duel-matched' }, PARENT_ORIGIN);
 
   Engine.setOnRoundFinished(onMyRoundFinished);
 
@@ -300,8 +301,17 @@ function finishMatch(winnerSide) {
   clearTimeout(roundTimeLimitTimer);
   document.getElementById('duelMatchHeader').style.display = 'none';
   setBanner(winnerSide === 'me' ? 'You won the duel!' : 'You lost the duel.');
+  document.getElementById('duelBackToLobbyBtn').style.display = '';
   submitDuelResult();
 }
+
+// The user decides when to leave the result screen (rather than this
+// auto-closing the moment the match ends) so they actually get to read the
+// final banner/history - tells the parent to tear this iframe down and
+// restore the normal lobby/game view, see game.js's hideDuelView().
+document.getElementById('duelBackToLobbyBtn').addEventListener('click', () => {
+  window.parent.postMessage({ type: 'duel-match-ended' }, PARENT_ORIGIN);
+});
 
 // ---------- Result submission ----------
 async function submitDuelResult() {
@@ -373,7 +383,6 @@ function handlePeerLeft() {
   if (!duelState.active) {
     if (queueing) {
       queueing = false;
-      queueBtn.textContent = 'Find Match';
       setQueueStatus('Connection lost. Try queueing again.');
     }
     return;

@@ -2718,6 +2718,12 @@ function updateLobbyGameVisibility() {
   const lobbyView = document.getElementById('lobbyView');
   const gameView = document.getElementById('gameView');
   if (!lobbyView || !gameView) return;
+  // A ranked duel match is active (see showDuelView()/hideDuelView()) -
+  // leave lobbyView/gameView exactly as they are until the duel ends,
+  // since this function is also called unconditionally from render() for
+  // the regular 2-player game, which has nothing to do with a duel that
+  // might be in progress in the background.
+  if (document.getElementById('duelView')?.style.display === '') return;
 
   const showGame = !!state.gameStarted;
   lobbyView.style.display = showGame ? 'none' : '';
@@ -4509,14 +4515,93 @@ async function refreshQueueCounts() {
   try {
     const res = await fetch(`${SIGNALING_HTTP_URL}/queue-counts`);
     if (!res.ok) return;
-    const { casual, ranked, ffa } = await res.json();
+    const { casual, ranked, ffa, duel } = await res.json();
     document.getElementById('casualQueueCount').textContent = formatQueueCount(casual);
     document.getElementById('rankedQueueCount').textContent = formatQueueCount(ranked);
     document.getElementById('ffaQueueCount').textContent = formatQueueCount(ffa || 0);
+    document.getElementById('duelQueueCount').textContent = formatQueueCount(duel || 0);
   } catch {
     // signaling server unreachable - leave whatever was last shown
   }
 }
+
+// ---------- Ranked minigame duels (played inside an iframe, see duel.html/
+// duel.js) ----------
+// duel.js reuses singleplayer.js's engine, which shares a lot of top-level
+// global names (BASE_SHAPES, ORIENTATIONS, canvas, ctx, BOARD_SIZE, ...)
+// with this file - loading it directly into this page would collide
+// outright (duplicate top-level const/let declarations throw a
+// SyntaxError). An iframe keeps it in a completely separate global scope
+// while still letting the queue button/status live on this page, per the
+// user's own spec ("brought to the duels page only once you connect with
+// your opponent"). The iframe is created fresh only once "Find Match" is
+// clicked, and fully destroyed either on Cancel or once the match ends -
+// so no duel.js state ever lingers between queue attempts, and there's
+// nothing to explicitly reset.
+let duelQueueActive = false;
+
+function setDuelQueueStatus(msg) {
+  document.getElementById('duelQueueStatus').textContent = msg || '';
+}
+
+function startDuelQueue() {
+  if (duelQueueActive) return;
+  duelQueueActive = true;
+  document.getElementById('duelQueueBtn').textContent = 'Cancel';
+  setDuelQueueStatus('Searching for an opponent...');
+
+  const iframe = document.createElement('iframe');
+  iframe.id = 'duelFrame';
+  iframe.addEventListener('load', () => {
+    iframe.contentWindow.postMessage({ type: 'start-duel-queue' }, location.origin);
+  });
+  document.getElementById('duelFrameHost').appendChild(iframe);
+  iframe.src = 'duel.html';
+}
+
+// Removing the iframe entirely tears down its WebSocket/WebRTC connection
+// as a side effect (the browser cleans up an unloaded document's
+// resources) - no explicit "unqueue" message needed.
+function cancelDuelQueue() {
+  duelQueueActive = false;
+  document.getElementById('duelQueueBtn').textContent = 'Find Match';
+  setDuelQueueStatus('');
+  document.getElementById('duelFrameHost').replaceChildren();
+}
+
+// The button itself is only ever reachable while #lobbyView is showing
+// (showDuelView() hides it entirely the moment a match is found), so no
+// extra "already matched" guard is needed here.
+document.getElementById('duelQueueBtn').addEventListener('click', () => {
+  if (duelQueueActive) cancelDuelQueue();
+  else startDuelQueue();
+});
+
+function showDuelView() {
+  document.getElementById('lobbyView').style.display = 'none';
+  document.getElementById('gameView').style.display = 'none';
+  document.getElementById('duelView').style.display = '';
+}
+
+function hideDuelView() {
+  document.getElementById('duelView').style.display = 'none';
+  duelQueueActive = false;
+  document.getElementById('duelQueueBtn').textContent = 'Find Match';
+  setDuelQueueStatus('');
+  document.getElementById('duelFrameHost').replaceChildren();
+  updateLobbyGameVisibility();
+}
+
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin || !e.data || typeof e.data !== 'object') return;
+  if (e.data.type === 'duel-queue-status') {
+    setDuelQueueStatus(e.data.message);
+  } else if (e.data.type === 'duel-matched') {
+    showDuelView();
+  } else if (e.data.type === 'duel-match-ended') {
+    hideDuelView();
+  }
+});
 
 document.getElementById('resumeMatchBtn').addEventListener('click', () => tryResumeActiveMatch(10, true));
 

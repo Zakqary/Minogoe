@@ -11,34 +11,21 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="site-header">
-    <div class="header-stats">
-      <span id="onlineCount" class="online-count">&nbsp;</span>
-      <span id="gamesPlayedCount" class="online-count">&nbsp;</span>
-    </div>
-    <a href="index.html"><img src="Minogoe.png" alt="Minogoe" class="logo"></a>
-    <div id="authWidget" class="auth-widget"></div>
-  </header>
-  <div id="registerBanner" class="register-banner" style="display:none;">
-    <span>Register for an account to play with others, save your replays, earn coins, and collect pets!</span>
-    <button type="button" id="registerBannerBtn" class="register-banner-btn">Sign Up</button>
+  <!-- This page is only ever loaded inside an iframe embedded in
+       index.html (see game.js's startDuelQueue()) - queueing itself
+       happens from a button on the main play page, and this document is
+       created fresh only once "Find Match" is clicked there, then torn
+       down again once the match ends. No visible header/nav/footer of its
+       own; the elements below exist only because auth.js/auth-ui.js/
+       presence.js reference them unconditionally at load and would throw
+       otherwise - kept, just never shown. -->
+  <div style="display:none;">
+    <span id="onlineCount"></span>
+    <span id="gamesPlayedCount"></span>
+    <div id="authWidget"></div>
+    <div id="registerBanner"></div>
+    <a id="adminNavLink"></a>
   </div>
-  <nav class="site-nav">
-    <div class="site-nav-row">
-      <a href="index.html">Play</a>
-      <a href="shop.html">Shop</a>
-      <a href="garden.html">Garden</a>
-      <a href="singleplayer.html">Minigames</a>
-      <a href="duel.html">Duels</a>
-    </div>
-    <div class="site-nav-row">
-      <a href="profile.html">Profile</a>
-      <a href="leaderboard.html">Leaderboard</a>
-      <a href="recent.html">Recent Games</a>
-      <a href="stats.html">Stats</a>
-      <a href="admin.html" id="adminNavLink" style="display:none;">Admin</a>
-    </div>
-  </nav>
   <div class="app singleplayer-app">
     <div class="board-panel">
       <div class="duel-match-header" id="duelMatchHeader" style="display:none;">
@@ -57,21 +44,16 @@
         </div>
       </div>
       <div class="turn-banner-row">
-        <div class="turn-banner" id="spBanner">Queue up to find an opponent</div>
+        <div class="turn-banner" id="spBanner">Looking for an opponent...</div>
         <div class="turn-timer" id="spTimer">0:00.00</div>
       </div>
-      <div class="selection-info" id="spPieceInfo">Ranked minigame duels: best of 3 (plus sudden death if needed), same pieces, same everything - may the better player win.</div>
+      <div class="selection-info" id="spPieceInfo">Best of 3 (plus sudden death if needed), same pieces, same everything - may the better player win.</div>
       <div class="rotate-hint">Press <strong>Q</strong>/<strong>E</strong> or scroll to rotate, <strong>F</strong> to flip, or use the rotate buttons. Tap the board once to preview, tap again to place.</div>
     </div>
 
     <div class="side-panel">
       <div class="online-panel">
         <h3>Ranked Minigame Duel</h3>
-        <div id="duelQueuePanel">
-          <p class="duel-blurb">Queue up for a best-of-3 series across randomly-picked minigames. Both players get identical pieces/curses/GodBot decisions every round - no RNG excuses.</p>
-          <button type="button" id="duelQueueBtn">Find Match</button>
-          <div class="online-status" id="duelQueueStatus"></div>
-        </div>
         <div id="duelMatchPanel" style="display:none;">
           <div class="duel-vs-row">
             <div class="duel-vs-side">
@@ -86,6 +68,7 @@
           </div>
           <div class="duel-history" id="duelHistory"></div>
         </div>
+        <button type="button" id="duelBackToLobbyBtn" style="display:none;">Back to Lobby</button>
 
         <!-- Every mode tab/rules block/hand panel below is reused verbatim
              from singleplayer.js/singleplayer.html - duel.js drives setMode()/
@@ -164,7 +147,6 @@
       <div class="rules-panel">
         <h3>How Duels Work</h3>
         <ul>
-          <li>Queue up and get matched against an opponent close to your Duel ELO.</li>
           <li>Play a best-of-3 series across randomly-picked minigames (Speedrun, Eogonim, Blight, GodBot, Curse, Shrink, Mutation, Puzzle).</li>
           <li>Every round, both players get the exact same pieces/curses/GodBot decisions - only skill decides the winner.</li>
           <li>A tied round doesn't count either way. If the series is still tied after 3 rounds, one sudden-death round decides it.</li>
@@ -180,11 +162,6 @@
       </div>
     </div>
   </div>
-
-  <footer class="site-footer">
-    <a href="https://discord.gg/y26Gm4wddj" target="_blank" rel="noopener noreferrer">Join the Minogoe Discord!</a>
-    <span class="footer-credit">Made by Zakqary Roy</span>
-  </footer>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="auth.js"></script>

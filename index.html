@@ -29,7 +29,6 @@
       <a href="shop.html">Shop</a>
       <a href="garden.html">Garden</a>
       <a href="singleplayer.html">Minigames</a>
-      <a href="duel.html">Duels</a>
     </div>
     <div class="site-nav-row">
       <a href="profile.html">Profile</a>
@@ -92,6 +91,26 @@
             <button id="ffaQueueBtn">Find Match</button>
           </div>
 
+          <!-- Ranked Minigame Duels - queued from here like every other
+               queue above, but the actual match is played inside an
+               iframe (#duelFrameHost, see #duelView below) rather than on
+               this page's own board - duel.html/duel.js reuse
+               singleplayer.js's engine, which shares a lot of top-level
+               global names (BASE_SHAPES, ORIENTATIONS, canvas, ctx, ...)
+               with game.js, so it can't be loaded into this same page
+               directly without colliding. The iframe is only created once
+               "Find Match" is clicked (searching) and torn down entirely
+               either on Cancel or once the match ends - see game.js's
+               startDuelQueue()/cancelDuelQueue(). -->
+          <div class="online-option">
+            <div class="online-option-info">
+              <div class="online-option-label">Ranked Duel</div>
+              <span id="duelQueueCount" class="queue-count"></span>
+              <span id="duelQueueStatus" class="online-option-status"></span>
+            </div>
+            <button id="duelQueueBtn">Find Match</button>
+          </div>
+
           <button id="cancelConnectBtn" style="display:none;">Cancel All</button>
           <div class="online-status" id="onlineStatus">Not connected.</div>
         </div>
@@ -129,6 +148,14 @@
         <div id="liveGamesContent">Loading...</div>
       </div>
     </div>
+  </div>
+
+  <!-- Shown only once a Ranked Duel queue actually matches - see
+       game.js's startDuelQueue()/showDuelView(). The iframe is created
+       fresh per queue attempt and torn down when the match ends, so no
+       stray duel.js state ever lingers between matches. -->
+  <div class="duel-view" id="duelView" style="display:none;">
+    <div class="duel-frame-host" id="duelFrameHost"></div>
   </div>
 
   <div class="app" id="gameView" style="display:none;">

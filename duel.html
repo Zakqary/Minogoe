@@ -26,6 +26,14 @@
     <div id="registerBanner"></div>
     <a id="adminNavLink"></a>
   </div>
+  <!-- Full-screen "what you're about to play" overlay - see duel.js's
+       showRoundAnnouncement()/hideRoundAnnouncement(). Shown for the
+       whole pre-round delay, hidden the instant the round actually starts. -->
+  <div class="duel-announcement" id="duelAnnouncement" style="display:none;">
+    <div class="duel-announcement-sub" id="duelAnnouncementSub">Round 1 of 3</div>
+    <div class="duel-announcement-mode" id="duelAnnouncementMode">Speedrun</div>
+    <div class="duel-announcement-countdown" id="duelAnnouncementCountdown"></div>
+  </div>
   <div class="app singleplayer-app">
     <div class="board-panel">
       <div class="duel-match-header" id="duelMatchHeader" style="display:none;">

@@ -13,7 +13,8 @@
 // comparison that fits a duel format).
 const DUEL_SIGNALING_SERVER_URL = 'wss://minogoe.onrender.com';
 const DUEL_MODES = ['speedrun', 'eogonim', 'blight', 'godbot', 'curse', 'shrink', 'mutation', 'puzzle'];
-const COUNTDOWN_MODES = new Set(['speedrun', 'puzzle']); // these get the 5s synced countdown, everything else a short 250ms buffer
+const COUNTDOWN_MODES = new Set(['speedrun', 'puzzle']); // these get the 5s synced countdown
+const PRE_ROUND_ANNOUNCEMENT_MS = 3000; // every other mode's pre-round buffer - long enough to actually read showRoundAnnouncement()
 const TIME_LIMITED_MODES = new Set(['eogonim', 'blight']); // the only two modes the user's spec gives an explicit 90s cap
 const ROUND_TIME_LIMIT_MS = 90000;
 const MODE_LABEL = {
@@ -45,6 +46,7 @@ let roundTimeLimitTimer = null;
 let roundTimerInterval = null;
 let boardBroadcastInterval = null;
 let latestOpponentSnapshot = null;
+let announcementCountdownInterval = null;
 
 // How often the still-playing side sends a lightweight snapshot of its own
 // board to the opponent - only ever actually displayed by the RECEIVING
@@ -214,7 +216,12 @@ function startNextRound(suddenDeath) {
   const roundIndex = duelState.history.length + 1;
   const seed = Math.floor(Math.random() * 0xFFFFFFFF);
   const secondarySeed = Math.floor(Math.random() * 0xFFFFFFFF);
-  const startAtEpochMs = Date.now() + (COUNTDOWN_MODES.has(mode) ? 5000 : 250);
+  // Every mode gets at least PRE_ROUND_ANNOUNCEMENT_MS so the big "what
+  // you're about to play" announcement (see showRoundAnnouncement()) is
+  // actually readable - 250ms was never enough to register anything before
+  // the round just started underneath you. Speedrun/Puzzle keep their
+  // longer, real 5s pre-race countdown on top of that.
+  const startAtEpochMs = Date.now() + (COUNTDOWN_MODES.has(mode) ? 5000 : PRE_ROUND_ANNOUNCEMENT_MS);
   const roundInfo = { roundIndex, mode, seed, secondarySeed, startAtEpochMs, suddenDeath };
   Net3.send({ type: 'duel-round-start', ...roundInfo });
   beginRound(roundInfo);
@@ -236,6 +243,7 @@ function beginRound(info) {
   clearTimeout(roundTimeLimitTimer);
   clearInterval(roundTimerInterval);
   clearInterval(boardBroadcastInterval);
+  clearInterval(announcementCountdownInterval);
   hideSpectate();
   duelState.currentRound = info;
   duelState.myResult = null;
@@ -251,8 +259,10 @@ function beginRound(info) {
   updateMatchHeaderUI();
   const delayMs = Math.max(0, info.startAtEpochMs - Date.now());
   setBanner(`${info.suddenDeath ? 'Sudden Death' : `Round ${info.roundIndex} of 3`}: ${MODE_LABEL[info.mode]} starting${delayMs > 1000 ? ` in ${Math.ceil(delayMs / 1000)}s...` : '...'}`);
+  showRoundAnnouncement(info, delayMs);
 
   countdownTimer = setTimeout(() => {
+    hideRoundAnnouncement();
     Engine.startRun();
     startRoundTimerDisplay(info.mode, Date.now());
     boardBroadcastInterval = setInterval(broadcastBoardSnapshot, BOARD_BROADCAST_INTERVAL_MS);
@@ -305,6 +315,35 @@ function stopRoundTimerDisplay() {
   document.getElementById('duelRoundTimer').textContent = '';
 }
 
+// ---------- Big mid-screen "what you're about to play" announcement ----------
+// Shown for the whole pre-round delay (info.startAtEpochMs) - previously
+// the only indication of the upcoming mode was the small turn-banner text,
+// easy to miss, and non-countdown modes only got a 250ms buffer before the
+// round just started underneath you. This is a full-screen overlay (see
+// style.css's .duel-announcement, position: fixed so it covers this
+// iframe's own viewport) with the mode name large and centered, plus a
+// live "Starting in Ns..." countdown, hidden the instant Engine.startRun()
+// actually fires.
+function showRoundAnnouncement(info, delayMs) {
+  clearInterval(announcementCountdownInterval);
+  const startAt = Date.now() + delayMs;
+  document.getElementById('duelAnnouncementSub').textContent = info.suddenDeath ? 'Sudden Death Round' : `Round ${info.roundIndex} of 3`;
+  document.getElementById('duelAnnouncementMode').textContent = MODE_LABEL[info.mode];
+  const countdownEl = document.getElementById('duelAnnouncementCountdown');
+  const tick = () => {
+    const remainingMs = startAt - Date.now();
+    countdownEl.textContent = remainingMs > 150 ? `Starting in ${Math.ceil(remainingMs / 1000)}...` : 'Go!';
+  };
+  tick();
+  announcementCountdownInterval = setInterval(tick, 100);
+  document.getElementById('duelAnnouncement').style.display = '';
+}
+
+function hideRoundAnnouncement() {
+  clearInterval(announcementCountdownInterval);
+  document.getElementById('duelAnnouncement').style.display = 'none';
+}
+
 // ---------- Spectating your opponent after you've finished ----------
 // The still-playing side broadcasts a lightweight snapshot of its own
 // board every BOARD_BROADCAST_INTERVAL_MS while its round is active; the
@@ -313,18 +352,43 @@ function stopRoundTimerDisplay() {
 // fairness concern in a still-active player seeing this, since neither
 // side's own round can be affected by watching the other after their own
 // result is already locked in.
+// state.totalCaptured/godbotScore1/godbotScore2 are NOT live-updated for
+// every mode - Curse never touches totalCaptured at all (its score is only
+// ever computed on demand from the board, see countCurseOpenSquares()'s own
+// comment), and GodBot's godbotScore1/2 are only set once the run actually
+// finishes (godbotFinishRun()) - solo play's own render() already knows
+// this and computes each mode's live score fresh from the board instead of
+// trusting those fields while running (see its own godbot branch calling
+// computeGodbotFinalScores() directly). Forwarding the raw state fields
+// here reproduced that same "only correct once finished" bug for the
+// spectate view specifically for Curse and GodBot (and would have for any
+// other mode with the same shape) - computing the same way render() does,
+// fresh from the board at snapshot time, fixes every mode uniformly.
+function computeLiveScoreText(mode, board) {
+  if (mode === 'godbot') {
+    const { score1, score2 } = computeGodbotFinalScores(board);
+    return `Them: ${score1} - Bot: ${score2}`;
+  }
+  if (mode === 'curse') return `Their open squares: ${countCurseOpenSquares(board)}`;
+  if (mode === 'shrink') return `Their lost squares: ${countShrinkOpenSquares(board)}`;
+  if (mode === 'mutation') return `Their open squares: ${countMutationOpenSquares(board)}`;
+  if (mode === 'blight') return `Their captured: ${computeBlightRegions(board).score}`;
+  if (mode === 'eogonim') return `Their captured: ${computeCapturedCount(board)}`;
+  // Speedrun/Puzzle have no meaningful mid-game "score" (their result is a
+  // finish time) - show fill progress instead, just so the view isn't blank.
+  const filled = board.reduce((n, v) => n + (v !== 0 ? 1 : 0), 0);
+  return `${filled} squares filled so far`;
+}
+
 function broadcastBoardSnapshot() {
   const s = Engine.state;
   if (!s.running) return;
   Net3.send({
     type: 'duel-opponent-board',
-    mode: s.mode,
     board: Array.from(s.board),
     voidMask: Array.from(s.voidMask),
     boardSize: BOARD_SIZE,
-    totalCaptured: s.totalCaptured,
-    godbotScore1: s.godbotScore1,
-    godbotScore2: s.godbotScore2,
+    scoreText: computeLiveScoreText(s.mode, s.board),
   });
 }
 
@@ -341,9 +405,7 @@ function renderSpectateSnapshot(snap) {
     ctx.fillStyle = voided ? '#0b0a0e' : val === 0 ? '#1e1b24' : val === 1 ? '#5b7fd9' : val === 3 ? '#8a4a52' : '#74ae82';
     ctx.fillRect(c * px, r * px, px - 1, px - 1);
   }
-  document.getElementById('duelSpectateScore').textContent = snap.mode === 'godbot'
-    ? `Them: ${snap.godbotScore1} - Bot: ${snap.godbotScore2}`
-    : `Their score: ${snap.totalCaptured}`;
+  document.getElementById('duelSpectateScore').textContent = snap.scoreText;
 }
 
 function maybeShowSpectate() {

@@ -42,6 +42,16 @@ const duelState = {
 let queueing = false;
 let countdownTimer = null;
 let roundTimeLimitTimer = null;
+let roundTimerInterval = null;
+let boardBroadcastInterval = null;
+let latestOpponentSnapshot = null;
+
+// How often the still-playing side sends a lightweight snapshot of its own
+// board to the opponent - only ever actually displayed by the RECEIVING
+// side once IT has already finished its own round and is just waiting (see
+// maybeShowSpectate()), so there's no fairness concern with a still-active
+// player seeing it early (they can't - hasResult gates it).
+const BOARD_BROADCAST_INTERVAL_MS = 700;
 
 // This page is always embedded in an iframe on index.html (see game.js's
 // startDuelQueue()) - there's no queue button/status of its own here
@@ -58,6 +68,23 @@ window.addEventListener('message', (e) => {
   if (e.origin !== PARENT_ORIGIN || !e.data || typeof e.data !== 'object') return;
   if (e.data.type === 'start-duel-queue') startDuelQueue();
 });
+
+// Renders a player's avatar/username/title/companion mino - reuses
+// auth-ui.js's avatarHtml()/titleBadgeHtml()/minoVisualHtml() (already
+// loaded by this page), the same helpers profile.js/leaderboard.js use.
+// Requires Catalog.ready() to have resolved first (avatarHtml/
+// titleBadgeHtml look up shop item data from the catalog).
+function renderIdentity(nameElId, eloElId, { username, eloRating, avatarId, titleId, companion }) {
+  document.getElementById(nameElId).innerHTML = `
+    <div class="duel-identity">
+      ${avatarHtml(avatarId, 22)}
+      <span>${escapeHtml(username || 'Player')}</span>
+      ${titleBadgeHtml(titleId)}
+      ${companion ? minoVisualHtml(companion, 20) : ''}
+    </div>
+  `;
+  document.getElementById(eloElId).textContent = `ELO ${eloRating}`;
+}
 
 // ---------- Queueing ----------
 function startDuelQueue() {
@@ -81,7 +108,7 @@ function startDuelQueue() {
 }
 
 // ---------- Match start ----------
-function handleReady() {
+async function handleReady() {
   queueing = false;
   setQueueStatus('');
 
@@ -115,11 +142,17 @@ function handleReady() {
 
   Engine.setOnRoundFinished(onMyRoundFinished);
 
+  await Catalog.ready();
   const profile = Auth.getProfile();
   const myElo = profile ? (profile.duel_elo_rating ?? 1200) : 1200;
-  document.getElementById('duelMyName').textContent = profile?.username || 'You';
-  document.getElementById('duelMyElo').textContent = `ELO ${myElo}`;
-  Net3.send({ type: 'duel-identify', userId: Auth.getUser()?.id ?? null, username: profile?.username || 'Player', eloRating: myElo });
+  renderIdentity('duelMyName', 'duelMyElo', {
+    username: profile?.username || 'You', eloRating: myElo,
+    avatarId: profile?.avatar_id, titleId: profile?.title_id, companion: profile?.companion,
+  });
+  Net3.send({
+    type: 'duel-identify', userId: Auth.getUser()?.id ?? null, username: profile?.username || 'Player', eloRating: myElo,
+    avatarId: profile?.avatar_id ?? null, titleId: profile?.title_id ?? null, companion: profile?.companion ?? null,
+  });
 
   if (duelState.isHost) {
     setBanner('Opponent found! Setting up round 1...');
@@ -134,8 +167,17 @@ function handleData(msg) {
     duelState.opponent.userId = msg.userId;
     duelState.opponent.username = msg.username;
     duelState.opponent.eloRating = msg.eloRating;
-    document.getElementById('duelOppName').textContent = msg.username;
-    document.getElementById('duelOppElo').textContent = `ELO ${msg.eloRating}`;
+    Catalog.ready().then(() => {
+      renderIdentity('duelOppName', 'duelOppElo', {
+        username: msg.username, eloRating: msg.eloRating,
+        avatarId: msg.avatarId, titleId: msg.titleId, companion: msg.companion,
+      });
+    });
+    return;
+  }
+  if (msg.type === 'duel-opponent-board') {
+    latestOpponentSnapshot = msg;
+    maybeShowSpectate();
     return;
   }
   if (msg.type === 'duel-round-start') {
@@ -192,6 +234,9 @@ function beginRound(info) {
   if (Engine.state.running) return;
   clearTimeout(countdownTimer);
   clearTimeout(roundTimeLimitTimer);
+  clearInterval(roundTimerInterval);
+  clearInterval(boardBroadcastInterval);
+  hideSpectate();
   duelState.currentRound = info;
   duelState.myResult = null;
   duelState.oppResult = null;
@@ -209,6 +254,8 @@ function beginRound(info) {
 
   countdownTimer = setTimeout(() => {
     Engine.startRun();
+    startRoundTimerDisplay(info.mode, Date.now());
+    boardBroadcastInterval = setInterval(broadcastBoardSnapshot, BOARD_BROADCAST_INTERVAL_MS);
     if (TIME_LIMITED_MODES.has(info.mode)) {
       roundTimeLimitTimer = setTimeout(() => {
         // Time's up - force this round to end right now with whatever
@@ -223,6 +270,93 @@ function beginRound(info) {
       }, ROUND_TIME_LIMIT_MS);
     }
   }, delayMs);
+}
+
+// ---------- Round timer display ----------
+function formatClock(ms) {
+  const totalSec = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// Shown in the match header for every mode (not just the ones singleplayer.js
+// already draws its own elapsed-time readout for, like Speedrun/Puzzle's
+// #spTimer) - a countdown for the two 90-second-capped modes (Eogonim/
+// Blight), a plain elapsed-time stopwatch for the rest, so there's always a
+// visible sense of round duration regardless of mode.
+function startRoundTimerDisplay(mode, startedAtMs) {
+  clearInterval(roundTimerInterval);
+  const el = document.getElementById('duelRoundTimer');
+  const hasCap = TIME_LIMITED_MODES.has(mode);
+  const tick = () => {
+    const elapsedMs = Date.now() - startedAtMs;
+    el.textContent = hasCap
+      ? `Time left: ${formatClock(ROUND_TIME_LIMIT_MS - elapsedMs)}`
+      : `Elapsed: ${formatClock(elapsedMs)}`;
+  };
+  tick();
+  roundTimerInterval = setInterval(tick, 250);
+}
+
+function stopRoundTimerDisplay() {
+  clearInterval(roundTimerInterval);
+  roundTimerInterval = null;
+  document.getElementById('duelRoundTimer').textContent = '';
+}
+
+// ---------- Spectating your opponent after you've finished ----------
+// The still-playing side broadcasts a lightweight snapshot of its own
+// board every BOARD_BROADCAST_INTERVAL_MS while its round is active; the
+// OTHER side only actually renders it once it has already finished its own
+// round and is just waiting (see maybeShowSpectate()) - there's no
+// fairness concern in a still-active player seeing this, since neither
+// side's own round can be affected by watching the other after their own
+// result is already locked in.
+function broadcastBoardSnapshot() {
+  const s = Engine.state;
+  if (!s.running) return;
+  Net3.send({
+    type: 'duel-opponent-board',
+    mode: s.mode,
+    board: Array.from(s.board),
+    voidMask: Array.from(s.voidMask),
+    boardSize: BOARD_SIZE,
+    totalCaptured: s.totalCaptured,
+    godbotScore1: s.godbotScore1,
+    godbotScore2: s.godbotScore2,
+  });
+}
+
+function renderSpectateSnapshot(snap) {
+  const canvas = document.getElementById('duelSpectateCanvas');
+  const ctx = canvas.getContext('2d');
+  const size = snap.boardSize;
+  const px = canvas.width / size;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let i = 0; i < snap.board.length; i++) {
+    const r = Math.floor(i / size), c = i % size;
+    const voided = snap.voidMask && snap.voidMask[i];
+    const val = snap.board[i];
+    ctx.fillStyle = voided ? '#0b0a0e' : val === 0 ? '#1e1b24' : val === 1 ? '#5b7fd9' : val === 3 ? '#8a4a52' : '#74ae82';
+    ctx.fillRect(c * px, r * px, px - 1, px - 1);
+  }
+  document.getElementById('duelSpectateScore').textContent = snap.mode === 'godbot'
+    ? `Them: ${snap.godbotScore1} - Bot: ${snap.godbotScore2}`
+    : `Their score: ${snap.totalCaptured}`;
+}
+
+function maybeShowSpectate() {
+  if (duelState.roundResolved) return;
+  if (duelState.myResult && !duelState.oppResult && latestOpponentSnapshot) {
+    document.getElementById('duelSpectatePanel').style.display = '';
+    renderSpectateSnapshot(latestOpponentSnapshot);
+  }
+}
+
+function hideSpectate() {
+  document.getElementById('duelSpectatePanel').style.display = 'none';
+  latestOpponentSnapshot = null;
 }
 
 // ---------- Round end / result exchange ----------
@@ -251,10 +385,13 @@ function formatResultValue(mode, result) {
 function onMyRoundFinished() {
   if (!duelState.currentRound || duelState.myResult) return;
   clearTimeout(roundTimeLimitTimer);
+  stopRoundTimerDisplay();
+  clearInterval(boardBroadcastInterval);
   const result = normalizeResult(duelState.currentRound.mode);
   duelState.myResult = result;
   Net3.send({ type: 'duel-round-result', roundIndex: duelState.currentRound.roundIndex, result });
   setBanner('Round over on your side. Waiting for your opponent to finish...');
+  maybeShowSpectate();
   tryResolveRound();
 }
 
@@ -277,6 +414,7 @@ function compareDuelRound(mode, mine, theirs) {
 function tryResolveRound() {
   if (duelState.roundResolved || !duelState.myResult || !duelState.oppResult) return;
   duelState.roundResolved = true;
+  hideSpectate();
   const mode = duelState.currentRound.mode;
   const winner = compareDuelRound(mode, duelState.myResult, duelState.oppResult);
 
@@ -472,7 +610,8 @@ function updateMatchHeaderUI() {
 }
 
 // The "scoreboard on the side" - every round played so far, with both
-// players' actual final score/time, not just a win/loss/tie label.
+// players' actual final score/time clearly displayed, not just a
+// win/loss/tie label.
 function renderHistoryUI() {
   const container = document.getElementById('duelHistory');
   container.innerHTML = duelState.history.map((h) => {
@@ -480,6 +619,12 @@ function renderHistoryUI() {
     const label = h.winner === 'me' ? 'Won' : h.winner === 'opp' ? 'Lost' : 'Tied';
     const myVal = formatResultValue(h.mode, h.myResult);
     const oppVal = formatResultValue(h.mode, h.oppResult);
-    return `<span class="duel-history-round ${cls}">${MODE_LABEL[h.mode]}${h.suddenDeath ? ' (SD)' : ''}: You ${myVal} - Opp ${oppVal} (${label})</span>`;
+    return `
+      <div class="duel-history-round ${cls}">
+        <span class="duel-history-mode">${MODE_LABEL[h.mode]}${h.suddenDeath ? ' (SD)' : ''}</span>
+        <span class="duel-history-score">You ${myVal} &ndash; Opp ${oppVal}</span>
+        <span class="duel-history-result">${label}</span>
+      </div>
+    `;
   }).join('');
 }

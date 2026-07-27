@@ -302,9 +302,11 @@ const state = {
   puzzleRound: 1,
   // Duel-only (duel.js, a separate page, sets these before startRun()).
   // duelMode gates every duel-only branch above (rollCurse's unfiltered-
-  // pool fix, godbotRunBotTurn's synced bonus-action draw) and every
-  // saveXScoreIfBest() call site (guarded so a duel round's score never
-  // pollutes the solo personal-best leaderboards). puzzlePrecomputed, when
+  // pool fix, godbotRunBotTurn's synced bonus-action draw) - a duel
+  // round's score/time is deliberately NOT exempted from
+  // saveXScoreIfBest() (a top score in a duel round still competes for the
+  // solo personal-best leaderboard, same server-side "only if actually
+  // better" check either way). puzzlePrecomputed, when
   // set, holds all 3 rounds' {hand, voidMask} generated as one synchronous
   // block right after the seeded rng is installed (see
   // precomputeAllPuzzleRounds()) - both duelling clients run that
@@ -515,7 +517,7 @@ function finishCurseRun(illegal) {
   state.failed = false;
   state.illegalMove = illegal;
   render();
-  if (!state.duelMode) saveCurseScoreIfBest(countCurseOpenSquares(state.board));
+  saveCurseScoreIfBest(countCurseOpenSquares(state.board));
   if (onRoundFinished) onRoundFinished();
 }
 
@@ -1156,7 +1158,7 @@ function finishRun() {
   state.finalTimeMs = Date.now() - state.startTime;
   stopTimerTick();
   render();
-  if (!state.duelMode) saveScoreIfBest(state.finalTimeMs);
+  saveScoreIfBest(state.finalTimeMs);
   if (onRoundFinished) onRoundFinished();
 }
 
@@ -1169,7 +1171,7 @@ function finishEogonimRun() {
   state.finished = true;
   state.failed = false;
   render();
-  if (!state.duelMode) saveEogonimScoreIfBest(state.totalCaptured);
+  saveEogonimScoreIfBest(state.totalCaptured);
   if (onRoundFinished) onRoundFinished();
 }
 
@@ -1181,7 +1183,7 @@ function finishBlightRun() {
   state.finished = true;
   state.failed = false;
   render();
-  if (!state.duelMode) saveBlightScoreIfBest(state.totalCaptured);
+  saveBlightScoreIfBest(state.totalCaptured);
   if (onRoundFinished) onRoundFinished();
 }
 
@@ -1197,7 +1199,7 @@ function finishBlindEogonimRun(illegal) {
   state.failed = false;
   state.illegalMove = illegal;
   render();
-  if (!state.duelMode) saveBlindEogonimScoreIfBest(state.totalCaptured);
+  saveBlindEogonimScoreIfBest(state.totalCaptured);
 }
 
 // Same "no separate failed ending" shape as Eogonim/Blight - running out of
@@ -1211,7 +1213,7 @@ function finishShrinkRun() {
   state.finished = true;
   state.failed = false;
   render();
-  if (!state.duelMode) saveShrinkScoreIfBest(state.totalCaptured);
+  saveShrinkScoreIfBest(state.totalCaptured);
   if (onRoundFinished) onRoundFinished();
 }
 
@@ -1223,7 +1225,7 @@ function finishMutationRun() {
   state.finished = true;
   state.failed = false;
   render();
-  if (!state.duelMode) saveMutationScoreIfBest(state.totalCaptured);
+  saveMutationScoreIfBest(state.totalCaptured);
   if (onRoundFinished) onRoundFinished();
 }
 
@@ -1705,7 +1707,7 @@ function godbotFinishRun() {
   state.godbotScore1 = score1;
   state.godbotScore2 = score2;
   render();
-  if (!state.duelMode) saveGodbotScoreIfBest(score1 - score2);
+  saveGodbotScoreIfBest(score1 - score2);
   if (onRoundFinished) onRoundFinished();
 }
 
@@ -1750,7 +1752,7 @@ function finishAscensionRun() {
   state.finished = true;
   state.failed = false; // no separate visual "failed" state - the dedicated ascension render() branch covers this
   render();
-  if (!state.duelMode) saveAscensionScoreIfBest(state.round - 1); // rounds successfully CLEARED, not the round that was failed
+  saveAscensionScoreIfBest(state.round - 1); // rounds successfully CLEARED, not the round that was failed
 }
 
 // ---------- Puzzle run flow ----------
@@ -1905,7 +1907,7 @@ function finishPuzzleRun() {
   state.finalTimeMs = Date.now() - state.startTime;
   stopTimerTick();
   render();
-  if (!state.duelMode) savePuzzleTimeIfBest(state.finalTimeMs);
+  savePuzzleTimeIfBest(state.finalTimeMs);
   if (onRoundFinished) onRoundFinished();
 }
 

@@ -4581,10 +4581,16 @@ function showDuelView() {
   document.getElementById('lobbyView').style.display = 'none';
   document.getElementById('gameView').style.display = 'none';
   document.getElementById('duelView').style.display = '';
+  // Hides this page's own header/nav/footer (see style.css's body.in-duel
+  // rules) - the duel iframe already hosts a complete page layout of its
+  // own and needs the full viewport, rather than being squeezed into a
+  // fixed slot alongside this page's own chrome.
+  document.body.classList.add('in-duel');
 }
 
 function hideDuelView() {
   document.getElementById('duelView').style.display = 'none';
+  document.body.classList.remove('in-duel');
   duelQueueActive = false;
   document.getElementById('duelQueueBtn').textContent = 'Find Match';
   setDuelQueueStatus('');

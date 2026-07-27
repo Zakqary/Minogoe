@@ -35,6 +35,7 @@
           <span id="duelOppScore">0</span>
         </div>
         <div class="duel-round-info" id="duelRoundInfo">Round 1 of 3</div>
+        <div class="duel-round-timer" id="duelRoundTimer"></div>
       </div>
       <div class="board-wrapper">
         <canvas id="board"></canvas>
@@ -69,6 +70,17 @@
           <div class="duel-history" id="duelHistory"></div>
         </div>
         <button type="button" id="duelBackToLobbyBtn" style="display:none;">Back to Lobby</button>
+
+        <!-- Shown only once you've finished your own round and are
+             waiting on your opponent - see duel.js's broadcastBoardSnapshot()/
+             maybeShowSpectate(). Purely a live view (a periodic snapshot
+             the still-playing side sends over the data channel), not
+             interactive. -->
+        <div class="duel-spectate" id="duelSpectatePanel" style="display:none;">
+          <h3>Watching Opponent...</h3>
+          <canvas id="duelSpectateCanvas" width="240" height="240"></canvas>
+          <div class="duel-spectate-score" id="duelSpectateScore"></div>
+        </div>
 
         <!-- Every mode tab/rules block/hand panel below is reused verbatim
              from singleplayer.js/singleplayer.html - duel.js drives setMode()/

@@ -73,6 +73,14 @@
             <div class="duel-vs-side">
               <div id="duelOppName">Opponent</div>
               <div class="duel-elo" id="duelOppElo">-</div>
+              <!-- Live, mid-round readout of the opponent's current score -
+                   updated continuously from their board broadcasts (see
+                   duel.js's broadcastBoardSnapshot()/computeLiveScoreText()),
+                   not just once you've finished and are spectating. My own
+                   current score already has its own always-visible readout
+                   (#spTimer, singleplayer.js's existing per-mode display),
+                   so there's no equivalent element needed on my own side. -->
+              <div class="duel-live-score" id="duelOppLiveScore"></div>
             </div>
           </div>
           <div class="duel-history" id="duelHistory"></div>

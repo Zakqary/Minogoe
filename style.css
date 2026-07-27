@@ -2096,6 +2096,14 @@ h2, h3 {
   color: var(--text-faint);
 }
 
+.duel-live-score {
+  margin-top: 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent-hover);
+  min-height: 1em;
+}
+
 .duel-vs-sep {
   color: var(--text-faint);
   font-size: 12px;

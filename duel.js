@@ -179,6 +179,7 @@ function handleData(msg) {
   }
   if (msg.type === 'duel-opponent-board') {
     latestOpponentSnapshot = msg;
+    updateOpponentLiveScore(msg);
     maybeShowSpectate();
     return;
   }
@@ -245,6 +246,7 @@ function beginRound(info) {
   clearInterval(boardBroadcastInterval);
   clearInterval(announcementCountdownInterval);
   hideSpectate();
+  document.getElementById('duelOppLiveScore').textContent = '';
   duelState.currentRound = info;
   duelState.myResult = null;
   duelState.oppResult = null;
@@ -390,6 +392,15 @@ function broadcastBoardSnapshot() {
     boardSize: BOARD_SIZE,
     scoreText: computeLiveScoreText(s.mode, s.board),
   });
+}
+
+// Always-visible, mid-round readout of the opponent's current score - runs
+// continuously off the same board broadcasts the full spectate view uses,
+// but (unlike maybeShowSpectate()) is never gated on my own round being
+// finished, since this is just a short text line, not their actual board.
+function updateOpponentLiveScore(snap) {
+  const el = document.getElementById('duelOppLiveScore');
+  if (el) el.textContent = snap.scoreText;
 }
 
 function renderSpectateSnapshot(snap) {

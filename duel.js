@@ -139,6 +139,15 @@ function handleData(msg) {
     return;
   }
   if (msg.type === 'duel-round-start') {
+    // Defense in depth: only the host ever originates a round (via
+    // startNextRound(), applied locally via its own direct beginRound()
+    // call, never round-tripped through the network) - a genuine host
+    // should never receive this message type from its peer at all. Also
+    // ignore anything that isn't exactly the next expected round, so a
+    // stray duplicate/stale resend (e.g. during a rejoin) can't rewind or
+    // skip the series.
+    if (duelState.isHost) return;
+    if (msg.roundIndex !== duelState.history.length + 1) return;
     beginRound(msg);
     return;
   }
@@ -170,6 +179,17 @@ function startNextRound(suddenDeath) {
 }
 
 function beginRound(info) {
+  // Defense in depth: Engine.setMode() silently no-ops while
+  // Engine.state.running is still true (see singleplayer.js's own guard),
+  // which would otherwise leave duelState.currentRound pointing at the
+  // NEW mode/round while the actual engine keeps running the OLD one
+  // underneath it - exactly the split-brain that made a GodBot round once
+  // get silently recorded as a tied Eogonim round (root-caused to the
+  // onPeerLeft/isHost bug fixed above, which could cause beginRound() to
+  // be invoked twice for the same round). Refuse to start a new round
+  // while one is still genuinely in progress, rather than corrupting
+  // state either way.
+  if (Engine.state.running) return;
   clearTimeout(countdownTimer);
   clearTimeout(roundTimeLimitTimer);
   duelState.currentRound = info;
@@ -216,6 +236,18 @@ function normalizeResult(mode) {
   return { completed: true, metric: s.totalCaptured, timeMs: null };
 }
 
+// Human-readable version of a normalizeResult() value, for the round-result
+// banner and the round-history sidebar - so both players can actually see
+// each other's final score, not just who won.
+function formatResultValue(mode, result) {
+  if (!result) return '-';
+  if (mode === 'speedrun' || mode === 'puzzle') {
+    return result.completed ? Engine.formatTime(result.timeMs) : 'DNF';
+  }
+  if (mode === 'godbot') return `${result.metric > 0 ? '+' : ''}${result.metric}`;
+  return String(result.metric);
+}
+
 function onMyRoundFinished() {
   if (!duelState.currentRound || duelState.myResult) return;
   clearTimeout(roundTimeLimitTimer);
@@ -245,8 +277,20 @@ function compareDuelRound(mode, mine, theirs) {
 function tryResolveRound() {
   if (duelState.roundResolved || !duelState.myResult || !duelState.oppResult) return;
   duelState.roundResolved = true;
-  const winner = compareDuelRound(duelState.currentRound.mode, duelState.myResult, duelState.oppResult);
-  recordRoundOutcome(duelState.currentRound.mode, winner, duelState.currentRound.suddenDeath);
+  const mode = duelState.currentRound.mode;
+  const winner = compareDuelRound(mode, duelState.myResult, duelState.oppResult);
+
+  // Show both players' actual final score/time for this round, not just
+  // who won - kept on screen for ROUND_RESULT_DISPLAY_MS before the next
+  // round's own countdown/banner takes over (see advanceSeriesOrFinish()'s
+  // matching delay on the "waiting for next round" messages below), so
+  // there's always a real window to actually read it.
+  const myVal = formatResultValue(mode, duelState.myResult);
+  const oppVal = formatResultValue(mode, duelState.oppResult);
+  const resultLabel = winner === 'me' ? 'You win this round!' : winner === 'opp' ? 'Opponent wins this round.' : 'This round is a tie.';
+  setBanner(`${MODE_LABEL[mode]}: You ${myVal} - Opponent ${oppVal}. ${resultLabel}`);
+
+  recordRoundOutcome(mode, winner, duelState.currentRound.suddenDeath);
   advanceSeriesOrFinish();
 }
 
@@ -254,7 +298,12 @@ function recordRoundOutcome(mode, winner, suddenDeath) {
   if (winner === 'me') duelState.myWins++;
   else if (winner === 'opp') duelState.oppWins++;
   else duelState.ties++;
-  duelState.history.push({ roundIndex: duelState.currentRound.roundIndex, mode, winner, suddenDeath: !!suddenDeath });
+  duelState.history.push({
+    roundIndex: duelState.currentRound.roundIndex,
+    mode, winner, suddenDeath: !!suddenDeath,
+    myResult: duelState.myResult,
+    oppResult: duelState.oppResult,
+  });
   renderHistoryUI();
   updateMatchHeaderUI();
 }
@@ -265,6 +314,12 @@ function recordRoundOutcome(mode, winner, suddenDeath) {
 // Only a genuine tie after all 3 regular rounds (including 0-0 with 3 ties)
 // goes to sudden death - and a sudden-death round that itself ties just
 // gets replayed with a fresh mode, per the user's own decision.
+// How long the round-result banner (set in tryResolveRound(), just before
+// this runs) stays on screen before either the next round's own countdown
+// banner or a "waiting" message replaces it - matched on both host and
+// non-host so both players get the same window to read it.
+const ROUND_RESULT_DISPLAY_MS = 2500;
+
 function advanceSeriesOrFinish() {
   if (duelState.myWins >= 2 || duelState.oppWins >= 2) {
     finishMatch(duelState.myWins > duelState.oppWins ? 'me' : 'opp');
@@ -273,8 +328,8 @@ function advanceSeriesOrFinish() {
   const last = duelState.history[duelState.history.length - 1];
   if (last.suddenDeath) {
     if (last.winner === 'tie') {
-      if (duelState.isHost) setTimeout(() => startNextRound(true), 1500);
-      else setBanner('Still tied - one more sudden-death round coming up...');
+      if (duelState.isHost) setTimeout(() => startNextRound(true), ROUND_RESULT_DISPLAY_MS);
+      else setTimeout(() => setBanner('Still tied - one more sudden-death round coming up...'), ROUND_RESULT_DISPLAY_MS);
     } else {
       finishMatch(last.winner);
     }
@@ -285,22 +340,26 @@ function advanceSeriesOrFinish() {
     if (duelState.myWins !== duelState.oppWins) {
       finishMatch(duelState.myWins > duelState.oppWins ? 'me' : 'opp');
     } else if (duelState.isHost) {
-      setTimeout(() => startNextRound(true), 1500);
+      setTimeout(() => startNextRound(true), ROUND_RESULT_DISPLAY_MS);
     } else {
-      setBanner('Series tied after 3 rounds - sudden death incoming...');
+      setTimeout(() => setBanner('Series tied after 3 rounds - sudden death incoming...'), ROUND_RESULT_DISPLAY_MS);
     }
     return;
   }
-  if (duelState.isHost) setTimeout(() => startNextRound(false), 1500);
-  else setBanner('Round over - waiting for the next round...');
+  if (duelState.isHost) setTimeout(() => startNextRound(false), ROUND_RESULT_DISPLAY_MS);
+  else setTimeout(() => setBanner('Round over - waiting for the next round...'), ROUND_RESULT_DISPLAY_MS);
 }
 
 function finishMatch(winnerSide) {
   duelState.matchWinner = winnerSide;
   clearTimeout(countdownTimer);
   clearTimeout(roundTimeLimitTimer);
-  document.getElementById('duelMatchHeader').style.display = 'none';
-  setBanner(winnerSide === 'me' ? 'You won the duel!' : 'You lost the duel.');
+  // Keep the score header (and the round-by-round history below it)
+  // visible rather than hiding it - the whole point of the final banner is
+  // to let both players actually see the final score, not just a
+  // win/loss label.
+  updateMatchHeaderUI();
+  setBanner(`${winnerSide === 'me' ? 'You won' : 'You lost'} the duel! Final score: ${duelState.myWins}-${duelState.oppWins}`);
   document.getElementById('duelBackToLobbyBtn').style.display = '';
   submitDuelResult();
 }
@@ -354,12 +413,11 @@ async function submitDuelResult() {
 // ---------- Disconnect / forfeit-round handling ----------
 // Per the user's decision: a disconnect forfeits only the CURRENT round
 // (auto-loss for the disconnector), not the whole match - the match
-// continues to the next round. Both the WebRTC peer connection dying
-// outright (onPeerLeft) and the signaling-server-driven grace period fully
-// expiring (onOpponentTimeout) are treated the same way here: whichever
-// side is still connected wins whatever round was in progress and then
-// keeps the series going, taking over as the authoritative round-scheduler
-// if the original host was the one who disconnected.
+// continues to the next round. Only the signaling-server-driven grace
+// period actually expiring (onOpponentTimeout, a real ~60s wait with no
+// reconnect) is trusted to mean "opponent is genuinely gone" - see
+// handlePeerLeft() below for why the WebRTC-layer onPeerLeft signal must
+// NOT trigger this.
 function forfeitCurrentRoundForOpponent() {
   if (!duelState.active || duelState.matchOutcomeSubmitted) return;
   if (duelState.currentRound && !duelState.roundResolved) {
@@ -379,15 +437,28 @@ function handleOpponentTimeout() {
   forfeitCurrentRoundForOpponent();
 }
 
+// pc.onconnectionstatechange firing 'disconnected'/'failed' (what drives
+// onPeerLeft, see net.js) is NOT a reliable "opponent is really gone"
+// signal - it commonly fires transiently during ICE renegotiation blips
+// that self-recover moments later. game.js's own handleNetPeerLeft() treats
+// this identically for casual/ranked, explicitly for this exact reason
+// (only the signaling-server-driven grace period is authoritative there).
+// Treating it as equivalent to a genuine timeout was a real bug here: it
+// force-set duelState.isHost = true on whichever side merely SAW a blip,
+// so a transient hiccup on either connection could make BOTH sides
+// simultaneously believe they were host - each independently broadcasting
+// its own (differently-picked) next round, which is exactly what produced
+// two players' rounds diverging into different sequences with different
+// round counts in practice. Mid-match, this is now a no-op; if the
+// connection is genuinely dead, onOpponentTimeout() will fire once the
+// real ~60s grace period actually expires.
 function handlePeerLeft() {
   if (!duelState.active) {
     if (queueing) {
       queueing = false;
       setQueueStatus('Connection lost. Try queueing again.');
     }
-    return;
   }
-  forfeitCurrentRoundForOpponent();
 }
 
 // ---------- UI ----------
@@ -400,11 +471,15 @@ function updateMatchHeaderUI() {
     : '';
 }
 
+// The "scoreboard on the side" - every round played so far, with both
+// players' actual final score/time, not just a win/loss/tie label.
 function renderHistoryUI() {
   const container = document.getElementById('duelHistory');
   container.innerHTML = duelState.history.map((h) => {
     const cls = h.winner === 'me' ? 'duel-round-win' : h.winner === 'opp' ? 'duel-round-loss' : '';
     const label = h.winner === 'me' ? 'Won' : h.winner === 'opp' ? 'Lost' : 'Tied';
-    return `<span class="duel-history-round ${cls}">${MODE_LABEL[h.mode]}: ${label}${h.suddenDeath ? ' (SD)' : ''}</span>`;
+    const myVal = formatResultValue(h.mode, h.myResult);
+    const oppVal = formatResultValue(h.mode, h.oppResult);
+    return `<span class="duel-history-round ${cls}">${MODE_LABEL[h.mode]}${h.suddenDeath ? ' (SD)' : ''}: You ${myVal} - Opp ${oppVal} (${label})</span>`;
   }).join('');
 }

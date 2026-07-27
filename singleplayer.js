@@ -2886,6 +2886,7 @@ window.SingleplayerEngine = {
   mulberry32,
   precomputeAllPuzzleRounds,
   setOnRoundFinished,
+  formatTime,
   // Duel-only: lets duel.js force Eogonim/Blight rounds to end early at
   // their 90-second cap (the user's spec calls for), reusing these modes'
   // own normal ending path (render()/duelMode-guarded save/onRoundFinished)

@@ -45,7 +45,7 @@ function ffaStandingsHtml(players) {
 async function renderRecentGames() {
   const container = document.getElementById('recentGamesContent');
 
-  const [{ data, error }, { data: ffaData, error: ffaError }] = await Promise.all([
+  const [{ data, error }, { data: ffaData, error: ffaError }, { data: duelData, error: duelError }] = await Promise.all([
     supabaseClient
       .from('games')
       .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
@@ -57,9 +57,14 @@ async function renderRecentGames() {
       .eq('abandoned', false)
       .order('ended_at', { ascending: false })
       .limit(20),
+    supabaseClient
+      .from('duel_matches')
+      .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
+      .order('ended_at', { ascending: false })
+      .limit(20),
   ]);
 
-  if (error && ffaError) {
+  if (error && ffaError && duelError) {
     container.innerHTML = `<p>Could not load recent games: ${escapeHtml(error.message)}</p>`;
     return;
   }
@@ -98,7 +103,32 @@ async function renderRecentGames() {
     </tr>`,
   }));
 
-  const rows = [...regularRows, ...ffaRows]
+  // Score here is the round tally (best-of-3 plus sudden death), derived
+  // from the jsonb round log rather than a stored column - duel_matches
+  // only stores the overall winner (1 or 2), not a running round score.
+  // No replay link - duels don't record a move log/replay the way a
+  // regular 2-player game does.
+  const duelRows = (duelData || []).map((g) => {
+    const p1Name = g.player1 ? g.player1.username : 'Guest';
+    const p2Name = g.player2 ? g.player2.username : 'Guest';
+    const p1Link = playerLink(g.player1 ? g.player1.id : null, p1Name);
+    const p2Link = playerLink(g.player2 ? g.player2.id : null, p2Name);
+    const rounds = g.rounds || [];
+    const p1Wins = rounds.filter((r) => r.round_winner === 1).length;
+    const p2Wins = rounds.filter((r) => r.round_winner === 2).length;
+    return {
+      endedAt: g.ended_at,
+      html: `<tr>
+        <td>${p1Link} vs ${p2Link}</td>
+        <td>${p1Wins} - ${p2Wins}</td>
+        <td>Minigame Duel</td>
+        <td>${timeAgo(g.ended_at)}</td>
+        <td></td>
+      </tr>`,
+    };
+  });
+
+  const rows = [...regularRows, ...ffaRows, ...duelRows]
     .sort((a, b) => new Date(b.endedAt) - new Date(a.endedAt))
     .slice(0, 20)
     .map((r) => r.html)

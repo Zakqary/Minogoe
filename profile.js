@@ -314,7 +314,14 @@ async function renderProfilePage() {
       .limit(20),
   ]);
 
-  if (error && ffaError) {
+  const { data: duelMatches, error: duelError } = await supabaseClient
+    .from('duel_matches')
+    .select('*, player1:player1_id(id, username), player2:player2_id(id, username)')
+    .or(`player1_id.eq.${userId},player2_id.eq.${userId}`)
+    .order('ended_at', { ascending: false })
+    .limit(20);
+
+  if (error && ffaError && duelError) {
     container.innerHTML = `<p>Could not load match history: ${escapeHtml(error.message)}</p>`;
     return;
   }
@@ -384,7 +391,33 @@ async function renderProfilePage() {
     };
   });
 
-  const rows = [...regularRows, ...ffaRows]
+  // Score is the round tally (best-of-3 plus sudden death if it went that
+  // far), derived from the jsonb round log - duel_matches only stores the
+  // overall winner (1 or 2), never a running round score. No replay link -
+  // duels don't record a move log/replay the way a regular game does.
+  const duelRows = (duelMatches || []).map((g) => {
+    const isP1 = g.player1_id === userId;
+    const opp = isP1 ? g.player2 : g.player1;
+    const oppLink = playerLink(opp ? opp.id : null, opp ? opp.username : 'Guest');
+    const myPlayerNum = isP1 ? 1 : 2;
+    const rounds = g.rounds || [];
+    const myWins = rounds.filter((r) => r.round_winner === myPlayerNum).length;
+    const oppWins = rounds.filter((r) => r.round_winner !== null && r.round_winner !== myPlayerNum).length;
+    const resultText = g.winner === myPlayerNum ? 'Win' : 'Loss';
+    return {
+      endedAt: g.ended_at,
+      html: `<tr>
+        <td>${new Date(g.ended_at).toLocaleString()}</td>
+        <td>Minigame Duel</td>
+        <td>${oppLink}</td>
+        <td>${myWins} - ${oppWins}</td>
+        <td class="result-${resultText.toLowerCase()}">${resultText}</td>
+        <td></td>
+      </tr>`,
+    };
+  });
+
+  const rows = [...regularRows, ...ffaRows, ...duelRows]
     .sort((a, b) => new Date(b.endedAt) - new Date(a.endedAt))
     .slice(0, 20)
     .map((r) => r.html)

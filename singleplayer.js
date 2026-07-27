@@ -1980,6 +1980,22 @@ function stopTimerTick() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
 }
 
+// Duel-only: forcibly halts the current run without going through any
+// mode's normal finish*Run() path (no save-to-leaderboard, no
+// onRoundFinished callback) - used when a duel round has already been
+// decided by something OTHER than this client's own natural finish (the
+// opponent won a timed race first, a post-opponent-finish grace period
+// expired, or either side forfeited the round outright) and this client's
+// still-active run just needs to stop so the next round can begin (see
+// beginRound()'s own "refuse to run while Engine.state.running" guard in
+// duel.js, which would otherwise permanently stall this client).
+function forceEndRun() {
+  state.running = false;
+  state.finished = true;
+  stopTimerTick();
+  render();
+}
+
 // ---------- Mode switching ----------
 function resizeCanvasForMode() {
   canvas.width = BOARD_SIZE * CELL_PX;
@@ -2889,6 +2905,7 @@ window.SingleplayerEngine = {
   precomputeAllPuzzleRounds,
   setOnRoundFinished,
   formatTime,
+  forceEndRun,
   // Duel-only: lets duel.js force Eogonim/Blight rounds to end early at
   // their 90-second cap (the user's spec calls for), reusing these modes'
   // own normal ending path (render()/duelMode-guarded save/onRoundFinished)

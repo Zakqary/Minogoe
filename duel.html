@@ -85,6 +85,11 @@
           </div>
           <div class="duel-history" id="duelHistory"></div>
         </div>
+
+        <!-- Shown only while a round is actually in progress (see duel.js's
+             beginRound()/finalizeRound()) - forfeits just the current round
+             (an instant loss for you), not the whole match. -->
+        <button type="button" id="duelForfeitRoundBtn" class="danger-btn" style="display:none;">Forfeit Round</button>
         <button type="button" id="duelBackToLobbyBtn" style="display:none;">Back to Lobby</button>
 
         <!-- Shown only once you've finished your own round and are

@@ -17,6 +17,8 @@ const COUNTDOWN_MODES = new Set(['speedrun', 'puzzle']); // these get the 5s syn
 const PRE_ROUND_ANNOUNCEMENT_MS = 3000; // every other mode's pre-round buffer - long enough to actually read showRoundAnnouncement()
 const TIME_LIMITED_MODES = new Set(['eogonim', 'blight']); // the only two modes the user's spec gives an explicit 90s cap
 const ROUND_TIME_LIMIT_MS = 90000;
+const RACE_MODES = new Set(['speedrun', 'puzzle']); // resolve the INSTANT either side completes - see tryResolveRound()
+const OPPONENT_FINISH_GRACE_MS = 60000; // non-race modes only: how long the still-playing side gets once the other finishes, before auto-forfeiting
 const MODE_LABEL = {
   speedrun: 'Speedrun', eogonim: 'Eogonim', blight: 'Blight', godbot: 'GodBot',
   curse: 'Curse', shrink: 'Shrink', mutation: 'Mutation', puzzle: 'Puzzle',
@@ -47,6 +49,7 @@ let roundTimerInterval = null;
 let boardBroadcastInterval = null;
 let latestOpponentSnapshot = null;
 let announcementCountdownInterval = null;
+let opponentFinishGraceTimer = null;
 
 // How often the still-playing side sends a lightweight snapshot of its own
 // board to the opponent - only ever actually displayed by the RECEIVING
@@ -201,6 +204,13 @@ function handleData(msg) {
     tryResolveRound();
     return;
   }
+  if (msg.type === 'duel-round-forfeit') {
+    // They forfeited (either the manual button, or their own 60s post-my-
+    // finish grace period expiring) - I win this round.
+    if (!duelState.currentRound || msg.roundIndex !== duelState.currentRound.roundIndex) return;
+    resolveRoundAsForfeit('me');
+    return;
+  }
 }
 
 // ---------- Round scheduling (host-authoritative) ----------
@@ -242,11 +252,14 @@ function beginRound(info) {
   if (Engine.state.running) return;
   clearTimeout(countdownTimer);
   clearTimeout(roundTimeLimitTimer);
+  clearTimeout(opponentFinishGraceTimer);
+  opponentFinishGraceTimer = null;
   clearInterval(roundTimerInterval);
   clearInterval(boardBroadcastInterval);
   clearInterval(announcementCountdownInterval);
   hideSpectate();
   document.getElementById('duelOppLiveScore').textContent = '';
+  document.getElementById('duelForfeitRoundBtn').style.display = 'none';
   duelState.currentRound = info;
   duelState.myResult = null;
   duelState.oppResult = null;
@@ -268,6 +281,7 @@ function beginRound(info) {
     Engine.startRun();
     startRoundTimerDisplay(info.mode, Date.now());
     boardBroadcastInterval = setInterval(broadcastBoardSnapshot, BOARD_BROADCAST_INTERVAL_MS);
+    document.getElementById('duelForfeitRoundBtn').style.display = '';
     if (TIME_LIMITED_MODES.has(info.mode)) {
       roundTimeLimitTimer = setTimeout(() => {
         // Time's up - force this round to end right now with whatever
@@ -366,7 +380,8 @@ function hideRoundAnnouncement() {
 // spectate view specifically for Curse and GodBot (and would have for any
 // other mode with the same shape) - computing the same way render() does,
 // fresh from the board at snapshot time, fixes every mode uniformly.
-function computeLiveScoreText(mode, board) {
+function computeLiveScoreText(mode, state) {
+  const board = state.board;
   if (mode === 'godbot') {
     const { score1, score2 } = computeGodbotFinalScores(board);
     return `Them: ${score1} - Bot: ${score2}`;
@@ -376,8 +391,13 @@ function computeLiveScoreText(mode, board) {
   if (mode === 'mutation') return `Their open squares: ${countMutationOpenSquares(board)}`;
   if (mode === 'blight') return `Their captured: ${computeBlightRegions(board).score}`;
   if (mode === 'eogonim') return `Their captured: ${computeCapturedCount(board)}`;
-  // Speedrun/Puzzle have no meaningful mid-game "score" (their result is a
-  // finish time) - show fill progress instead, just so the view isn't blank.
+  // Puzzle's mid-game "score" is which of the 3 boards they're on - far
+  // more informative than a raw fill count, which says nothing about
+  // overall progress toward the actual win condition (finishing all 3).
+  if (mode === 'puzzle') return `Board ${state.puzzleRound} of 3`;
+  // Speedrun has no meaningful mid-game score at all (its result is a
+  // finish time, and there's no round count the way Puzzle has) - show
+  // fill progress instead, just so the view isn't blank.
   const filled = board.reduce((n, v) => n + (v !== 0 ? 1 : 0), 0);
   return `${filled} squares filled so far`;
 }
@@ -390,7 +410,7 @@ function broadcastBoardSnapshot() {
     board: Array.from(s.board),
     voidMask: Array.from(s.voidMask),
     boardSize: BOARD_SIZE,
-    scoreText: computeLiveScoreText(s.mode, s.board),
+    scoreText: computeLiveScoreText(s.mode, s),
   });
 }
 
@@ -457,9 +477,6 @@ function formatResultValue(mode, result) {
 
 function onMyRoundFinished() {
   if (!duelState.currentRound || duelState.myResult) return;
-  clearTimeout(roundTimeLimitTimer);
-  stopRoundTimerDisplay();
-  clearInterval(boardBroadcastInterval);
   const result = normalizeResult(duelState.currentRound.mode);
   duelState.myResult = result;
   Net3.send({ type: 'duel-round-result', roundIndex: duelState.currentRound.roundIndex, result });
@@ -484,26 +501,146 @@ function compareDuelRound(mode, mine, theirs) {
   return mine.metric > theirs.metric ? 'me' : 'opp'; // blight, godbot
 }
 
-function tryResolveRound() {
-  if (duelState.roundResolved || !duelState.myResult || !duelState.oppResult) return;
+// Stops MY OWN still-running engine (if any) and every per-round timer/
+// broadcast tied to it - called whenever the round is decided by anything
+// OTHER than this client's own natural finish (the opponent won a race,
+// this client's post-opponent-finish grace period expired, or either side
+// forfeited outright), so beginRound()'s "refuse to run while
+// Engine.state.running" guard never permanently stalls this client. A
+// harmless no-op if I'd already finished normally (Engine.state.running is
+// already false, timers already cleared).
+function stopMyRoundImmediately() {
+  clearTimeout(roundTimeLimitTimer);
+  clearTimeout(opponentFinishGraceTimer);
+  opponentFinishGraceTimer = null;
+  stopRoundTimerDisplay();
+  clearInterval(boardBroadcastInterval);
+  if (Engine.state.running) Engine.forceEndRun();
+}
+
+// The single place a round is actually marked resolved - both the normal
+// "both sides reported a result" path and every early/forced path (race-
+// mode instant win, grace-period timeout, manual forfeit) funnel through
+// here so the banner/history/series-advance logic never has to be
+// duplicated.
+function finalizeRound(mode, winner, myResult, oppResult) {
   duelState.roundResolved = true;
   hideSpectate();
-  const mode = duelState.currentRound.mode;
-  const winner = compareDuelRound(mode, duelState.myResult, duelState.oppResult);
+  stopMyRoundImmediately();
+  document.getElementById('duelForfeitRoundBtn').style.display = 'none';
+  duelState.myResult = myResult;
+  duelState.oppResult = oppResult;
 
   // Show both players' actual final score/time for this round, not just
   // who won - kept on screen for ROUND_RESULT_DISPLAY_MS before the next
   // round's own countdown/banner takes over (see advanceSeriesOrFinish()'s
   // matching delay on the "waiting for next round" messages below), so
   // there's always a real window to actually read it.
-  const myVal = formatResultValue(mode, duelState.myResult);
-  const oppVal = formatResultValue(mode, duelState.oppResult);
+  const myVal = formatResultValue(mode, myResult);
+  const oppVal = formatResultValue(mode, oppResult);
   const resultLabel = winner === 'me' ? 'You win this round!' : winner === 'opp' ? 'Opponent wins this round.' : 'This round is a tie.';
   setBanner(`${MODE_LABEL[mode]}: You ${myVal} - Opponent ${oppVal}. ${resultLabel}`);
 
   recordRoundOutcome(mode, winner, duelState.currentRound.suddenDeath);
   advanceSeriesOrFinish();
 }
+
+// A synthetic "didn't get a real result" placeholder - used whenever a
+// round resolves before one side ever got to report an actual completion
+// (a race-mode instant win, or a forfeit) so formatResultValue() still has
+// something sensible to show ("DNF") instead of a bare "-".
+const DNF_PLACEHOLDER = { completed: false, metric: null, timeMs: null };
+
+function tryResolveRound() {
+  if (duelState.roundResolved || !duelState.currentRound) return;
+  const mode = duelState.currentRound.mode;
+
+  if (RACE_MODES.has(mode)) {
+    // Both sides start from the identical synced instant, so whoever
+    // completes first in real time is mathematically guaranteed to also
+    // have the lower recorded time - waiting for the slower side to also
+    // finish (or fail) can never change the outcome, it just makes the
+    // winner sit and watch someone else keep playing. Resolve the instant
+    // EITHER side reports a genuine completion; the other side's own
+    // client independently reaches this same conclusion once it receives
+    // that result (see onMyRoundFinished()'s duel-round-result send) and
+    // stops its own still-running engine via finalizeRound().
+    if (duelState.myResult && duelState.myResult.completed) {
+      const oppFinal = (duelState.oppResult && duelState.oppResult.completed) ? duelState.oppResult : DNF_PLACEHOLDER;
+      finalizeRound(mode, 'me', duelState.myResult, oppFinal);
+      return;
+    }
+    if (duelState.oppResult && duelState.oppResult.completed) {
+      const myFinal = (duelState.myResult && duelState.myResult.completed) ? duelState.myResult : DNF_PLACEHOLDER;
+      finalizeRound(mode, 'opp', myFinal, duelState.oppResult);
+      return;
+    }
+    // Neither side has completed - only resolvable once BOTH have reported
+    // (a genuine double-DNF tie); otherwise still waiting.
+    if (duelState.myResult && duelState.oppResult) {
+      finalizeRound(mode, 'tie', duelState.myResult, duelState.oppResult);
+    }
+    return;
+  }
+
+  // Non-race modes: once either side finishes, the OTHER side gets
+  // OPPONENT_FINISH_GRACE_MS to also finish before auto-forfeiting the
+  // round (see startOpponentFinishGraceTimer()) - per the user's spec,
+  // this grace period is deliberately NOT applied to race modes above,
+  // which resolve instantly instead.
+  if (duelState.myResult && duelState.oppResult) {
+    const winner = compareDuelRound(mode, duelState.myResult, duelState.oppResult);
+    finalizeRound(mode, winner, duelState.myResult, duelState.oppResult);
+    return;
+  }
+  if (!duelState.myResult && duelState.oppResult) {
+    startOpponentFinishGraceTimer();
+  }
+  // (myResult already set, oppResult not yet: nothing more for THIS client
+  // to do but wait - the opponent's own client is the one running its own
+  // grace timer.)
+}
+
+// Non-race modes only: the opponent just finished and I haven't yet -
+// temporarily repurposes the round timer display (see startRoundTimerDisplay())
+// to show a "Forfeit in: M:SS" countdown instead of the normal elapsed/cap
+// readout, and auto-forfeits the round in the opponent's favor if I don't
+// finish before it runs out.
+function startOpponentFinishGraceTimer() {
+  if (opponentFinishGraceTimer) return; // already counting down
+  setBanner(`Opponent finished! You have ${Math.round(OPPONENT_FINISH_GRACE_MS / 1000)}s to finish too, or you forfeit this round.`);
+  const deadline = Date.now() + OPPONENT_FINISH_GRACE_MS;
+  clearInterval(roundTimerInterval);
+  const el = document.getElementById('duelRoundTimer');
+  const tick = () => {
+    const remainingMs = deadline - Date.now();
+    el.textContent = `Forfeit in: ${formatClock(Math.max(0, remainingMs))}`;
+  };
+  tick();
+  roundTimerInterval = setInterval(tick, 250);
+  opponentFinishGraceTimer = setTimeout(() => {
+    opponentFinishGraceTimer = null;
+    if (duelState.roundResolved || duelState.myResult) return; // resolved some other way, or I finished just in time
+    Net3.send({ type: 'duel-round-forfeit', roundIndex: duelState.currentRound.roundIndex });
+    resolveRoundAsForfeit('opp');
+  }, OPPONENT_FINISH_GRACE_MS);
+}
+
+// Shared by the manual "Forfeit Round" button and the 60s post-opponent-
+// finish grace timeout - winnerSide is whoever DIDN'T forfeit.
+function resolveRoundAsForfeit(winnerSide) {
+  if (duelState.roundResolved || !duelState.currentRound) return;
+  const mode = duelState.currentRound.mode;
+  const myResult = (duelState.myResult && duelState.myResult.completed) ? duelState.myResult : DNF_PLACEHOLDER;
+  const oppResult = (duelState.oppResult && duelState.oppResult.completed) ? duelState.oppResult : DNF_PLACEHOLDER;
+  finalizeRound(mode, winnerSide, myResult, oppResult);
+}
+
+document.getElementById('duelForfeitRoundBtn').addEventListener('click', () => {
+  if (!duelState.currentRound || duelState.roundResolved || !Engine.state.running) return;
+  Net3.send({ type: 'duel-round-forfeit', roundIndex: duelState.currentRound.roundIndex });
+  resolveRoundAsForfeit('opp');
+});
 
 function recordRoundOutcome(mode, winner, suddenDeath) {
   if (winner === 'me') duelState.myWins++;
@@ -565,6 +702,8 @@ function finishMatch(winnerSide) {
   duelState.matchWinner = winnerSide;
   clearTimeout(countdownTimer);
   clearTimeout(roundTimeLimitTimer);
+  clearTimeout(opponentFinishGraceTimer);
+  document.getElementById('duelForfeitRoundBtn').style.display = 'none';
   // Keep the score header (and the round-by-round history below it)
   // visible rather than hiding it - the whole point of the final banner is
   // to let both players actually see the final score, not just a
@@ -632,10 +771,17 @@ async function submitDuelResult() {
 function forfeitCurrentRoundForOpponent() {
   if (!duelState.active || duelState.matchOutcomeSubmitted) return;
   if (duelState.currentRound && !duelState.roundResolved) {
-    duelState.roundResolved = true;
-    recordRoundOutcome(duelState.currentRound.mode, 'me', duelState.currentRound.suddenDeath);
     duelState.isHost = true;
-    advanceSeriesOrFinish();
+    // Routed through finalizeRound() (rather than recording the outcome
+    // directly, as this used to) so it also stops MY OWN still-running
+    // engine and clears every per-round timer/broadcast - without that, a
+    // genuine opponent disconnect while I was still mid-round would award
+    // me the round but leave Engine.state.running stuck true, permanently
+    // blocking the next round's beginRound() via its own defense-in-depth
+    // guard.
+    const mode = duelState.currentRound.mode;
+    const myResult = (duelState.myResult && duelState.myResult.completed) ? duelState.myResult : DNF_PLACEHOLDER;
+    finalizeRound(mode, 'me', myResult, DNF_PLACEHOLDER);
   }
 }
 

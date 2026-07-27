@@ -5438,3 +5438,22 @@ begin
   return v_match_id;
 end;
 $$;
+
+-- ---------- Phase 62: ranked minigame duels count toward Mino garden progress ----------
+-- handle_human_game_played() (Phase 16, most recently redefined Phase 57)
+-- only ever fires from on_human_game_played, a trigger on `games` scoped to
+-- mode in ('casual', 'ranked') - duel_matches was never covered, so a
+-- completed duel granted no growth_progress, no seed-pack chance, no Mino
+-- coin/item gifts at all, unlike every other real human-vs-human match.
+--
+-- No redefinition of handle_human_game_played() itself is needed - it was
+-- already written generically against just new.player1_id/new.player2_id
+-- (never anything specific to the `games` table's own columns like mode or
+-- forfeit), and duel_matches has that exact same shape. Every duel match is
+-- already real human-vs-human play with no bot/private-room equivalent to
+-- exclude, so this trigger - unlike on_human_game_played - needs no WHEN
+-- clause at all.
+drop trigger if exists on_duel_match_played on public.duel_matches;
+create trigger on_duel_match_played
+  after insert on public.duel_matches
+  for each row execute function public.handle_human_game_played();

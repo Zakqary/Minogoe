@@ -2870,7 +2870,12 @@ function render() {
     : '';
 
   document.getElementById('undoRequestBanner').style.display = (!isFfaMatch && state.incomingUndoRequest) ? 'flex' : 'none';
-  document.getElementById('newGameRequestBanner').style.display = (!isFfaMatch && state.incomingNewGameRequest) ? 'flex' : 'none';
+  // Hidden while state.connecting too (the opponent's own disconnect-grace
+  // window, before their timeout is even confirmed) - accepting a rematch
+  // request from someone who might already be on their way out shouldn't
+  // be possible; see handleOpponentTimeout()'s own voiding of a pending/
+  // incoming request once that disconnect is actually confirmed.
+  document.getElementById('newGameRequestBanner').style.display = (!isFfaMatch && state.incomingNewGameRequest && !state.connecting) ? 'flex' : 'none';
 
   document.getElementById('hotseatBtn').classList.toggle('active', !state.vsBot);
   document.getElementById('vsBotBtn').classList.toggle('active', state.vsBot);
@@ -3311,7 +3316,7 @@ function handleOpponentDisconnected(graceMs) {
   // should have ended if nothing else has by then.
   clearTimeout(opponentDisconnectFallbackTimer);
   opponentDisconnectFallbackTimer = setTimeout(() => {
-    if (!state.connecting || state.gameOver) return;
+    if (!state.connecting) return;
     handleOpponentTimeout();
   }, (graceMs || 30000) + 5000);
 }
@@ -3320,7 +3325,27 @@ function handleOpponentTimeout() {
   clearInterval(reconnectCountdownTimer);
   clearTimeout(opponentDisconnectFallbackTimer);
   state.connecting = false;
-  if (state.gameOver || !state.gameStarted) return;
+  if (!state.gameStarted) return;
+
+  if (state.gameOver) {
+    // The opponent is now confirmed gone (not just a transient blip - the
+    // real ~60s server-side grace period actually expired) while a
+    // rematch request was pending, either mine (still awaiting their
+    // response) or theirs (which I hadn't answered yet). Void it outright
+    // rather than leaving it acceptable - a real report: a player
+    // requested a rematch, left, and the opponent accepted the stale
+    // request after they were already gone, ending up "winning" a match
+    // that was never actually played once the absent player's own move
+    // timer silently ran out.
+    if (state.pendingNewGameRequest || state.incomingNewGameRequest) {
+      state.pendingNewGameRequest = false;
+      state.incomingNewGameRequest = false;
+      setLobbyStatus('Opponent disconnected - rematch request cancelled.');
+      render();
+    }
+    return;
+  }
+
   endGame('Opponent did not reconnect in time.', state.myPlayer);
 }
 

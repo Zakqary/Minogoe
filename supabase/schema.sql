@@ -5457,3 +5457,194 @@ drop trigger if exists on_duel_match_played on public.duel_matches;
 create trigger on_duel_match_played
   after insert on public.duel_matches
   for each row execute function public.handle_human_game_played();
+
+-- ---------- Phase 63: per-mode average score/time for duels, real per-round breakdown ----------
+-- duel_matches.rounds only ever stored {mode, round_winner} - enough to
+-- tally wins/losses/ties (duel_mode_stats), but not enough to show either
+-- player's ACTUAL score/time for a given round anywhere (recent games,
+-- profile match history) or to compute a real average score per mode.
+-- duel.js now also sends player1_result/player2_result (the same
+-- {completed, metric, timeMs} shape normalizeResult() already produced) in
+-- every round entry - purely additive to the jsonb payload, no shape change
+-- needed for the columns that already read it (mode, round_winner).
+--
+-- Running sum + count rather than storing every individual score and
+-- averaging on read - same incremental-aggregate approach duel_mode_stats'
+-- wins/losses/ties already uses. Split into a numeric "score" pair
+-- (Eogonim/Blight/Curse/Shrink/Mutation/GodBot's plain metric) and a
+-- separate time_ms pair (Speedrun/Puzzle's timeMs) since they're not the
+-- same unit and shouldn't be averaged together - the profile page shows
+-- "Avg Score" for the former, "Avg Time" for the latter, whichever the
+-- mode actually has. A round where that side never produced a real result
+-- (a DNF, or the round ending via forfeit/grace-timeout before they
+-- finished) contributes to neither sum nor count, so it never drags the
+-- average down with a fake zero.
+--
+-- Historical matches recorded before this phase never had
+-- player1_result/player2_result in their stored rounds jsonb, so they
+-- contribute nothing here (a null lookup, not an error) - only duels
+-- played from this point on count toward the average, per the user's own
+-- spec ("only games played during duels count to the average").
+alter table public.duel_mode_stats add column if not exists score_sum numeric not null default 0;
+alter table public.duel_mode_stats add column if not exists scored_rounds integer not null default 0;
+alter table public.duel_mode_stats add column if not exists time_ms_sum bigint not null default 0;
+alter table public.duel_mode_stats add column if not exists timed_rounds integer not null default 0;
+
+create or replace function public.submit_duel_result(
+  p_client_match_id text,
+  p_player1_id uuid,
+  p_player2_id uuid,
+  p_winner smallint,
+  p_rounds jsonb -- array of {mode, round_winner, player1_result, player2_result}
+)
+returns uuid
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_match_id uuid;
+  v_p1_elo integer;
+  v_p2_elo integer;
+  v_expected_p1 numeric;
+  v_delta_p1 integer;
+  v_delta_p2 integer;
+  v_round jsonb;
+  v_this_winner_id uuid;
+  v_p1_recent_opps uuid[];
+  v_p1_recent_winners uuid[];
+  v_p2_recent_opps uuid[];
+  v_is_halved boolean := false;
+  v_p1_won boolean;
+  v_p2_won boolean;
+begin
+  if auth.uid() is distinct from p_player1_id and auth.uid() is distinct from p_player2_id then
+    raise exception 'Not authorized: caller was not a participant in this match';
+  end if;
+  if p_winner not in (1, 2) then
+    raise exception 'Invalid winner';
+  end if;
+  if p_rounds is null or jsonb_array_length(p_rounds) = 0 then
+    raise exception 'Duel results must include at least one round';
+  end if;
+
+  select duel_elo_rating into v_p1_elo from public.profiles where id = p_player1_id;
+  select duel_elo_rating into v_p2_elo from public.profiles where id = p_player2_id;
+
+  v_expected_p1 := 1.0 / (1.0 + power(10, (v_p2_elo - v_p1_elo) / 400.0));
+  v_delta_p1 := round(32 * ((case when p_winner = 1 then 1 else 0 end) - v_expected_p1));
+
+  v_this_winner_id := case when p_winner = 1 then p_player1_id else p_player2_id end;
+
+  select array_agg(opp_id order by ended_at desc), array_agg(winner_id order by ended_at desc)
+  into v_p1_recent_opps, v_p1_recent_winners
+  from (
+    select
+      case when player1_id = p_player1_id then player2_id else player1_id end as opp_id,
+      case when winner = 1 then player1_id else player2_id end as winner_id,
+      ended_at
+    from public.duel_matches
+    where player1_id = p_player1_id or player2_id = p_player1_id
+    order by ended_at desc
+    limit 2
+  ) sub;
+
+  select array_agg(opp_id order by ended_at desc)
+  into v_p2_recent_opps
+  from (
+    select
+      case when player1_id = p_player2_id then player2_id else player1_id end as opp_id,
+      ended_at
+    from public.duel_matches
+    where player1_id = p_player2_id or player2_id = p_player2_id
+    order by ended_at desc
+    limit 2
+  ) sub;
+
+  if array_length(v_p1_recent_opps, 1) = 2 and array_length(v_p2_recent_opps, 1) = 2
+     and v_p1_recent_opps[1] = p_player2_id and v_p1_recent_opps[2] = p_player2_id
+     and v_p2_recent_opps[1] = p_player1_id and v_p2_recent_opps[2] = p_player1_id
+     and v_p1_recent_winners[1] = v_this_winner_id and v_p1_recent_winners[2] = v_this_winner_id then
+    v_is_halved := true;
+    v_delta_p1 := round(v_delta_p1 / 2.0);
+  end if;
+
+  v_delta_p2 := -v_delta_p1;
+  v_p1_won := p_winner = 1;
+  v_p2_won := p_winner = 2;
+
+  insert into public.duel_matches (player1_id, player2_id, winner, rounds, elo_delta_p1, elo_delta_p2, client_match_id)
+  values (p_player1_id, p_player2_id, p_winner, p_rounds, v_delta_p1, v_delta_p2, p_client_match_id)
+  on conflict (client_match_id) do nothing
+  returning id into v_match_id;
+
+  if v_match_id is null then
+    return (select id from public.duel_matches where client_match_id = p_client_match_id);
+  end if;
+
+  update public.profiles set
+    duel_elo_rating = duel_elo_rating + v_delta_p1,
+    highest_duel_elo = greatest(highest_duel_elo, duel_elo_rating + v_delta_p1),
+    duel_games_played = duel_games_played + 1,
+    duel_wins = duel_wins + case when v_p1_won then 1 else 0 end,
+    duel_losses = duel_losses + case when v_p2_won then 1 else 0 end,
+    duel_win_streak = case when v_p1_won then duel_win_streak + 1 else 0 end,
+    highest_duel_win_streak = case
+      when v_p1_won then greatest(highest_duel_win_streak, duel_win_streak + 1)
+      else highest_duel_win_streak
+    end
+  where id = p_player1_id;
+
+  update public.profiles set
+    duel_elo_rating = duel_elo_rating + v_delta_p2,
+    highest_duel_elo = greatest(highest_duel_elo, duel_elo_rating + v_delta_p2),
+    duel_games_played = duel_games_played + 1,
+    duel_wins = duel_wins + case when v_p2_won then 1 else 0 end,
+    duel_losses = duel_losses + case when v_p1_won then 1 else 0 end,
+    duel_win_streak = case when v_p2_won then duel_win_streak + 1 else 0 end,
+    highest_duel_win_streak = case
+      when v_p2_won then greatest(highest_duel_win_streak, duel_win_streak + 1)
+      else highest_duel_win_streak
+    end
+  where id = p_player2_id;
+
+  for v_round in select * from jsonb_array_elements(p_rounds) loop
+    insert into public.duel_mode_stats (user_id, mode, wins, losses, ties, score_sum, scored_rounds, time_ms_sum, timed_rounds) values
+      (p_player1_id, v_round->>'mode',
+        case when (v_round->>'round_winner')::smallint = 1 then 1 else 0 end,
+        case when (v_round->>'round_winner')::smallint = 2 then 1 else 0 end,
+        case when v_round->>'round_winner' is null then 1 else 0 end,
+        coalesce((v_round->'player1_result'->>'metric')::numeric, 0),
+        case when v_round->'player1_result'->>'metric' is not null then 1 else 0 end,
+        coalesce((v_round->'player1_result'->>'timeMs')::numeric, 0)::bigint,
+        case when v_round->'player1_result'->>'timeMs' is not null then 1 else 0 end)
+    on conflict (user_id, mode) do update set
+      wins = public.duel_mode_stats.wins + excluded.wins,
+      losses = public.duel_mode_stats.losses + excluded.losses,
+      ties = public.duel_mode_stats.ties + excluded.ties,
+      score_sum = public.duel_mode_stats.score_sum + excluded.score_sum,
+      scored_rounds = public.duel_mode_stats.scored_rounds + excluded.scored_rounds,
+      time_ms_sum = public.duel_mode_stats.time_ms_sum + excluded.time_ms_sum,
+      timed_rounds = public.duel_mode_stats.timed_rounds + excluded.timed_rounds;
+
+    insert into public.duel_mode_stats (user_id, mode, wins, losses, ties, score_sum, scored_rounds, time_ms_sum, timed_rounds) values
+      (p_player2_id, v_round->>'mode',
+        case when (v_round->>'round_winner')::smallint = 2 then 1 else 0 end,
+        case when (v_round->>'round_winner')::smallint = 1 then 1 else 0 end,
+        case when v_round->>'round_winner' is null then 1 else 0 end,
+        coalesce((v_round->'player2_result'->>'metric')::numeric, 0),
+        case when v_round->'player2_result'->>'metric' is not null then 1 else 0 end,
+        coalesce((v_round->'player2_result'->>'timeMs')::numeric, 0)::bigint,
+        case when v_round->'player2_result'->>'timeMs' is not null then 1 else 0 end)
+    on conflict (user_id, mode) do update set
+      wins = public.duel_mode_stats.wins + excluded.wins,
+      losses = public.duel_mode_stats.losses + excluded.losses,
+      ties = public.duel_mode_stats.ties + excluded.ties,
+      score_sum = public.duel_mode_stats.score_sum + excluded.score_sum,
+      scored_rounds = public.duel_mode_stats.scored_rounds + excluded.scored_rounds,
+      time_ms_sum = public.duel_mode_stats.time_ms_sum + excluded.time_ms_sum,
+      timed_rounds = public.duel_mode_stats.timed_rounds + excluded.timed_rounds;
+  end loop;
+
+  return v_match_id;
+end;
+$$;

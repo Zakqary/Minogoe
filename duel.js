@@ -738,9 +738,16 @@ async function submitDuelResult() {
   const player2Id = iAmPlayer1 ? duelState.opponent.userId : user.id;
   const myWinnerNum = duelState.matchWinner === 'me' ? 1 : 2;
   const winner = iAmPlayer1 ? myWinnerNum : (myWinnerNum === 1 ? 2 : 1);
+  // player{1,2}_result carry the actual per-round score/time (the same
+  // {completed, metric, timeMs} shape normalizeResult() produces), not just
+  // who won - lets the recent-games/profile UI show each player's real
+  // score per minigame, and lets submit_duel_result() maintain a running
+  // average score/time per mode (see schema.sql Phase 63).
   const rounds = duelState.history.map((h) => ({
     mode: h.mode,
     round_winner: h.winner === 'tie' ? null : (iAmPlayer1 ? (h.winner === 'me' ? 1 : 2) : (h.winner === 'me' ? 2 : 1)),
+    player1_result: iAmPlayer1 ? h.myResult : h.oppResult,
+    player2_result: iAmPlayer1 ? h.oppResult : h.myResult,
   }));
 
   // client_match_id dedupe - same idiom as submit_ffa_result()/games'

@@ -21,6 +21,54 @@ const DUEL_MODE_LABELS = {
   curse: 'Curse', shrink: 'Shrink', mutation: 'Mutation', puzzle: 'Puzzle',
 };
 
+// A round's stored player{1,2}_result is the same {completed, metric,
+// timeMs} shape duel.js's own normalizeResult() produces (see schema.sql
+// Phase 63) - a round recorded before that phase shipped won't have it at
+// all, hence the leading null check.
+function formatDuelRoundValue(result, mode) {
+  if (!result) return '-';
+  if (mode === 'speedrun' || mode === 'puzzle') {
+    return result.completed ? formatSpTime(result.timeMs) : 'DNF';
+  }
+  if (result.metric == null) return '-';
+  if (mode === 'godbot') return `${result.metric > 0 ? '+' : ''}${result.metric}`;
+  return String(result.metric);
+}
+
+// The expandable per-round breakdown shown under a duel match row - one
+// line per minigame actually played (best-of-3 plus sudden death if it
+// went that far), with both players' real score/time, not just who won.
+function duelDetailTableHtml(rounds, p1Name, p2Name) {
+  const roundRows = rounds.map((r) => {
+    const label = r.round_winner == null ? 'Tied' : `${escapeHtml(r.round_winner === 1 ? p1Name : p2Name)} won`;
+    return `<tr>
+      <td>${escapeHtml(DUEL_MODE_LABELS[r.mode] || r.mode)}</td>
+      <td>${formatDuelRoundValue(r.player1_result, r.mode)}</td>
+      <td>${formatDuelRoundValue(r.player2_result, r.mode)}</td>
+      <td>${label}</td>
+    </tr>`;
+  }).join('');
+  return `
+    <table class="duel-detail-table">
+      <thead><tr><th>Minigame</th><th>${escapeHtml(p1Name)}</th><th>${escapeHtml(p2Name)}</th><th>Result</th></tr></thead>
+      <tbody>${roundRows}</tbody>
+    </table>
+  `;
+}
+
+// Wires up every already-inserted .duel-summary-row's click-to-expand
+// toggle - must run AFTER the row HTML actually lands in the DOM
+// (container.innerHTML = ...), same as leaderboard.js's own post-render
+// sortable-column wiring.
+function wireDuelDetailToggles(container) {
+  for (const row of container.querySelectorAll('.duel-summary-row')) {
+    row.addEventListener('click', () => {
+      const detail = document.getElementById(row.dataset.detailTarget);
+      if (detail) detail.style.display = detail.style.display === 'none' ? '' : 'none';
+    });
+  }
+}
+
 // Achievement badges - purely derived from stats already present on the
 // profile row, so there's no separate "earned" table or grant trigger to
 // maintain: every requirement here is just a threshold on a column this
@@ -267,8 +315,31 @@ async function renderProfilePage() {
   // never played, so this naturally only ever shows modes with real data.
   const { data: duelModeStats } = await supabaseClient
     .from('duel_mode_stats')
-    .select('mode, wins, losses, ties')
+    .select('mode, wins, losses, ties, score_sum, scored_rounds, time_ms_sum, timed_rounds')
     .eq('user_id', userId);
+
+  // Average score/time is server-side incremental (score_sum/scored_rounds,
+  // time_ms_sum/timed_rounds - see schema.sql Phase 63) rather than
+  // recomputed from every individual duel_matches row here, and only ever
+  // counts rounds that actually produced a real result (a DNF round
+  // contributes to neither), so it never gets dragged toward zero by a
+  // round nobody finished. Only duel rounds count toward it - solo
+  // personal-best runs of the same mode are a completely separate table
+  // (singleplayer_runs) never touched by this.
+  function formatDuelAverage(row) {
+    // scored_rounds (a numeric-metric mode) and timed_rounds (Speedrun/
+    // Puzzle) are mutually exclusive per mode in practice, but check both
+    // rather than assume - PostgREST returns numeric columns as strings.
+    if (Number(row.scored_rounds) > 0) {
+      const avg = Number(row.score_sum) / Number(row.scored_rounds);
+      return `${row.mode === 'godbot' && avg > 0 ? '+' : ''}${avg.toFixed(1)}`;
+    }
+    if (Number(row.timed_rounds) > 0) {
+      const avgMs = Number(row.time_ms_sum) / Number(row.timed_rounds);
+      return formatSpTime(avgMs);
+    }
+    return null;
+  }
 
   let duelStatsHtml = '';
   if (profile.duel_games_played > 0) {
@@ -277,7 +348,12 @@ async function renderProfilePage() {
       .map((row) => {
         const total = row.wins + row.losses + row.ties;
         const winrate = total > 0 ? Math.round((row.wins / total) * 100) : 0;
-        return `<div class="stat"><div class="stat-value">${row.wins}-${row.losses}-${row.ties}</div><div class="stat-label">${escapeHtml(DUEL_MODE_LABELS[row.mode] || row.mode)} &middot; ${winrate}% W</div></div>`;
+        const label = escapeHtml(DUEL_MODE_LABELS[row.mode] || row.mode);
+        const avgText = formatDuelAverage(row);
+        const avgBox = avgText
+          ? `<div class="stat"><div class="stat-value">${avgText}</div><div class="stat-label">${label} Avg ${row.mode === 'speedrun' || row.mode === 'puzzle' ? 'Time' : 'Score'}</div></div>`
+          : '';
+        return `<div class="stat"><div class="stat-value">${row.wins}-${row.losses}-${row.ties}</div><div class="stat-label">${label} &middot; ${winrate}% W</div></div>${avgBox}`;
       })
       .join('');
     duelStatsHtml = `
@@ -395,24 +471,33 @@ async function renderProfilePage() {
   // far), derived from the jsonb round log - duel_matches only stores the
   // overall winner (1 or 2), never a running round score. No replay link -
   // duels don't record a move log/replay the way a regular game does.
+  // Click the row to expand a per-minigame breakdown (duelDetailTableHtml()).
+  const myUsername = profile.username;
   const duelRows = (duelMatches || []).map((g) => {
     const isP1 = g.player1_id === userId;
     const opp = isP1 ? g.player2 : g.player1;
-    const oppLink = playerLink(opp ? opp.id : null, opp ? opp.username : 'Guest');
+    const oppName = opp ? opp.username : 'Guest';
+    const oppLink = playerLink(opp ? opp.id : null, oppName);
     const myPlayerNum = isP1 ? 1 : 2;
     const rounds = g.rounds || [];
     const myWins = rounds.filter((r) => r.round_winner === myPlayerNum).length;
     const oppWins = rounds.filter((r) => r.round_winner !== null && r.round_winner !== myPlayerNum).length;
     const resultText = g.winner === myPlayerNum ? 'Win' : 'Loss';
+    const detailId = `duelDetail-${g.id}`;
+    const p1Name = isP1 ? myUsername : oppName;
+    const p2Name = isP1 ? oppName : myUsername;
     return {
       endedAt: g.ended_at,
-      html: `<tr>
+      html: `<tr class="duel-summary-row" data-detail-target="${detailId}">
         <td>${new Date(g.ended_at).toLocaleString()}</td>
-        <td>Minigame Duel</td>
+        <td>Minigame Duel &#9662;</td>
         <td>${oppLink}</td>
         <td>${myWins} - ${oppWins}</td>
         <td class="result-${resultText.toLowerCase()}">${resultText}</td>
         <td></td>
+      </tr>
+      <tr class="duel-detail-container" id="${detailId}" style="display:none;">
+        <td colspan="6">${duelDetailTableHtml(rounds, p1Name, p2Name)}</td>
       </tr>`,
     };
   });
@@ -471,6 +556,7 @@ async function renderProfilePage() {
       <tbody>${rows || '<tr><td colspan="6">No games recorded yet.</td></tr>'}</tbody>
     </table>
   `;
+  wireDuelDetailToggles(container);
 }
 
 Auth.onAuthChange(renderProfilePage);

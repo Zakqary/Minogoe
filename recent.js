@@ -23,6 +23,69 @@ function timeAgo(isoString) {
   return `${years}y ago`;
 }
 
+// Same formatting as singleplayer.js's own formatTime() - duplicated
+// rather than shared since recent.js doesn't otherwise load that page's
+// script at all.
+function formatSpTime(ms) {
+  const totalSec = ms / 1000;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec - m * 60;
+  return `${m}:${s.toFixed(2).padStart(5, '0')}`;
+}
+
+const DUEL_MODE_LABELS = {
+  speedrun: 'Speedrun', eogonim: 'Eogonim', blight: 'Blight', godbot: 'GodBot',
+  curse: 'Curse', shrink: 'Shrink', mutation: 'Mutation', puzzle: 'Puzzle',
+};
+
+// A round's stored player{1,2}_result is the same {completed, metric,
+// timeMs} shape duel.js's own normalizeResult() produces (see schema.sql
+// Phase 63) - a round recorded before that phase shipped won't have it at
+// all, hence the leading null check.
+function formatDuelRoundValue(result, mode) {
+  if (!result) return '-';
+  if (mode === 'speedrun' || mode === 'puzzle') {
+    return result.completed ? formatSpTime(result.timeMs) : 'DNF';
+  }
+  if (result.metric == null) return '-';
+  if (mode === 'godbot') return `${result.metric > 0 ? '+' : ''}${result.metric}`;
+  return String(result.metric);
+}
+
+// The expandable per-round breakdown shown under a duel match row - one
+// line per minigame actually played (best-of-3 plus sudden death if it
+// went that far), with both players' real score/time, not just who won.
+function duelDetailTableHtml(rounds, p1Name, p2Name) {
+  const roundRows = rounds.map((r) => {
+    const label = r.round_winner == null ? 'Tied' : `${escapeHtml(r.round_winner === 1 ? p1Name : p2Name)} won`;
+    return `<tr>
+      <td>${escapeHtml(DUEL_MODE_LABELS[r.mode] || r.mode)}</td>
+      <td>${formatDuelRoundValue(r.player1_result, r.mode)}</td>
+      <td>${formatDuelRoundValue(r.player2_result, r.mode)}</td>
+      <td>${label}</td>
+    </tr>`;
+  }).join('');
+  return `
+    <table class="duel-detail-table">
+      <thead><tr><th>Minigame</th><th>${escapeHtml(p1Name)}</th><th>${escapeHtml(p2Name)}</th><th>Result</th></tr></thead>
+      <tbody>${roundRows}</tbody>
+    </table>
+  `;
+}
+
+// Wires up every already-inserted .duel-summary-row's click-to-expand
+// toggle - must run AFTER the row HTML actually lands in the DOM
+// (container.innerHTML = ...), same as leaderboard.js's own post-render
+// sortable-column wiring.
+function wireDuelDetailToggles(container) {
+  for (const row of container.querySelectorAll('.duel-summary-row')) {
+    row.addEventListener('click', () => {
+      const detail = document.getElementById(row.dataset.detailTarget);
+      if (detail) detail.style.display = detail.style.display === 'none' ? '' : 'none';
+    });
+  }
+}
+
 // Plain comma-separated name list, seat order - for the Players column.
 function ffaPlayersHtml(players) {
   return [...players]
@@ -108,6 +171,7 @@ async function renderRecentGames() {
   // only stores the overall winner (1 or 2), not a running round score.
   // No replay link - duels don't record a move log/replay the way a
   // regular 2-player game does.
+  // Click a duel row to expand a per-minigame breakdown (duelDetailTableHtml()).
   const duelRows = (duelData || []).map((g) => {
     const p1Name = g.player1 ? g.player1.username : 'Guest';
     const p2Name = g.player2 ? g.player2.username : 'Guest';
@@ -116,14 +180,18 @@ async function renderRecentGames() {
     const rounds = g.rounds || [];
     const p1Wins = rounds.filter((r) => r.round_winner === 1).length;
     const p2Wins = rounds.filter((r) => r.round_winner === 2).length;
+    const detailId = `duelDetail-${g.id}`;
     return {
       endedAt: g.ended_at,
-      html: `<tr>
+      html: `<tr class="duel-summary-row" data-detail-target="${detailId}">
         <td>${p1Link} vs ${p2Link}</td>
         <td>${p1Wins} - ${p2Wins}</td>
-        <td>Minigame Duel</td>
+        <td>Minigame Duel &#9662;</td>
         <td>${timeAgo(g.ended_at)}</td>
         <td></td>
+      </tr>
+      <tr class="duel-detail-container" id="${detailId}" style="display:none;">
+        <td colspan="5">${duelDetailTableHtml(rounds, p1Name, p2Name)}</td>
       </tr>`,
     };
   });
@@ -140,6 +208,7 @@ async function renderRecentGames() {
       <tbody>${rows || '<tr><td colspan="5">No games played yet.</td></tr>'}</tbody>
     </table>
   `;
+  wireDuelDetailToggles(container);
 }
 
 renderRecentGames();

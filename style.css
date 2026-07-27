@@ -502,6 +502,51 @@ h2, h3 {
 .games-table .result-loss { color: var(--danger-hover); font-weight: 600; }
 .games-table .result-tie { color: var(--text-dim); }
 
+/* Click-to-expand duel match rows (recent.js/profile.js) - the summary row
+   gets a pointer cursor + subtle hover so it reads as clickable, and the
+   hidden detail row (toggled via wireDuelDetailToggles()) holds a nested
+   per-minigame breakdown table. */
+.games-table tr.duel-summary-row {
+  cursor: pointer;
+}
+
+.games-table tr.duel-summary-row:hover td {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+}
+
+.games-table tr.duel-detail-container td {
+  padding: 10px 10px 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.duel-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  background: var(--bg-inset, rgba(255, 255, 255, 0.03));
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.duel-detail-table th,
+.duel-detail-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.duel-detail-table th {
+  color: var(--text-faint);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.duel-detail-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
 .games-table th.sortable-col {
   cursor: pointer;
   user-select: none;

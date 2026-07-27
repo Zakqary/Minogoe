@@ -3467,10 +3467,19 @@ function attemptRejoin(matchIdToJoin, userId, accessToken) {
     onConnectionStale: handleConnectionStale,
     onRejoinFailed: (reason) => {
       clearTimeout(rejoinTimeoutId);
-      clearActiveMatch();
+      // Only a genuinely terminal reason clears the saved record outright -
+      // "could not verify your account" (a token that just hadn't finished
+      // refreshing yet, most likely right after a fresh page load) or
+      // "already open in another tab" (which stops being true the moment
+      // that other tab actually closes) can both easily succeed on a
+      // retry, so the banner should come back with Rejoin usable again
+      // instead of being silently gone for good after one failed attempt.
+      const terminal = !reason || reason.includes('no longer available') || reason.includes('not part of that match');
+      if (terminal) clearActiveMatch();
       state.connecting = false;
       setLobbyStatus(reason || 'Could not reconnect to your previous match.');
       render();
+      updateResumeMatchBanner();
     },
   });
 }
@@ -3544,10 +3553,39 @@ function tryResumeActiveMatch(retriesLeft = 10, isManual = false) {
   attemptRejoin(record.matchId, record.userId, accessToken);
 }
 
+// Previously hid outright the instant state.connecting flipped true, which
+// (since the automatic path - Auth.onAuthChange(tryResumeActiveMatch) at
+// the bottom of this file - usually fires within a fraction of a second of
+// page load for an already-logged-in user) meant the manual Rejoin button
+// was only ever visible for a brief flash before the automatic attempt
+// hid it again, a real reported "couldn't click it fast enough" bug. Now
+// stays visible for the WHOLE reconnect attempt (just relabeled to show
+// it's in progress, with the button disabled to avoid a double-attempt)
+// instead of disappearing, and reappears properly if that attempt fails
+// in a way that's actually worth retrying (see attemptRejoin()'s
+// onRejoinFailed - only a genuinely terminal failure clears the record
+// outright).
 function updateResumeMatchBanner() {
   const banner = document.getElementById('resumeMatchBanner');
+  const label = document.getElementById('resumeMatchLabel');
+  const btn = document.getElementById('resumeMatchBtn');
   if (!banner) return;
-  banner.style.display = (!state.online && !state.connecting && state.activeQueues.size === 0 && hasActiveMatchRecord()) ? 'flex' : 'none';
+
+  if (state.online || state.activeQueues.size > 0 || !hasActiveMatchRecord()) {
+    banner.style.display = 'none';
+    return;
+  }
+
+  banner.style.display = 'flex';
+  if (state.connecting) {
+    label.textContent = 'Reconnecting to your unfinished match...';
+    btn.textContent = 'Reconnecting...';
+    btn.disabled = true;
+  } else {
+    label.textContent = 'You have an unfinished ranked/casual match.';
+    btn.textContent = 'Rejoin';
+    btn.disabled = false;
+  }
 }
 
 function handleNetReady() {

@@ -28,7 +28,6 @@
 insert into public.shop_items (id, type, name, price, image_path, title_text, color, notice) values
   ('title_GOAT', 'title', 'GOAT', 20, null, 'GOAT', '#d4af37', null),
   ('title_GirlInAisle10', 'title', 'Girl in Aisle 10', 15, null, 'Girl in Aisle 10', '#e07bb5', null),
-  ('title_OG', 'title', 'OG', 1, null, 'OG', '#ffffff', 'No longer sold after 8/1/26!'),
   ('title_Strategist', 'title', 'Strategist', 5, null, 'Strategist', '#1e172d', null),
   ('title_Minnow', 'title', 'Minnow', 5, null, 'Minnow', '#28c28a', null),
   ('title_Springtail', 'title', 'Springtail', 5, null, 'Springtail', '#5b8fd9', null),
@@ -59,11 +58,11 @@ insert into public.shop_items (id, type, name, price, image_path, title_text, co
   ('avatar_burger', 'avatar', 'Burger', 15, 'assets/avatars/burger.png', null, null, null),
   ('avatar_beatarmy', 'avatar', 'Beat Army', 5, 'assets/avatars/beatarmy.png', null, null, null),
   ('piece_color_lilac', 'piece_color', 'Lilac', 50, null, null, '#b892d6', null),
-  ('piece_color_purple', 'piece_color', 'Purple', 50, null, null, '#7e4fb5', null),
-  ('piece_color_aqua', 'piece_color', 'Aqua', 50, null, null, '#3ec9c0', null),
-  ('piece_color_lime', 'piece_color', 'Lime', 50, null, null, '#a8d84a', null),
+  ('piece_color_purple', 'piece_color', 'Purple', 70, null, null, '#7e4fb5', null),
+  ('piece_color_aqua', 'piece_color', 'Aqua', 70, null, null, '#3ec9c0', null),
+  ('piece_color_lime', 'piece_color', 'Lime', 70, null, null, '#a8d84a', null),
   ('piece_color_grey', 'piece_color', 'Grey', 50, null, null, '#98a1ad', null),
-  ('piece_color_gold', 'piece_color', 'Gold', 50, null, null, '#d9b23c', null)
+  ('piece_color_gold', 'piece_color', 'Gold', 100, null, null, '#d9b23c', null)
 on conflict (id) do update set
   type = excluded.type,
   name = excluded.name,
@@ -85,17 +84,28 @@ delete from public.shop_items where id in (
 -- granted directly below, by username. The recipient still equips it
 -- normally from their own shop page - it just won't show up for anyone
 -- else, and no one else can buy it.
-insert into public.shop_items (id, type, name, price, title_text, color, hidden) values
-  ('title_admin', 'title', 'Admin', 0, 'Admin', '#e04545', true),
+insert into public.shop_items (id, type, name, price, title_text, color, hidden, notice) values
+  ('title_admin', 'title', 'Admin', 0, 'Admin', '#e04545', true, null),
   -- July 2026 tournament champion. title_champion was only ever a
   -- retired placeholder before this (see git history) - reused here for
   -- the real prize instead of minting a new id.
-  ('title_champion', 'title', 'Champion', 0, 'Champion', '#ffcc33', true)
+  ('title_champion', 'title', 'Champion', 0, 'Champion', '#ffcc33', true, null),
+  -- Was purchasable (with a "no longer sold after 8/1/26!" notice) up in
+  -- the main insert list above until that date passed. Moved here rather
+  -- than into the "Retired items" delete list below - user_inventory.
+  -- item_id is ON DELETE CASCADE back to shop_items, so an actual delete
+  -- would silently strip this title from everyone who already bought it,
+  -- not just unequip it. hidden = true instead just blocks new purchases
+  -- and keeps it out of the browsable grid for everyone else, while
+  -- existing owners keep it and can still equip it (shop.js's own
+  -- `visible` check already shows a hidden item back to its owner).
+  ('title_OG', 'title', 'OG', 1, 'OG', '#ffffff', true, null)
 on conflict (id) do update set
   name = excluded.name,
   title_text = excluded.title_text,
   color = excluded.color,
-  hidden = excluded.hidden;
+  hidden = excluded.hidden,
+  notice = excluded.notice;
 
 insert into public.user_inventory (user_id, item_id)
 select id, 'title_admin' from public.profiles where username = 'AVNJ'
